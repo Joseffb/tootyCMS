@@ -21,6 +21,7 @@ import { createUploadFn } from "./image-upload";
 import type { SelectPost } from "@/lib/schema";
 
 let currentPost: SelectPost | null = null;
+let slashCommandApplied = false;
 
 export function setCurrentPost(post: SelectPost) {
   currentPost = post;
@@ -54,12 +55,92 @@ function normalizeSlashRange(editor: any, range: any) {
   return { from, to };
 }
 
+function shouldPreserveSlashTrigger(editor: any, range: any) {
+  if (!editor || !range) return true;
+  const from = Math.max(1, Number(range.from || 1));
+  const slash = editor.state.doc.textBetween(Math.max(1, from - 1), from, "", "");
+  if (slash !== "/") return true;
+  const prev = editor.state.doc.textBetween(Math.max(1, from - 2), Math.max(1, from - 1), "", "");
+  return prev === "/" || prev === "'" || prev === "\"";
+}
+
+function stripSlashTrigger(editor: any, range: any) {
+  if (!editor || !range) return;
+  if (shouldPreserveSlashTrigger(editor, range)) return;
+  const from = Math.max(1, Number(range.from || 1));
+  editor
+    .chain()
+    .focus()
+    .deleteRange({ from: Math.max(1, from - 1), to: from })
+    .run();
+}
+
+function cleanupSlashPrompt(editor: any, range: any) {
+  if (!editor || !range) return;
+  const from = Math.max(1, Number(range.from || 1));
+  const to = Math.max(from, Number(range.to || from));
+  const within = editor.state.doc.textBetween(from, to, "", "");
+  if (within.startsWith("/")) {
+    editor.chain().focus().deleteRange({ from, to }).run();
+    return;
+  }
+  const before = editor.state.doc.textBetween(Math.max(1, from - 1), from, "", "");
+  if (before === "/") {
+    editor.chain().focus().deleteRange({ from: Math.max(1, from - 1), to }).run();
+  }
+}
+
+function renderSlashItems() {
+  const renderer = renderItems();
+  let stripped = false;
+  let lastEditor: any = null;
+  let lastRange: any = null;
+  return {
+    onStart: (props: any) => {
+      lastEditor = props?.editor ?? lastEditor;
+      lastRange = props?.range ?? lastRange;
+      renderer.onStart?.(props);
+      if (!stripped) {
+        stripSlashTrigger(props?.editor, props?.range);
+        stripped = true;
+      }
+    },
+    onUpdate: (props: any) => {
+      lastEditor = props?.editor ?? lastEditor;
+      lastRange = props?.range ?? lastRange;
+      renderer.onUpdate?.(props);
+      if (!stripped) {
+        stripSlashTrigger(props?.editor, props?.range);
+        stripped = true;
+      }
+    },
+    onKeyDown: (props: any) => {
+      lastRange = props?.range ?? lastRange;
+      if (props?.event?.key === "Escape") {
+        cleanupSlashPrompt(lastEditor, lastRange);
+      }
+      return renderer.onKeyDown?.(props);
+    },
+    onExit: (props: any) => {
+      if (!slashCommandApplied) {
+        cleanupSlashPrompt(props?.editor ?? lastEditor, props?.range ?? lastRange);
+      }
+      slashCommandApplied = false;
+      stripped = false;
+      lastEditor = null;
+      lastRange = null;
+      renderer.onExit?.(props);
+    },
+  };
+}
+
 function wrapItems<T extends { command: (props: any) => void }>(items: T[]): T[] {
   return items.map((item) => {
     const original = item.command;
     return {
       ...item,
       command: (props: any) => {
+        slashCommandApplied = true;
         const normalized = {
           ...props,
           range: normalizeSlashRange(props?.editor, props?.range),
@@ -289,6 +370,6 @@ export function getSuggestionItems() {
 export const slashCommand = Command.configure({
   suggestion: {
     items: () => getSuggestionItems(),
-    render: renderItems,
+    render: renderSlashItems,
   },
 });

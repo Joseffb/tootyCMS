@@ -16,6 +16,10 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const siteId = searchParams.get("siteId");
+  const limitRaw = Number(searchParams.get("limit") || "20");
+  const offsetRaw = Number(searchParams.get("offset") || "0");
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 20;
+  const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
   if (!siteId) {
     trace("media.api", "missing siteId", { traceId });
     return NextResponse.json({ error: "siteId is required" }, { status: 400 });
@@ -53,8 +57,12 @@ export async function GET(req: Request) {
     })
     .from(media)
     .where(eq(media.siteId, siteId))
-    .orderBy(desc(media.createdAt));
-  trace("media.api", "request success", { traceId, siteId, count: rows.length });
+    .orderBy(desc(media.createdAt))
+    .limit(limit + 1)
+    .offset(offset);
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  trace("media.api", "request success", { traceId, siteId, count: items.length, hasMore, limit, offset });
 
-  return NextResponse.json({ items: rows });
+  return NextResponse.json({ items, hasMore, nextOffset: offset + items.length });
 }

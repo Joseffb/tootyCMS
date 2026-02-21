@@ -1,6 +1,6 @@
 // app/api/tb-events/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { trace } from '@/lib/debug';
+import { isDebugMode, trace } from '@/lib/debug';
 
 export const runtime = 'edge';
 
@@ -44,8 +44,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // 7. Validate token
   if (!token) {
-    console.error('[tb-events] TB_INGEST_TOKEN missing');
-    return new NextResponse('Tinybird token missing', { status: 500 });
+    if (isDebugMode()) {
+      console.warn('[tb-events] TB_INGEST_TOKEN missing; skipping event ingest');
+    }
+    return new NextResponse('Tinybird token missing; event skipped', { status: 202 });
   }
 
   try {
@@ -64,8 +66,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const text = await tbRes.text();
     if (!tbRes.ok) {
-      console.error('[tb-events] Tinybird error →', text);
-      return new NextResponse(`Tinybird error: ${text}`, { status: 502 });
+      if (isDebugMode()) {
+        console.warn('[tb-events] Tinybird error; skipping event →', text);
+      }
+      return new NextResponse(`Tinybird error; event skipped: ${text}`, { status: 202 });
     }
 
     trace("tb-events", "ingested event", { response: text });
@@ -77,7 +81,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       },
     });
   } catch (error) {
-    console.error('[tb-events] fetch threw:', error);
-    return new NextResponse('Tinybird fetch error', { status: 502 });
+    if (isDebugMode()) {
+      console.warn('[tb-events] fetch threw; skipping event:', error);
+    }
+    return new NextResponse('Tinybird fetch error; event skipped', { status: 202 });
   }
 }

@@ -59,6 +59,9 @@ export async function track(path: string) {
   sessionStorage.setItem('has_visited', '1');
 
   try {
+    const debug =
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_DEBUG_MODE === 'true') ||
+      false;
     const res = await fetch('/api/tb-events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -66,14 +69,15 @@ export async function track(path: string) {
       keepalive: true,
     });
 
-    if (!res.ok) {
-      console.error(
-        '[track] /api/tb-events failed:',
-        res.status,
-        await res.text(),
-      );
+    if (!res.ok && debug) {
+      console.warn('[track] /api/tb-events failed:', res.status, await res.text());
     }
   } catch (err) {
-    console.error('[track] fetch threw:', err);
+    const debug =
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_DEBUG_MODE === 'true') ||
+      false;
+    if (debug) {
+      console.warn('[track] fetch threw:', err);
+    }
   }
 }

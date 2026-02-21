@@ -70,6 +70,14 @@ type MediaItem = {
   createdAt: string | null;
 };
 
+type SidebarMediaItem = {
+  id: number | string;
+  url: string;
+  name: string;
+  inLibrary: boolean;
+  source: "content" | "thumbnail";
+};
+
 const extensions = [...defaultExtensions, slashCommand];
 
 type PostWithSite = SelectPost & {
@@ -125,6 +133,25 @@ function countImageNodes(node: any): number {
   return self + countImageNodes(node.content);
 }
 
+function collectImageUrlsFromNode(node: any): string[] {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap((item) => collectImageUrlsFromNode(item));
+
+  const urls: string[] = [];
+  if (node.type === "image") {
+    const src = typeof node?.attrs?.src === "string" ? node.attrs.src.trim() : "";
+    if (src) urls.push(src);
+  }
+  return urls.concat(collectImageUrlsFromNode(node.content));
+}
+
+function fileNameFromUrl(url: string) {
+  const withoutQuery = url.split("?")[0] || url;
+  const segments = withoutQuery.split("/");
+  const last = segments[segments.length - 1] || withoutQuery;
+  return decodeURIComponent(last || "file");
+}
+
 export default function Editor({
   post,
   defaultEditorMode = "rich-text",
@@ -153,6 +180,7 @@ export default function Editor({
   const [htmlDraft, setHtmlDraft] = useState<string>("");
   const [editorPlugins, setEditorPlugins] = useState<EditorPlugin[]>([]);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [postImageUrls, setPostImageUrls] = useState<string[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [mediaModalMode, setMediaModalMode] = useState<"insert" | "thumbnail">("insert");
@@ -174,6 +202,7 @@ export default function Editor({
     setCurrentPost(post);
     const content = parseInitialContent(post.content);
     setInitialContent(content);
+    setPostImageUrls(Array.from(new Set(collectImageUrlsFromNode(content))));
 
     const ids = post.categories?.map((c) => c.categoryId) ?? [];
     setSelectedCategories(ids);
@@ -254,6 +283,44 @@ export default function Editor({
   const uploadFn = createUploadFn(post.siteId || "default", "post");
   const [isPendingPublishing, startTransitionPublishing] = useTransition();
   const [isPendingThumbnail, startTransitionThumbnail] = useTransition();
+
+  const sidebarMediaItems = useMemo<SidebarMediaItem[]>(() => {
+    const byUrl = new Map<string, MediaItem>();
+    for (const item of mediaItems) {
+      byUrl.set(item.url, item);
+    }
+
+    const contentUrls = Array.from(new Set(postImageUrls.filter(Boolean)));
+    const thumbnailUrl = typeof data.image === "string" ? data.image.trim() : "";
+    const rows: SidebarMediaItem[] = [];
+    const seen = new Set<string>();
+
+    for (const url of contentUrls) {
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const match = byUrl.get(url);
+      rows.push({
+        id: match?.id ?? `content-${url}`,
+        url,
+        name: match?.label || fileNameFromUrl(match?.objectKey || url),
+        inLibrary: Boolean(match),
+        source: "content",
+      });
+    }
+
+    if (thumbnailUrl && !seen.has(thumbnailUrl)) {
+      const match = byUrl.get(thumbnailUrl);
+      rows.unshift({
+        id: match?.id ?? `thumbnail-${thumbnailUrl}`,
+        url: thumbnailUrl,
+        name: match?.label || fileNameFromUrl(match?.objectKey || thumbnailUrl),
+        inLibrary: Boolean(match),
+        source: "thumbnail",
+      });
+    }
+
+    return rows;
+  }, [mediaItems, postImageUrls, data.image]);
 
   const saveQueue = useMemo(
     () =>
@@ -675,7 +742,10 @@ export default function Editor({
                 setCurrentBlockMode(getCurrentBlockMode(editor));
                 setCurrentTextAlign(getCurrentTextAlign(editor));
                 setToolbarTick((v) => v + 1);
-                const imageCount = countImageNodes(editor.getJSON());
+                const json = editor.getJSON();
+                const imageUrls = Array.from(new Set(collectImageUrlsFromNode(json)));
+                setPostImageUrls(imageUrls);
+                const imageCount = countImageNodes(json);
                 const imageCountChanged = imageCount !== lastImageCountRef.current;
                 lastImageCountRef.current = imageCount;
                 enqueueSave(imageCountChanged);
@@ -1128,16 +1198,16 @@ export default function Editor({
               </div>
               {mediaLoading ? (
                 <p className="text-xs text-stone-600">Loading media...</p>
-              ) : mediaItems.length === 0 ? (
-                <p className="text-xs text-stone-600">No media files for this site yet.</p>
+              ) : sidebarMediaItems.length === 0 ? (
+                <p className="text-xs text-stone-600">No media attached to this post yet.</p>
               ) : (
                 <div className="max-h-56 space-y-1 overflow-auto pr-1">
-                  {mediaItems.slice(0, 40).map((item) => (
+                  {sidebarMediaItems.slice(0, 40).map((item) => (
                     <button
-                      key={`media-${item.id}`}
+                      key={`media-${item.id}-${item.source}`}
                       type="button"
                       className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-left text-[11px] hover:bg-stone-100"
-                      title={item.objectKey}
+                      title={item.url}
                       onClick={() => {
                         const editor = editorRef.current;
                         if (!editor) return;
@@ -1147,11 +1217,13 @@ export default function Editor({
                           .setImage({ src: item.url, alt: item.label || "Site media image" })
                           .run();
                         enqueueSave(true);
-                        toast.success("Inserted media from library.");
+                        toast.success("Inserted media from post files.");
                       }}
                     >
-                      <div className="truncate font-semibold">{item.label || item.objectKey.split("/").pop() || item.objectKey}</div>
-                      <div className="truncate text-[10px] text-stone-500">{item.provider}: {item.objectKey}</div>
+                      <div className="truncate font-semibold">
+                        {item.source === "thumbnail" ? "Thumbnail: " : ""}
+                        {item.name}
+                      </div>
                     </button>
                   ))}
                 </div>
