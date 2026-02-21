@@ -7,6 +7,10 @@ Theme system files:
 - Global theme settings UI: `app/app/(dashboard)/settings/themes/page.tsx`
 - Site theme selection UI: `app/app/(dashboard)/site/[id]/settings/themes/page.tsx`
 
+Theme root path:
+- Default: `themes/`
+- Override: `THEMES_PATH` (absolute or workspace-relative path)
+
 ## Purpose
 
 1. Keep visual customization simple and token-based.

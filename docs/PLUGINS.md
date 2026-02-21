@@ -17,7 +17,8 @@ Plugin system files:
 
 ## Drop-in structure
 
-Each plugin is a folder in `plugins/`.
+Each plugin is a folder in `plugins/` by default.
+You can override the plugin root with `PLUGINS_PATH` (absolute or workspace-relative path).
 
 Required:
 
@@ -106,6 +107,7 @@ Plugin capabilities are enforced at runtime:
 - `adminExtensions`: required for dashboard/menu extension registration
 - `contentTypes`: required for `api.registerContentType(...)`
 - `serverHandlers`: required for `api.registerServerHandler(...)`
+- `authExtensions`: required for experimental auth extension surfaces
 
 If a plugin attempts a gated operation without declaring the capability, Core throws a `[plugin-guard]` error.
 

@@ -21,6 +21,7 @@ Plugins may:
 - Register content-type and server behavior only through Core contract surfaces
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
+- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`)
 
 Plugins may not:
 
@@ -62,4 +63,10 @@ Invalid manifests are ignored at discovery time.
 - Themes: `themes/<theme-id>/...`
 - Plugins: `plugins/<plugin-id>/...`
 
-Core discovers extensions only from these roots.
+Core discovers extensions from these roots by default.
+
+Optional runtime overrides:
+- `THEMES_PATH`
+- `PLUGINS_PATH`
+
+When set, paths may be absolute or workspace-relative.

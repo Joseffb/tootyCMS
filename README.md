@@ -53,7 +53,8 @@ See:
 
 ## Theme System
 
-Themes live in `themes/<theme-id>/`.
+Themes live in `themes/<theme-id>/` by default.
+You can override the root path with `THEMES_PATH` (absolute or workspace-relative).
 
 Required:
 - `theme.json`
@@ -78,7 +79,8 @@ Example: `themes/tooty-light/templates/tax_category_documentation.html` is used 
 
 ## Plugin System
 
-Plugins live in `plugins/<plugin-id>/`.
+Plugins live in `plugins/<plugin-id>/` by default.
+You can override the root path with `PLUGINS_PATH` (absolute or workspace-relative).
 
 Required:
 - `plugin.json`
@@ -91,6 +93,7 @@ Runtime capability flags (manifest `capabilities`) are enforced:
 - `adminExtensions`
 - `contentTypes`
 - `serverHandlers`
+- `authExtensions` (experimental)
 
 If a plugin uses undeclared capabilities, core throws `[plugin-guard]` errors.
 
@@ -116,6 +119,20 @@ npm run dev
 
 App runs at:
 - `http://localhost:3000`
+
+## Setup Wizard
+
+First-run setup is available at `/setup` until setup is completed.
+
+Current setup flow:
+- Save environment values (local `.env`, Vercel env API, or lambda backend based on runtime/backend setting)
+- Initialize schema (auto-check existing tables and only run init when required)
+- Persist setup completion and bootstrap admin metadata
+- First admin user is created on first OAuth login (no pre-seeded auth user row)
+
+Notes:
+- `site_url` is used as canonical root URL in dashboard/theme contexts.
+- In local mode, missing port is normalized from `NEXTAUTH_URL` / `PORT` to avoid broken links.
 
 ## AI Editor (Optional)
 
@@ -152,6 +169,7 @@ npm run test:all
 - `docs/PLUGINS.md`
 - `docs/THEMES.md`
 - `docs/EXTENSION_CONTRACTS.md`
+- `docs/SETUP_AND_RUNTIME_UPDATES.md`
 - `docs/THEME_SANDBOX_CONTRACT.md`
 - `docs/MENUS.md`
 - `docs/MEDIA_MANAGER.md`
