@@ -30,8 +30,8 @@
       "key": "home_hero_title",
       "label": "Home Hero Title",
       "type": "text",
-      "placeholder": "The CMS that doesn’t fight your stack.",
-      "defaultValue": "The CMS that doesn’t fight your stack."
+      "placeholder": "Deploy your CMS in minutes. Publish in seconds.",
+      "defaultValue": "Deploy your CMS in minutes. Publish in seconds."
     },
     {
       "key": "home_hero_subtitle",
