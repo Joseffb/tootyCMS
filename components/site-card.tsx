@@ -30,14 +30,18 @@ async function getDomainShare(domain: string): Promise<number | null> {
     });
 
     if (!res.ok) {
-      console.error("[tb-pipe domain_share]", domain, await res.text());
+      if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
+        console.warn("[tb-pipe domain_share]", domain, await res.text());
+      }
       return null;
     }
 
     const json = await res.json();
     return json.data?.[0]?.pct_hits ?? null;
   } catch (err) {
-    console.error("[tb-pipe domain_share] fetch failed", err);
+    if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
+      console.warn("[tb-pipe domain_share] fetch failed", err);
+    }
     return null;
   }
 }

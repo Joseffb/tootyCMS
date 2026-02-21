@@ -34,7 +34,9 @@ async function fetchPipe<T>(pipe: string, domain: string): Promise<T | null> {
 
   const res = await fetch(`/api/tb-pipe?${qs}`);
   if (!res.ok) {
-    console.error('[tb-pipe]', pipe, await res.text());
+    if (process.env.NEXT_PUBLIC_DEBUG_MODE === "1" || process.env.NEXT_PUBLIC_DEBUG_MODE === "true") {
+      console.warn('[tb-pipe]', pipe, await res.text());
+    }
     return null;
   }
   return (await res.json()).data as T;
