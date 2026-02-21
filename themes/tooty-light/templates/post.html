@@ -1,0 +1,30 @@
+<section class="tooty-landing">
+  {{theme_header | safe}}
+
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <p class="hero-kicker">Post</p>
+        <h1>{{post.title}}</h1>
+        {% if post.description %}
+        <p class="hero-tagline">{{post.description}}</p>
+        {% endif %}
+        <div class="hero-actions">
+          <a class="btn btn-secondary" href="{{links.main_site}}">Back Home</a>
+          <a class="btn btn-primary" href="{{links.posts}}">All Posts</a>
+        </div>
+      </div>
+      <div class="hero-mascot">
+        <img src="/theme-assets/tooty-light/mascots/tooty-reading.png" alt="Theme graphic" />
+      </div>
+    </div>
+  </header>
+
+  <section class="content-preview">
+    <article class="post-card">
+      {{ post.content_html | safe }}
+    </article>
+  </section>
+
+  {{theme_footer | safe}}
+</section>

@@ -189,3 +189,21 @@ export async function getThemeDetailTemplateByHierarchy(
   ];
   return getThemeTemplateFromCandidates(siteId, candidates);
 }
+
+export async function getThemeLayoutTemplateForSite(
+  siteId: string,
+  opts: { layout: string; dataDomain?: string },
+) {
+  const layout = opts.layout.trim().toLowerCase();
+  if (!layout) return null;
+
+  const dataDomain = (opts.dataDomain || "").trim().toLowerCase();
+  const candidates = [
+    dataDomain ? `${dataDomain}-${layout}.html` : "",
+    dataDomain ? `${dataDomain}_${layout}.html` : "",
+    `layout-${layout}.html`,
+    `${layout}.html`,
+  ].filter(Boolean);
+
+  return getThemeTemplateFromCandidates(siteId, candidates);
+}

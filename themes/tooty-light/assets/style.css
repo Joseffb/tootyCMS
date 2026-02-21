@@ -180,6 +180,62 @@
   color: #473627;
 }
 
+.post-card :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1.1rem 0 0.45rem;
+  line-height: 1.2;
+}
+
+.post-card :where(h1, h2) {
+  font-size: 1.5rem;
+}
+
+.post-card :where(h3, h4) {
+  font-size: 1.22rem;
+}
+
+.post-card p {
+  margin: 0.6rem 0 0;
+  line-height: 1.7;
+}
+
+.post-card :where(ul, ol) {
+  margin: 0.8rem 0 0 1.2rem;
+  padding: 0;
+}
+
+.post-card li + li {
+  margin-top: 0.35rem;
+}
+
+.post-card blockquote {
+  margin: 0.9rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid #d7ad7d;
+  background: #fff7ea;
+  border-radius: 6px;
+}
+
+.post-card code {
+  padding: 0.1rem 0.28rem;
+  border-radius: 4px;
+  background: #fff3df;
+}
+
+.post-card pre {
+  margin: 0.95rem 0 0;
+  overflow-x: auto;
+  padding: 0.8rem;
+  border-radius: 8px;
+  background: #fff8ee;
+  border: 1px solid #efd8b7;
+}
+
+.post-card hr {
+  margin: 1rem 0 0;
+  border: 0;
+  border-top: 1px solid #ecd6b6;
+}
+
 .post-meta {
   margin: 0.3rem 0 0;
   font-size: 0.82rem;
@@ -371,4 +427,59 @@
     order: -1;
     min-height: 10rem;
   }
+}
+
+.gallery-carousel {
+  display: flex;
+  gap: 0.9rem;
+  overflow-x: auto;
+  padding-bottom: 0.4rem;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scroll-padding-inline: 0.25rem;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gallery-slide {
+  flex: 0 0 min(90vw, 42rem);
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  border: 1px solid #f0e2cc;
+  border-radius: 14px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.gallery-image,
+.gallery-embed {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 0;
+}
+
+.gallery-social {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  color: #8f3d00;
+  text-decoration: underline;
+}
+
+.gallery-carousel::-webkit-scrollbar {
+  height: 8px;
+}
+
+.gallery-carousel::-webkit-scrollbar-track {
+  background: #f8e8cf;
+  border-radius: 999px;
+}
+
+.gallery-carousel::-webkit-scrollbar-thumb {
+  background: #d9b184;
+  border-radius: 999px;
 }
