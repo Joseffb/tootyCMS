@@ -1,0 +1,58 @@
+{
+  "id": "tooty-light",
+  "name": "Tooty Light",
+  "description": "Warm pastel beige with playful orange hover accents.",
+  "version": "v1",
+  "tokens": {
+    "shellBg": "bg-[#f3e8d0]",
+    "shellText": "text-stone-900",
+    "topMuted": "text-stone-600",
+    "titleText": "text-stone-900",
+    "navText": "text-stone-700",
+    "navHover": "hover:text-orange-600"
+  },
+  "templates": {
+    "home": "home.html"
+  },
+  "assets": {
+    "styles": ["style.css"],
+    "scripts": ["theme.js"]
+  },
+  "settingsFields": [
+    {
+      "key": "home_hero_pill",
+      "label": "Home Hero Pill",
+      "type": "text",
+      "placeholder": "Tooty CMS",
+      "defaultValue": "Tooty CMS"
+    },
+    {
+      "key": "home_hero_title",
+      "label": "Home Hero Title",
+      "type": "text",
+      "placeholder": "The CMS that doesn’t fight your stack.",
+      "defaultValue": "The CMS that doesn’t fight your stack."
+    },
+    {
+      "key": "home_hero_subtitle",
+      "label": "Home Hero Subtitle",
+      "type": "text",
+      "placeholder": "HTML-first, multi-site ready, and built to ship.",
+      "defaultValue": "HTML-first, multi-site ready, and built to ship."
+    },
+    {
+      "key": "post_mascot_mode",
+      "label": "Post Mascot Mode",
+      "type": "text",
+      "placeholder": "random_non_docs | fixed_reading | none",
+      "helpText": "Theme-level behavior for post mascot rendering."
+    },
+    {
+      "key": "documentation_category_slug",
+      "label": "Documentation Category Slug",
+      "type": "text",
+      "placeholder": "documentation",
+      "helpText": "Posts in this category use the library mascot."
+    }
+  ]
+}

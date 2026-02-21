@@ -1,0 +1,8 @@
+DESCRIPTION >
+    Identifies admin app users to exclude from metrics
+
+NODE exclude_app_visitors_query
+SQL >
+  SELECT DISTINCT visitor_id
+  FROM website_visitors
+  WHERE startsWith(domain, 'app.')

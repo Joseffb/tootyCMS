@@ -1,0 +1,17 @@
+DESCRIPTION >
+    Analytics events landing data source
+
+TOKEN "tracker" APPEND
+
+SCHEMA >
+    `timestamp` DateTime `json:$.timestamp`,
+    `session_id` Nullable(String) `json:$.session_id`,
+    `domain` String `json:$.domain`,
+    `action` LowCardinality(String) `json:$.action`,
+    `version` LowCardinality(String) `json:$.version`,
+    `payload` String `json:$.payload`
+
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(timestamp)
+ENGINE_SORTING_KEY timestamp
+ENGINE_TTL timestamp + toIntervalDay(60)

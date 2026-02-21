@@ -1,0 +1,29 @@
+{
+  "id": "dev-tools",
+  "name": "Dev Tools",
+  "description": "Adds developer-focused dashboard tools and optional render hooks.",
+  "version": "1.0.0",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Dev Tools",
+    "path": "/plugins/dev-tools"
+  },
+  "settingsFields": [
+    {
+      "key": "bannerText",
+      "label": "Banner Text",
+      "type": "text",
+      "placeholder": "Dev mode enabled"
+    },
+    {
+      "key": "showBanner",
+      "label": "Show Banner",
+      "type": "checkbox"
+    }
+  ]
+}

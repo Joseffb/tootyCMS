@@ -1,0 +1,34 @@
+
+DESCRIPTION >
+    Returns detailed information about individual visitor sessions
+
+TOKEN "dashboard" READ
+
+NODE visitor_details_query
+SQL >
+    %
+    SELECT 
+        visitor_id,
+        session_id,
+        timestamp,
+        page_url,
+        referrer_url,
+        country,
+        city,
+        device_type,
+        browser,
+        os,
+        page_load_time_ms,
+        time_on_page_seconds
+    FROM website_visitors
+    WHERE visitor_id = {{String(visitor_id, '')}}
+    {% if defined(session_id) %}
+    AND session_id = {{String(session_id, '')}}
+    {% end %}
+       {% if defined(domain) %}
+            AND domain = {{String(domain, 'main.localhost')}}
+            {% end %}
+    ORDER BY timestamp DESC
+
+TYPE endpoint
+        

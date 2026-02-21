@@ -1,0 +1,54 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+.idea
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+/.yarn
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+logs/traces/
+
+# local env files
+.env*
+!.env*.example
+
+# vercel
+.vercel
+
+pnpm-lock.yaml
+
+# typescript
+*.tsbuildinfo
+/.cursorrules
+/.gitlab-ci.yml
+/.gitlab/tinybird/tinybird-cd.yml
+/.github/workflows/tinybird-ci.yml
+/.gitlab/tinybird/tinybird-ci.yml
+/tinybird/mock/website_visitors.ndjson
+/tinybird/mock/website_visitors.sql
+/tinybird/mock/
+/tinybird/README.md
+/.tinyb
+/tinybird/0
+/tinybird/.tinyb
+/.github/workflows/tinybird-cd.yml

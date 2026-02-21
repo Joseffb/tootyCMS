@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-label="Tooty the toucan playing soccer">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff7c2"/>
+      <stop offset="50%" stop-color="#b9f4ff"/>
+      <stop offset="100%" stop-color="#d7ffd8"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7bd66d"/>
+      <stop offset="100%" stop-color="#3ea64a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" fill="url(#bg)"/>
+  <rect y="470" width="1200" height="205" fill="url(#grass)"/>
+  <circle cx="1020" cy="120" r="48" fill="#ffd86b" opacity="0.9"/>
+  <g opacity="0.35" fill="#ffffff">
+    <circle cx="200" cy="110" r="28"/>
+    <circle cx="238" cy="110" r="22"/>
+    <circle cx="920" cy="170" r="22"/>
+    <circle cx="950" cy="170" r="18"/>
+  </g>
+
+  <g transform="translate(390 175)">
+    <ellipse cx="220" cy="220" rx="165" ry="190" fill="#1f1f1f"/>
+    <ellipse cx="220" cy="245" rx="88" ry="125" fill="#ffffff"/>
+    <ellipse cx="160" cy="120" rx="54" ry="62" fill="#1f1f1f"/>
+    <circle cx="167" cy="117" r="13" fill="#ffffff"/>
+    <circle cx="171" cy="117" r="6" fill="#222"/>
+    <path d="M225 136 C335 88, 448 92, 505 142 C452 198, 332 205, 225 176 Z" fill="#ffb220"/>
+    <path d="M225 150 C333 125, 425 130, 475 158 C430 186, 328 190, 225 176 Z" fill="#ff6d2d"/>
+    <path d="M210 352 L172 450 L210 450 L238 365 Z" fill="#f1a832"/>
+    <path d="M305 350 L382 430 L352 454 L286 375 Z" fill="#f1a832"/>
+    <ellipse cx="180" cy="456" rx="42" ry="14" fill="#2f2f2f" opacity="0.35"/>
+    <ellipse cx="360" cy="458" rx="52" ry="14" fill="#2f2f2f" opacity="0.35"/>
+    <path d="M112 282 C72 254, 50 220, 46 186 C76 202, 98 228, 112 258 Z" fill="#2b2b2b"/>
+    <path d="M330 300 C386 292, 427 262, 447 226 C395 232, 352 258, 329 282 Z" fill="#2b2b2b"/>
+    <path d="M170 214 L270 214 L270 270 L170 270 Z" fill="#22c55e"/>
+    <polygon points="220,226 226,238 240,240 230,250 233,264 220,257 207,264 210,250 200,240 214,238" fill="#f59e0b"/>
+  </g>
+
+  <g transform="translate(780 450)">
+    <circle cx="0" cy="0" r="74" fill="#ffffff"/>
+    <path d="M0 -58 L18 -24 L0 6 L-21 -24 Z" fill="#1f2937"/>
+    <path d="M52 -20 L28 -8 L24 20 L47 34 L70 18 L70 -7 Z" fill="#1f2937"/>
+    <path d="M-52 -20 L-29 -8 L-24 20 L-47 34 L-70 18 L-70 -7 Z" fill="#1f2937"/>
+    <path d="M0 58 L22 40 L16 18 L-16 18 L-22 40 Z" fill="#1f2937"/>
+  </g>
+
+  <text x="56" y="90" font-family="Arial, sans-serif" font-size="46" font-weight="700" fill="#0f172a">Tooty CMS</text>
+  <text x="56" y="136" font-family="Arial, sans-serif" font-size="26" fill="#0f172a">Default Main Site Artwork</text>
+</svg>

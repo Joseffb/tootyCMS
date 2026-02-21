@@ -1,0 +1,54 @@
+DESCRIPTION >
+    Share of total traffic for a given domain.
+    Accepts:
+      • date_from / date_to – date range (defaults last 7 days)
+      • domain              – required site filter
+
+TOKEN "dashboard" READ
+
+NODE endpoint
+SQL >
+    %
+    SELECT
+        {{ String(domain,
+                  description = "Domain to measure",
+                  required    = True) }}
+          AS domain,
+
+        -- total across all *public* domains (excludes admin hosts)
+        countDistinctIf(
+          visitor_id,
+          domain NOT IN ('app.localhost')
+        ) AS total_visits,
+
+        -- only the requested domain
+        countDistinctIf(visitor_id, domain = {{ String(domain) }})
+          AS domain_visits,
+
+        -- total hits across all public domains
+        countIf(domain NOT IN ('app.localhost'))
+          AS total_hits,
+
+        -- hits for the requested domain
+        countIf(domain = {{ String(domain) }})
+          AS domain_hits,
+
+        round(domain_visits * 100.0 / total_visits, 2) AS pct_visits,
+        round(domain_hits   * 100.0 / total_hits,   2) AS pct_hits
+
+    FROM website_visitors
+    WHERE 1 = 1
+
+      {% if defined(date_from) %}
+        AND timestamp >= {{ DateTime(date_from) }}
+      {% else %}
+        AND timestamp >= today() - 7
+      {% end %}
+
+      {% if defined(date_to) %}
+        AND timestamp <= {{ DateTime(date_to) }}
+      {% else %}
+        AND timestamp < today() + 1
+      {% end %}
+
+TYPE endpoint

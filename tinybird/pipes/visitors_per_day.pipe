@@ -1,0 +1,42 @@
+DESCRIPTION >
+    Provides the count of daily visitors to the website with filtering options
+
+TOKEN "dashboard" READ
+
+NODE visitors_per_day_query
+SQL >
+    %
+    SELECT 
+        toDate(timestamp) AS date,
+        count(DISTINCT visitor_id) AS unique_visitors,
+        count(*) AS total_pageviews,
+        countIf(is_new_visitor = 1) AS new_visitors
+    FROM website_visitors
+    WHERE 1=1
+
+    {% if defined(date_from) %}
+        AND toDate(timestamp) >= {{ Date(date_from, '2023-01-01') }}
+    {% end %}
+    {% if defined(date_to) %}
+        AND toDate(timestamp) <= {{ Date(date_to,   '2030-12-31') }}
+    {% end %}
+    {% if defined(country) %}
+        AND country = {{String(country, 'US')}}
+    {% end %}
+    {% if defined(domain) %}
+        AND domain = {{String(domain, 'main.localhost')}}
+    {% end %}
+     AND NOT startsWith(domain, 'app.')
+     AND NOT endsWith(domain, '.vercel.app')
+     AND notIn(
+       [visitor_id],
+       (
+         SELECT groupArrayDistinct(visitor_id)
+         FROM exclude_app_visitors
+       )
+     )
+    GROUP BY date
+    ORDER BY date DESC
+
+TYPE endpoint
+        

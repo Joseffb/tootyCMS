@@ -1,0 +1,26 @@
+
+DESCRIPTION >
+    Tracking data for website visitors including page views, user information, and session data
+TOKEN tracker APPEND
+SCHEMA >
+    `visitor_id` String `json:$.visitor_id`,
+    `session_id` String `json:$.session_id`,
+    `user_agent` String `json:$.user_agent`,
+    `ip_address` String `json:$.ip_address`,
+    `country` String `json:$.country`,
+    `city` String `json:$.city`,
+    `domain` String `json:$.domain`,
+    `page_url` String `json:$.page_url`,
+    `referrer_url` String `json:$.referrer_url`,
+    `timestamp` DateTime `json:$.timestamp`,
+    `device_type` String `json:$.device_type`,
+    `browser` String `json:$.browser`,
+    `os` String `json:$.os`,
+    `is_new_visitor` UInt8 `json:$.is_new_visitor`,
+    `page_load_time_ms` UInt32 `json:$.page_load_time_ms`,
+    `time_on_page_seconds` UInt32 `json:$.time_on_page_seconds`
+
+ENGINE "MergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(timestamp)"
+ENGINE_SORTING_KEY "timestamp, visitor_id, session_id"
+        

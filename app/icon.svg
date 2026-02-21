@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Tooty the Toucan">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="55%" stop-color="#f9a8d4" />
+      <stop offset="100%" stop-color="#7dd3fc" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)" />
+  <ellipse cx="56" cy="72" rx="26" ry="30" fill="#0f172a" />
+  <circle cx="50" cy="58" r="7" fill="#fff" />
+  <circle cx="52" cy="58" r="3.5" fill="#0f172a" />
+  <path d="M62 60c10-10 26-8 36 2-9 11-24 14-36 9Z" fill="#fb7185" />
+  <path d="M62 63c10-7 24-5 33 2-8 8-21 10-33 6Z" fill="#fde047" />
+  <path d="M38 96c8 5 16 5 24 0" fill="none" stroke="#fde68a" stroke-width="5" stroke-linecap="round" />
+</svg>

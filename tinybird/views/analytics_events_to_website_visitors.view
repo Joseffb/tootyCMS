@@ -1,0 +1,22 @@
+# tinybird/views/analytics_events_to_website_visitors.view
+CREATE MATERIALIZED VIEW IF NOT EXISTS analytics_events_to_website_visitors
+TO website_visitors
+AS
+SELECT
+  timestamp,
+  session_id,
+  JSONExtractString(payload, '$.visitor_id')              AS visitor_id,
+  JSONExtractString(payload, '$.user_agent')              AS user_agent,
+  JSONExtractString(payload, '$.ip_address')              AS ip_address,
+  JSONExtractString(payload, '$.country')                 AS country,
+  JSONExtractString(payload, '$.city')                    AS city,
+  JSONExtractString(payload, '$.path')                    AS page_url,
+  JSONExtractString(payload, '$.ref')                     AS referrer_url,
+  JSONExtractString(payload, '$.device_type')             AS device_type,
+  JSONExtractString(payload, '$.browser')                 AS browser,
+  JSONExtractString(payload, '$.os')                      AS os,
+  toUInt8(JSONExtractBool(payload, '$.is_new_visitor'))   AS is_new_visitor,
+  toUInt32(JSONExtractInt(payload, '$.page_load_time_ms'))    AS page_load_time_ms,
+  toUInt32(JSONExtractInt(payload, '$.time_on_page_seconds')) AS time_on_page_seconds
+FROM analytics_events
+WHERE action = 'pageview';

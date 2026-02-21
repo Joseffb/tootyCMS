@@ -1,0 +1,73 @@
+<section class="tooty-landing">
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <p class="hero-kicker">{{theme.home_hero_pill or site.name}}</p>
+        <h1>{{theme.home_hero_title or site.description or hero.title}}</h1>
+        <p class="hero-tagline">{{theme.home_hero_subtitle or site.subtitle or hero.subtitle}}</p>
+        <div class="hero-actions">
+          {% if hero.cta_url %}
+          <a class="btn btn-primary" href="{{hero.cta_url}}">{{hero.cta_text}}</a>
+          {% endif %}
+          {% if links.setup %}<a class="btn btn-secondary" href="{{links.setup}}">Open Setup</a>{% endif %}
+        </div>
+      </div>
+      <div class="hero-mascot">
+        <img src="/theme-assets/tooty-dark/mascots/tooty-dark-burned-out.png" alt="Theme graphic" />
+      </div>
+    </div>
+  </header>
+
+  <section class="value-band">
+    <h2>The CMS that ships even when your soul wants airplane mode.</h2>
+    <div class="feature-grid">
+      <article class="feature-card">
+        <h3>Fast, Reluctantly</h3>
+        <p>From blank repo to production before your coffee cools.</p>
+      </article>
+      <article class="feature-card">
+        <h3>Clean Contracts</h3>
+        <p>Clear primitives. No plugin archaeology. No mystery rituals.</p>
+      </article>
+      <article class="feature-card">
+        <h3>Multi-Site, No Drama</h3>
+        <p>Prefix-aware storage keeps tenants isolated and your weekends intact.</p>
+      </article>
+      <article class="feature-card">
+        <h3>Built to Ship</h3>
+        <p>Editorial speed for teams that deliver first and philosophize later.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="content-preview">
+    <div class="preview-head">
+      <h2>Latest Content</h2>
+      <img src="/theme-assets/tooty-dark/mascots/tooty-dark-whatever.png" alt="Theme graphic" />
+    </div>
+
+    {% if newest_post %}
+    <article class="post-card">
+      <h3><a href="{{newest_post.href}}">{{newest_post.title}}</a></h3>
+      <p>{{newest_post.description}}</p>
+      <p class="post-meta">{{newest_post.created_at}}</p>
+      <a class="link-arrow" href="{{newest_post.href}}">Read Post →</a>
+    </article>
+    {% else %}
+    <p class="empty-state">No posts yet. Existential, yes. Blocked, no.</p>
+    {% endif %}
+
+    <div class="post-grid">
+      {% for post in posts %}
+      <article class="mini-post">
+        <h4><a href="{{post.href}}">{{post.title}}</a></h4>
+        <p>{{post.description}}</p>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <footer class="tooty-footer">
+    Tooty Dark: mildly existential, aggressively shippable.
+  </footer>
+</section>

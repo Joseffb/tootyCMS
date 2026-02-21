@@ -1,0 +1,36 @@
+DESCRIPTION >
+    Top traffic-source domains ordered by visits.
+
+TOKEN "dashboard" READ
+
+NODE endpoint
+SQL >
+    %
+    SELECT
+        domainWithoutWWW(referrer_url)   AS referrer,
+        countDistinct(visitor_id)        AS visits,
+        count()                          AS hits
+    FROM website_visitors
+    WHERE 1 = 1
+
+        {% if defined(domain) %}
+          AND domain = {{ String(domain) }}
+        {% end %}
+
+        {% if defined(date_from) %}
+          AND timestamp >= {{ DateTime(date_from) }}
+        {% else %}
+          AND timestamp >= today() - 7
+        {% end %}
+
+        {% if defined(date_to) %}
+          AND timestamp <= {{ DateTime(date_to) }}
+        {% else %}
+          AND timestamp <  today() + 1
+        {% end %}
+
+    GROUP BY referrer
+    ORDER BY visits DESC
+    LIMIT {{ Int32(skip, 0) }}, {{ Int32(limit, 50) }}
+
+TYPE endpoint

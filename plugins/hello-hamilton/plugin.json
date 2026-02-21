@@ -1,0 +1,40 @@
+{
+  "id": "hello-hamilton",
+  "name": "Hello Hamilton",
+  "description": "A Hello Dolly style plugin that surfaces a Hamilton quote in admin settings.",
+  "version": "1.0.0",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Hello Hamilton",
+    "path": "/app/plugins/hello-hamilton"
+  },
+  "settingsFields": [
+    {
+      "key": "quote",
+      "label": "Hamilton Quote",
+      "type": "textarea",
+      "placeholder": "Those who stand for nothing fall for anything.",
+      "helpText": "Set the quote shown on this plugin setup page."
+    },
+    {
+      "key": "showInDebug",
+      "label": "Show quote in debug traces",
+      "type": "checkbox"
+    }
+  ],
+  "editor": {
+    "snippets": [
+      {
+        "id": "hamilton-quote",
+        "title": "Insert Hamilton Quote",
+        "description": "Add default Hamilton quote callout.",
+        "content": "> \"Those who stand for nothing fall for anything.\"\n\n— Alexander Hamilton"
+      }
+    ]
+  }
+}
