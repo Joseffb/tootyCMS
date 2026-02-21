@@ -3,14 +3,20 @@ import { OpenAIStream, StreamingTextResponse } from "ai";
 import { kv } from "@vercel/kv";
 import { Ratelimit } from "@upstash/ratelimit";
 
+const openaiApiKey = process.env.OPENAI_API_KEY;
+const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const config = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: openaiApiKey,
 });
 const openai = new OpenAIApi(config);
 
 export const runtime = "edge";
 
 export async function POST(req: Request): Promise<Response> {
+  if (!openaiApiKey) {
+    return new Response("OPENAI_API_KEY is not configured.", { status: 503 });
+  }
+
   if (
     process.env.NODE_ENV != "development" &&
     process.env.KV_REST_API_URL &&
@@ -45,7 +51,7 @@ export async function POST(req: Request): Promise<Response> {
   content = content.replace(/\/$/, "").slice(-5000);
 
   const response = await openai.createChatCompletion({
-    model: "gpt-3.5-turbo",
+    model: openaiModel,
     messages: [
       {
         role: "system",
