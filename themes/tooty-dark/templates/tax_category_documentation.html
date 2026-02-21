@@ -1,0 +1,39 @@
+<section class="tooty-landing">
+  {{theme_header | safe}}
+
+  <header class="hero mt-5">
+    <div class="hero-inner hero-inner--top">
+      <div class="hero-copy">
+        <p class="hero-kicker">Documentation</p>
+        <h1>{{term.name}}</h1>
+        <p class="hero-tagline">Reference material for teams that would rather ship than guess.</p>
+      </div>
+      <div class="hero-mascot">
+        <img src="/theme-assets/tooty-dark/mascots/tooty-reading.png" alt="Documentation graphic" />
+      </div>
+    </div>
+  </header>
+
+  <section class="content-preview">
+    <div class="preview-head">
+      <h2>Docs Library</h2>
+      <img src="/theme-assets/tooty-dark/mascots/tooty-dark-meh-reading.png" alt="Docs icon" />
+    </div>
+    <div class="post-grid">
+      {% for post in posts %}
+      <article class="mini-post">
+        <h4><a href="{{post.href}}">{{post.title}}</a></h4>
+        <p>{{post.description}}</p>
+        <p class="post-meta">{{post.created_at}}</p>
+      </article>
+      {% endfor %}
+      {% if posts.length == 0 %}
+      <p class="empty-state">No docs yet. Calm. We can fix that in one publish.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <footer class="tooty-footer">
+    Powered by Tooty CMS.
+  </footer>
+</section>

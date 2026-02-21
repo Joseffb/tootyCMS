@@ -20,6 +20,10 @@
   align-items: center;
 }
 
+.hero-inner--top {
+  align-items: flex-start;
+}
+
 .hero-kicker {
   display: inline-block;
   margin: 0 0 0.6rem;
@@ -267,6 +271,15 @@
 }
 
 .tooty-post-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid;
+  border-radius: 1rem;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 2px 8px rgba(23, 23, 23, 0.06);
   border-color: #e7e5e4;
   background: rgba(255, 255, 255, 0.9);
 }
@@ -280,6 +293,10 @@
 }
 
 .tooty-post-nav-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
   color: #57534e;
 }
 
