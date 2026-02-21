@@ -5,6 +5,7 @@ import { getSiteData, getTaxonomyArchiveData } from "@/lib/fetchers";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getActiveThemeForSite, getThemeTemplateByHierarchy } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
+import { getSiteUrlSetting } from "@/lib/cms-config";
 
 type Params = Promise<{ domain: string; slug: string }>;
 
@@ -27,11 +28,14 @@ export default async function TagArchivePage({ params }: { params: Params }) {
       : "documentation";
   const themeId = activeTheme?.id || "tooty-default";
   const rootUrl = getRootSiteUrl();
-  const siteUrl = getSitePublicUrl({
+  const isPrimary = Boolean(site?.isPrimary) || site?.subdomain === "main";
+  const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+  const derivedSiteUrl = getSitePublicUrl({
     subdomain: decodedDomain.split(".")[0] || "main",
     customDomain: decodedDomain.includes(".") ? null : decodedDomain,
     isPrimary: decodedDomain.startsWith("main.") || decodedDomain === "localhost:3000",
   });
+  const siteUrl = configuredRootUrl || derivedSiteUrl;
 
   if (site?.id) {
     const tagTemplate = await getThemeTemplateByHierarchy(site.id, {

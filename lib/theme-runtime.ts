@@ -1,8 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
-
-const THEMES_DIR = path.join(process.cwd(), "themes");
+import { getThemesDir } from "@/lib/extension-paths";
 
 function isExternal(url: string) {
   return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/");
@@ -33,6 +32,7 @@ export async function getActiveThemeForSite(siteId: string): Promise<ThemeWithSt
 export async function getThemeAssetsForSite(siteId: string) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return { styles: [], scripts: [] };
+  const themesDir = getThemesDir();
 
   const manifestAssets = (active as any).assets || {};
   const styles = Array.isArray(manifestAssets.styles)
@@ -42,8 +42,8 @@ export async function getThemeAssetsForSite(siteId: string) {
     ? manifestAssets.scripts.map((asset: string) => toThemeAssetUrl(active.id, asset))
     : [];
 
-  const defaultStylePath = path.join(THEMES_DIR, active.id, "assets", "style.css");
-  const defaultScriptPath = path.join(THEMES_DIR, active.id, "assets", "theme.js");
+  const defaultStylePath = path.join(themesDir, active.id, "assets", "style.css");
+  const defaultScriptPath = path.join(themesDir, active.id, "assets", "theme.js");
 
   if (styles.length === 0 && (await exists(defaultStylePath))) {
     styles.push(`/theme-assets/${active.id}/style.css`);
@@ -59,6 +59,7 @@ export async function getThemeAssetsForSite(siteId: string) {
 export async function getThemeTemplateForSite(siteId: string, templateName: "home" | "post") {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
+  const themesDir = getThemesDir();
 
   const manifestTemplates = (active as any).templates || {};
   const configured = typeof manifestTemplates[templateName] === "string" ? manifestTemplates[templateName] : "";
@@ -70,12 +71,12 @@ export async function getThemeTemplateForSite(siteId: string, templateName: "hom
   for (const candidate of candidates) {
     if (!candidate) continue;
     const safeFile = candidate.replace(/^\/+/, "");
-    const templatePath = path.join(THEMES_DIR, active.id, "templates", safeFile);
+    const templatePath = path.join(themesDir, active.id, "templates", safeFile);
     try {
       const raw = await readFile(templatePath, "utf8");
       const partials: { header: string; footer: string } = { header: "", footer: "" };
       for (const partialName of ["header.html", "footer.html"] as const) {
-        const partialPath = path.join(THEMES_DIR, active.id, "templates", partialName);
+        const partialPath = path.join(themesDir, active.id, "templates", partialName);
         try {
           const partialRaw = await readFile(partialPath, "utf8");
           if (partialName === "header.html") partials.header = partialRaw;
@@ -103,16 +104,17 @@ export async function getThemeTemplateForSite(siteId: string, templateName: "hom
 export async function getThemeTemplateFromCandidates(siteId: string, candidates: string[]) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
+  const themesDir = getThemesDir();
 
   for (const candidate of candidates) {
     if (!candidate) continue;
     const safeFile = candidate.replace(/^\/+/, "");
-    const templatePath = path.join(THEMES_DIR, active.id, "templates", safeFile);
+    const templatePath = path.join(themesDir, active.id, "templates", safeFile);
     try {
       const raw = await readFile(templatePath, "utf8");
       const partials: { header: string; footer: string } = { header: "", footer: "" };
       for (const partialName of ["header.html", "footer.html"] as const) {
-        const partialPath = path.join(THEMES_DIR, active.id, "templates", partialName);
+        const partialPath = path.join(themesDir, active.id, "templates", partialName);
         try {
           const partialRaw = await readFile(partialPath, "utf8");
           if (partialName === "header.html") partials.header = partialRaw;

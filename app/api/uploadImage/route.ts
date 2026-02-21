@@ -93,7 +93,11 @@ export async function POST(req: Request) {
 
       let url = existingByKey.get(key);
       if (!url) {
-        const uploaded = await put(key, variant.buffer, {
+        const body = variant.buffer.buffer.slice(
+          variant.buffer.byteOffset,
+          variant.buffer.byteOffset + variant.buffer.byteLength
+        ) as ArrayBuffer;
+        const uploaded = await put(key, body, {
           access: "public",
           contentType: variant.mimeType,
           addRandomSuffix: false,

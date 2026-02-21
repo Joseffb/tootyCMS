@@ -74,6 +74,7 @@ type SidebarMediaItem = {
   id: number | string;
   url: string;
   name: string;
+  label: string | null;
   inLibrary: boolean;
   source: "content" | "thumbnail";
 };
@@ -303,6 +304,7 @@ export default function Editor({
         id: match?.id ?? `content-${url}`,
         url,
         name: match?.label || fileNameFromUrl(match?.objectKey || url),
+        label: match?.label ?? null,
         inLibrary: Boolean(match),
         source: "content",
       });
@@ -314,6 +316,7 @@ export default function Editor({
         id: match?.id ?? `thumbnail-${thumbnailUrl}`,
         url: thumbnailUrl,
         name: match?.label || fileNameFromUrl(match?.objectKey || thumbnailUrl),
+        label: match?.label ?? null,
         inLibrary: Boolean(match),
         source: "thumbnail",
       });

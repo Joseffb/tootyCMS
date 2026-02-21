@@ -138,20 +138,20 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),
     editor: editor
       ? {
-          snippets: snippetsRaw
-            .map((snippet, index) => {
-              const s = asRecord(snippet);
-              const title = String(s.title ?? "").trim();
-              const content = String(s.content ?? "");
-              if (!title || !content) return null;
-              return {
+          snippets: snippetsRaw.flatMap<PluginEditorSnippet>((snippet, index) => {
+            const s = asRecord(snippet);
+            const title = String(s.title ?? "").trim();
+            const content = String(s.content ?? "");
+            if (!title || !content) return [];
+            return [
+              {
                 id: String(s.id ?? `${id}-snippet-${index + 1}`).trim(),
                 title,
                 description: String(s.description ?? "").trim(),
                 content,
-              } satisfies PluginEditorSnippet;
-            })
-            .filter((snippet): snippet is PluginEditorSnippet => Boolean(snippet)),
+              },
+            ];
+          }),
         }
       : undefined,
   };
@@ -193,4 +193,3 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),
   };
 }
-

@@ -11,7 +11,7 @@ import { renderThemeTemplate } from "@/lib/theme-template";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getInstallState } from "@/lib/install-state";
 import { getThemeContextApi } from "@/lib/extension-api";
-import { getWritingSettings } from "@/lib/cms-config";
+import { getSiteUrlSetting, getWritingSettings } from "@/lib/cms-config";
 
 // Type Definitions
 interface SeriesLink {
@@ -107,11 +107,14 @@ export default async function SiteHomePage({ params }: { params: Params }) {
     const installState = await getInstallState();
     const themeApi = await getThemeContextApi(data.id as string);
     const writingSettings = await getWritingSettings();
-    const siteUrl = getSitePublicUrl({
+    const isPrimary = Boolean((data as any).isPrimary) || (data as any).subdomain === "main";
+    const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+    const derivedSiteUrl = getSitePublicUrl({
       subdomain: data.subdomain,
       customDomain: data.customDomain,
-      isPrimary: Boolean((data as any).isPrimary) || (data as any).subdomain === "main",
+      isPrimary,
     });
+    const siteUrl = configuredRootUrl || derivedSiteUrl;
     const themePosts = posts.map((post: any) => ({
       title: post.title || "Untitled",
       description: post.description || "",

@@ -15,6 +15,7 @@ import {
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { trace } from "@/lib/debug";
+import { getPluginsDir } from "@/lib/extension-paths";
 
 function parseJson<T>(raw: string | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -101,7 +102,7 @@ function createGuardedKernelView(
 async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnType<typeof createKernel>) {
   const pluginId = plugin.id;
   const capabilities = toRuntimeCapabilities(plugin);
-  const absEntry = path.join(process.cwd(), "plugins", pluginId, "index.mjs");
+  const absEntry = path.join(getPluginsDir(), pluginId, "index.mjs");
   try {
     const mod = await import(pathToFileURL(absEntry).href);
     if (typeof mod?.register === "function") {

@@ -4,6 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ThemeTokens } from "@/lib/theme-system";
+import { getThemesDir } from "@/lib/extension-paths";
 import {
   normalizeExtensionId,
   type ThemeContract,
@@ -26,8 +27,6 @@ export type ThemeSystemPrimaries = {
   category_base: string;
   tag_base: string;
 };
-
-const THEMES_DIR = path.join(process.cwd(), "themes");
 
 const fallbackTokens: ThemeTokens = {
   shellBg: "bg-[#f3e8d0]",
@@ -91,16 +90,17 @@ function normalizeThemeConfig(raw: Record<string, unknown>) {
 }
 
 export async function getAvailableThemes(): Promise<ThemeManifest[]> {
+  const themesDir = getThemesDir();
   let entries: string[] = [];
   try {
-    entries = await readdir(THEMES_DIR);
+    entries = await readdir(themesDir);
   } catch {
     return [];
   }
 
   const manifests: ThemeManifest[] = [];
   for (const entry of entries) {
-    const manifestPath = path.join(THEMES_DIR, entry, "theme.json");
+    const manifestPath = path.join(themesDir, entry, "theme.json");
     try {
       const raw = await readFile(manifestPath, "utf8");
       const parsed = parseJson<unknown>(raw, {});

@@ -3,6 +3,7 @@ import { cmsSettings } from "@/lib/schema";
 import { inArray } from "drizzle-orm";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { getPluginsDir } from "@/lib/extension-paths";
 import {
   normalizeExtensionId,
   type PluginContract,
@@ -22,8 +23,6 @@ export type PluginWithState = PluginManifest & {
   enabled: boolean;
   config: Record<string, unknown>;
 };
-
-const PLUGINS_DIR = path.join(process.cwd(), "plugins");
 
 export function pluginEnabledKey(pluginId: string) {
   return `plugin_${pluginId}_enabled`;
@@ -52,16 +51,17 @@ function parseJsonObject<T>(raw: string, fallback: T): T {
 }
 
 export async function getAvailablePlugins(): Promise<PluginManifest[]> {
+  const pluginsDir = getPluginsDir();
   let entries: string[] = [];
   try {
-    entries = await readdir(PLUGINS_DIR);
+    entries = await readdir(pluginsDir);
   } catch {
     return [];
   }
 
   const manifests: PluginManifest[] = [];
   for (const entry of entries) {
-    const manifestPath = path.join(PLUGINS_DIR, entry, "plugin.json");
+    const manifestPath = path.join(pluginsDir, entry, "plugin.json");
     try {
       const raw = await readFile(manifestPath, "utf8");
       const parsed = parseJsonObject<unknown>(raw, {});

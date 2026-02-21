@@ -3,8 +3,7 @@ import db from "@/lib/db";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 import SiteCard from "./site-card";
-import { cmsSettings } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { getSiteUrlSetting } from "@/lib/cms-config";
 
 export default async function Sites({ limit }: { limit?: number }) {
   const session = await getSession();
@@ -18,14 +17,13 @@ export default async function Sites({ limit }: { limit?: number }) {
     ...(limit ? { limit } : {}),
   });
 
-  const siteUrlSetting = await db.query.cmsSettings.findFirst({
-    where: eq(cmsSettings.key, "site_url"),
-    columns: { value: true },
-  });
-  const fallbackRoot = process.env.NEXT_PUBLIC_VERCEL_ENV
-    ? `https://${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`
-    : `http://localhost:${process.env.PORT ?? 3000}`;
-  const rootUrl = siteUrlSetting?.value || fallbackRoot;
+  const siteUrlSetting = await getSiteUrlSetting();
+  const envRootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.trim();
+  const envNextAuthUrl = process.env.NEXTAUTH_URL?.trim();
+  const fallbackRoot = envRootDomain
+    ? `${process.env.NEXT_PUBLIC_VERCEL_ENV ? "https" : "http"}://${envRootDomain}`
+    : envNextAuthUrl || `http://localhost:${process.env.PORT ?? 3000}`;
+  const rootUrl = siteUrlSetting.value.trim() || fallbackRoot;
 
   return sites.length > 0 ? (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

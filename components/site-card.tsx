@@ -67,7 +67,7 @@ export default async function SiteCard({
   });
   let publicLabel = domain;
 
-  if (rootUrl) {
+  if (rootUrl && isMainSite) {
     publicUrl = rootUrl;
     try {
       publicLabel = new URL(rootUrl).host;

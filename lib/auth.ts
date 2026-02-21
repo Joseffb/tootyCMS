@@ -53,6 +53,14 @@ async function getOauthProviderFlags() {
   return result;
 }
 
+async function getBootstrapAdminEmail() {
+  const row = await db.query.cmsSettings.findFirst({
+    where: (table, { eq }) => eq(table.key, "bootstrap_admin_email"),
+    columns: { value: true },
+  });
+  return row?.value?.trim().toLowerCase() || "";
+}
+
 if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) {
   providers.push(
     GitHubProvider({
@@ -131,7 +139,7 @@ export const authOptions: NextAuthOptions = {
     },
   },
   callbacks: {
-    signIn: async ({ account }) => {
+    signIn: async ({ account, user }) => {
       const providerId = account?.provider as OAuthProviderId | undefined;
       if (!providerId || !SUPPORTED_OAUTH_PROVIDERS.includes(providerId)) {
         return true;
@@ -140,6 +148,15 @@ export const authOptions: NextAuthOptions = {
       const flags = await getOauthProviderFlags();
       if (!flags[providerId]) {
         return "/login?error=OAuth provider disabled by admin";
+      }
+
+      const bootstrapAdminEmail = await getBootstrapAdminEmail();
+      if (bootstrapAdminEmail) {
+        const userEmail = user.email?.trim().toLowerCase() || "";
+        const anyUser = await db.query.users.findFirst({ columns: { id: true } });
+        if (!anyUser && userEmail !== bootstrapAdminEmail) {
+          return "/login?error=Use the setup admin email for first login";
+        }
       }
       return true;
     },
@@ -188,6 +205,17 @@ export const authOptions: NextAuthOptions = {
           .set({ role: "administrator" })
           .where(eq(users.id, token.sub));
         userRole = { role: "administrator" };
+      }
+
+      if (token.sub && session.user?.email) {
+        const bootstrapAdminEmail = await getBootstrapAdminEmail();
+        if (bootstrapAdminEmail && session.user.email.toLowerCase() === bootstrapAdminEmail) {
+          await db
+            .update(users)
+            .set({ role: "administrator" })
+            .where(eq(users.id, token.sub));
+          userRole = { role: "administrator" };
+        }
       }
       session.user = {
         ...session.user,

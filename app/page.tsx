@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default async function RootPage() {
   const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
   const rootDomain = rootDomainRaw.replace(/:\d+$/, "");
-  const mainDomain = `main.${rootDomain}`;
+  const mainDomain = rootDomain;
   const mainSite = await getSiteData(mainDomain);
   const themeAssets = mainSite?.id
     ? await getThemeAssetsForSite(mainSite.id as string)

@@ -1,6 +1,7 @@
 import db from "@/lib/db";
 import { cmsSettings } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { withLocalDevPort } from "@/lib/site-url";
 
 export const RANDOM_DEFAULT_IMAGES_KEY = "random_default_images_enabled";
 export const SITE_URL_KEY = "site_url";
@@ -70,6 +71,30 @@ function normalizeSiteUrl(input: string) {
   }
 }
 
+function defaultSiteUrlFromEnv() {
+  const rootDomainRaw = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "").trim();
+  if (!rootDomainRaw) return "";
+  const rootDomain = rootDomainRaw.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+
+  const nextAuthRaw = (process.env.NEXTAUTH_URL || "").trim();
+  const protocol = nextAuthRaw.startsWith("https://") ? "https" : "http";
+
+  if (process.env.NEXT_PUBLIC_VERCEL_ENV) {
+    return `${protocol}://${rootDomain}`;
+  }
+
+  let port = process.env.PORT || "3000";
+  if (nextAuthRaw) {
+    try {
+      const parsed = new URL(nextAuthRaw);
+      if (parsed.port) port = parsed.port;
+    } catch {
+      // keep default port
+    }
+  }
+  return `${protocol}://${rootDomain}:${port}`;
+}
+
 export async function isRandomDefaultImagesEnabled() {
   return getBooleanSetting(RANDOM_DEFAULT_IMAGES_KEY, true);
 }
@@ -84,8 +109,8 @@ export async function getRandomDefaultImagesSetting() {
 }
 
 export async function getSiteUrlSetting() {
-  const value = await getTextSetting(SITE_URL_KEY, "");
-  return { key: SITE_URL_KEY, value };
+  const value = await getTextSetting(SITE_URL_KEY, defaultSiteUrlFromEnv());
+  return { key: SITE_URL_KEY, value: withLocalDevPort(value) };
 }
 
 export async function setSiteUrlSetting(rawValue: string) {

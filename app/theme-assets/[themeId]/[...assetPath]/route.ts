@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-
-const THEMES_DIR = path.join(process.cwd(), "themes");
+import { getThemesDir } from "@/lib/extension-paths";
 
 const mimeByExt: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -38,6 +37,7 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ themeId: string; assetPath: string[] }> },
 ) {
+  const themesDir = getThemesDir();
   const { themeId, assetPath } = await params;
   const safeThemeId = safeSegment(themeId);
   const cleanParts = (assetPath || []).map(safeSegment).filter(Boolean);
@@ -47,8 +47,8 @@ export async function GET(
   }
 
   if (cleanParts.length === 1 && cleanParts[0] === "thumbnail.png") {
-    const filePath = path.join(THEMES_DIR, safeThemeId, "thumbnail.png");
-    const rootDir = path.join(THEMES_DIR, safeThemeId);
+    const filePath = path.join(themesDir, safeThemeId, "thumbnail.png");
+    const rootDir = path.join(themesDir, safeThemeId);
     if (filePath.startsWith(rootDir)) {
       try {
         return await serveFile(filePath);
@@ -60,7 +60,7 @@ export async function GET(
 
   const roots = ["assets", "public"];
   for (const root of roots) {
-    const rootDir = path.join(THEMES_DIR, safeThemeId, root);
+    const rootDir = path.join(themesDir, safeThemeId, root);
     const filePath = path.join(rootDir, ...cleanParts);
     if (!filePath.startsWith(rootDir)) continue;
 

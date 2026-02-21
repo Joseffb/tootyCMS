@@ -1,4 +1,4 @@
-import nunjucks from "nunjucks";
+import nunjucks from "nunjucks/browser/nunjucks";
 import { buildThemeSystemContext } from "@/lib/theme-system-context";
 
 const env = new nunjucks.Environment(undefined, {

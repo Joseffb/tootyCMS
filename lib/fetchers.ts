@@ -8,6 +8,9 @@ import { serialize } from "next-mdx-remote/serialize";
 function parseSubdomainFromDomain(domain: string) {
   const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
   const normalizedRootDomain = rootDomainRaw.replace(/:\d+$/, "");
+  if (domain === normalizedRootDomain || domain === `${normalizedRootDomain}:3000`) {
+    return "main";
+  }
   return domain.endsWith(`.${normalizedRootDomain}`)
     ? domain.replace(`.${normalizedRootDomain}`, "")
     : null;

@@ -75,6 +75,10 @@ export default async function middleware(req: NextRequest) {
     const appFullPath = `${appPath}${searchParams ? `?${searchParams}` : ""}`;
 
     traceEdge("middleware", "app-domain route", { hostname, path });
+    if (appPath === "/setup") {
+      traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
+      return rewriteWithTrace("/setup");
+    }
     const session = await getToken({ req });
     if (!session && appPath !== "/login") {
       traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });

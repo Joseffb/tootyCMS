@@ -5,12 +5,20 @@ import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { getSitePublicUrl } from "@/lib/site-url";
+import { getSiteUrlSetting } from "@/lib/cms-config";
 
-function getSiteUrl(site: { subdomain: string | null; customDomain: string | null; isPrimary?: boolean }) {
+function getSiteUrl(
+  site: { subdomain: string | null; customDomain: string | null; isPrimary?: boolean },
+  configuredRootUrl: string,
+) {
+  const isPrimary = site.isPrimary || site.subdomain === "main";
+  if (isPrimary && configuredRootUrl) {
+    return configuredRootUrl;
+  }
   return getSitePublicUrl({
     subdomain: site.subdomain,
     customDomain: site.customDomain,
-    isPrimary: site.isPrimary || site.subdomain === "main",
+    isPrimary,
   });
 }
 
@@ -35,6 +43,7 @@ export default async function SitesSettingsIndexPage() {
     },
     orderBy: (t, { asc }) => [asc(t.name)],
   });
+  const configuredRootUrl = (await getSiteUrlSetting()).value.trim();
 
   return (
     <div className="space-y-4">
@@ -59,9 +68,9 @@ export default async function SitesSettingsIndexPage() {
                   <div className="text-xs text-stone-500">{site.id}</div>
                 </td>
                 <td className="px-4 py-3">
-                  {getSiteUrl(site) ? (
-                    <a href={getSiteUrl(site)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
-                      {getSiteUrl(site)}
+                  {getSiteUrl(site, configuredRootUrl) ? (
+                    <a href={getSiteUrl(site, configuredRootUrl)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
+                      {getSiteUrl(site, configuredRootUrl)}
                     </a>
                   ) : (
                     <span className="text-xs text-stone-500">No URL</span>

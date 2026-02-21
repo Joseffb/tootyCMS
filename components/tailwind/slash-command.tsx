@@ -129,7 +129,7 @@ function renderSlashItems() {
       stripped = false;
       lastEditor = null;
       lastRange = null;
-      renderer.onExit?.(props);
+      renderer.onExit?.();
     },
   };
 }

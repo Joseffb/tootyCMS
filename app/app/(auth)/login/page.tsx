@@ -1,8 +1,14 @@
-import Image from "next/image";
 import LoginButton from "./login-button";
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import { getInstallState } from "@/lib/install-state";
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  const state = await getInstallState();
+  if (state.setupRequired) {
+    redirect("/setup");
+  }
+
   return (
       <>
 
