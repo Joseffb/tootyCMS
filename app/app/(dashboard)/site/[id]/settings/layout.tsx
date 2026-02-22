@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import SiteSettingsNav from "./nav";
 import db from "@/lib/db";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
-import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getSiteUrlSettingForSite } from "@/lib/cms-config";
 
 type Props = {
   params: Promise<{
@@ -38,7 +38,7 @@ export default async function SiteAnalyticsLayout({ params, children }: Props) {
     customDomain: data.customDomain,
     isPrimary,
   });
-  const configuredSiteUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+  const configuredSiteUrl = (await getSiteUrlSettingForSite(data.id, "")).value.trim();
   const publicUrl = configuredSiteUrl || derivedUrl;
   const publicHost = configuredSiteUrl
     ? (() => {

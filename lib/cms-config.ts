@@ -14,8 +14,19 @@ export const WRITING_PERMALINK_STYLE_KEY = "writing_permalink_style";
 export const WRITING_EDITOR_MODE_KEY = "writing_editor_mode";
 export const WRITING_CATEGORY_BASE_KEY = "writing_category_base";
 export const WRITING_TAG_BASE_KEY = "writing_tag_base";
+export const WRITING_PERMALINK_MODE_KEY = "writing_permalink_mode";
+export const WRITING_SINGLE_PATTERN_KEY = "writing_single_pattern";
+export const WRITING_LIST_PATTERN_KEY = "writing_list_pattern";
+export const WRITING_NO_DOMAIN_PREFIX_KEY = "writing_no_domain_prefix";
+export const WRITING_NO_DOMAIN_DATA_DOMAIN_KEY = "writing_no_domain_data_domain";
 export const SCHEDULES_ENABLED_KEY = "schedules_enabled";
 export const SCHEDULES_PING_SITEMAP_KEY = "schedules_ping_sitemap";
+export const THEME_QUERY_NETWORK_ENABLED_KEY = "theme_query_network_enabled";
+export const THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY = "theme_query_network_allowed_site_ids";
+
+function siteScopedSettingKey(siteId: string, key: string) {
+  return `site_${siteId}_${key}`;
+}
 
 async function getSettingRow(key: string) {
   return db.query.cmsSettings.findFirst({
@@ -54,6 +65,22 @@ export async function setTextSetting(key: string, rawValue: string) {
       target: cmsSettings.key,
       set: { value },
     });
+}
+
+export async function getSiteTextSetting(siteId: string, key: string, fallback = "") {
+  return getTextSetting(siteScopedSettingKey(siteId, key), fallback);
+}
+
+export async function setSiteTextSetting(siteId: string, key: string, rawValue: string) {
+  return setTextSetting(siteScopedSettingKey(siteId, key), rawValue);
+}
+
+export async function getSiteBooleanSetting(siteId: string, key: string, fallback: boolean) {
+  return getBooleanSetting(siteScopedSettingKey(siteId, key), fallback);
+}
+
+export async function setSiteBooleanSetting(siteId: string, key: string, value: boolean) {
+  return setBooleanSetting(siteScopedSettingKey(siteId, key), value);
 }
 
 function normalizeSiteUrl(input: string) {
@@ -118,6 +145,16 @@ export async function setSiteUrlSetting(rawValue: string) {
   await setTextSetting(SITE_URL_KEY, value);
 }
 
+export async function getSiteUrlSettingForSite(siteId: string, fallback: string) {
+  const value = await getSiteTextSetting(siteId, SITE_URL_KEY, fallback);
+  return { key: siteScopedSettingKey(siteId, SITE_URL_KEY), value: withLocalDevPort(value) };
+}
+
+export async function setSiteUrlSettingForSite(siteId: string, rawValue: string) {
+  const value = normalizeSiteUrl(rawValue);
+  await setSiteTextSetting(siteId, SITE_URL_KEY, value);
+}
+
 export async function getReadingSettings() {
   const [randomDefaults, siteUrl, indexingEnabled, metaTitle, metaDescription] =
     await Promise.all([
@@ -127,9 +164,11 @@ export async function getReadingSettings() {
       getTextSetting(SEO_META_TITLE_KEY, ""),
       getTextSetting(SEO_META_DESCRIPTION_KEY, ""),
     ]);
-  const [mainHeaderEnabled, showNetworkSites] = await Promise.all([
+  const [mainHeaderEnabled, showNetworkSites, queryNetworkEnabled, queryNetworkAllowedSiteIds] = await Promise.all([
     getBooleanSetting(MAIN_HEADER_ENABLED_KEY, true),
     getBooleanSetting(MAIN_HEADER_SHOW_NETWORK_SITES_KEY, false),
+    getBooleanSetting(THEME_QUERY_NETWORK_ENABLED_KEY, false),
+    getTextSetting(THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY, ""),
   ]);
 
   return {
@@ -143,6 +182,10 @@ export async function getReadingSettings() {
     header: {
       mainHeaderEnabled,
       showNetworkSites,
+    },
+    queryNetwork: {
+      enabled: queryNetworkEnabled,
+      allowedSiteIds: queryNetworkAllowedSiteIds,
     },
   };
 }
@@ -160,6 +203,31 @@ export async function getWritingSettings() {
     editorMode,
     categoryBase,
     tagBase,
+  };
+}
+
+export async function getSiteWritingSettings(siteId: string) {
+  const global = await getWritingSettings();
+  const [permalinkMode, singlePattern, listPattern, noDomainPrefix, noDomainDataDomain, editorMode] = await Promise.all([
+    getSiteTextSetting(siteId, WRITING_PERMALINK_MODE_KEY, "default"),
+    getSiteTextSetting(siteId, WRITING_SINGLE_PATTERN_KEY, "/%domain%/%slug%"),
+    getSiteTextSetting(siteId, WRITING_LIST_PATTERN_KEY, "/%domain_plural%"),
+    getSiteTextSetting(siteId, WRITING_NO_DOMAIN_PREFIX_KEY, ""),
+    getSiteTextSetting(siteId, WRITING_NO_DOMAIN_DATA_DOMAIN_KEY, "post"),
+    getSiteTextSetting(siteId, WRITING_EDITOR_MODE_KEY, global.editorMode),
+  ]);
+
+  const permalinkModeValue: "default" | "custom" = permalinkMode === "custom" ? "custom" : "default";
+
+  return {
+    permalinkMode: permalinkModeValue,
+    singlePattern: singlePattern || "/%domain%/%slug%",
+    listPattern: listPattern || "/%domain_plural%",
+    noDomainPrefix: noDomainPrefix.trim().toLowerCase(),
+    noDomainDataDomain: noDomainDataDomain.trim().toLowerCase() || "post",
+    editorMode: editorMode || global.editorMode,
+    categoryBase: global.categoryBase,
+    tagBase: global.tagBase,
   };
 }
 

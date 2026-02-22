@@ -23,7 +23,9 @@ export async function getInstallState(): Promise<InstallState> {
 
     const hasUsers = Boolean(user);
     const hasSites = Boolean(site);
-    const setupCompleted = setupCompletedRow?.value === "true";
+    const explicitSetupCompleted = setupCompletedRow?.value === "true";
+    // Backward-compatibility: older installs may not have setup_completed flag.
+    const setupCompleted = explicitSetupCompleted || (hasUsers && hasSites);
 
     return {
       setupRequired: !setupCompleted,

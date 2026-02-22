@@ -26,11 +26,13 @@ export type PluginContract = {
   name: string;
   description?: string;
   version?: string;
+  minCoreVersion?: string;
   capabilities?: {
     hooks?: boolean;
     adminExtensions?: boolean;
     contentTypes?: boolean;
     serverHandlers?: boolean;
+    authExtensions?: boolean;
   };
   menu?: {
     label?: string;
@@ -48,6 +50,7 @@ export type ThemeContract = {
   name: string;
   description?: string;
   version?: string;
+  minCoreVersion?: string;
   capabilities?: {
     layouts?: boolean;
     components?: boolean;
@@ -64,6 +67,13 @@ export type ThemeContract = {
     home?: string;
     post?: string;
   };
+  queries?: Array<{
+    key: string;
+    source: "content.list";
+    scope?: "site" | "network";
+    route?: string;
+    params?: Record<string, unknown>;
+  }>;
   settingsFields?: ExtensionSettingsField[];
 };
 
@@ -117,6 +127,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     name,
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
+    minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
     capabilities: {
       hooks: candidate.capabilities ? Boolean(asRecord(candidate.capabilities).hooks ?? true) : true,
       adminExtensions: candidate.capabilities
@@ -127,6 +138,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
         : false,
       serverHandlers: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).serverHandlers ?? false)
+        : false,
+      authExtensions: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).authExtensions ?? false)
         : false,
     },
     menu: menu
@@ -167,6 +181,7 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
   const templates = asRecord(candidate.templates);
   const tokens = asRecord(candidate.tokens);
   const caps = asRecord(candidate.capabilities);
+  const queriesRaw = Array.isArray(candidate.queries) ? candidate.queries : [];
 
   return {
     kind: "theme",
@@ -174,6 +189,7 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
     name,
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
+    minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
     capabilities: {
       layouts: Boolean(caps.layouts ?? true),
       components: Boolean(caps.components ?? true),
@@ -190,6 +206,26 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
       home: typeof templates.home === "string" ? templates.home : undefined,
       post: typeof templates.post === "string" ? templates.post : undefined,
     },
+    queries: queriesRaw
+      .map((entry) => asRecord(entry))
+      .flatMap((entry) => {
+        const key = String(entry.key ?? "").trim();
+        const source = String(entry.source ?? "").trim();
+        if (!key || source !== "content.list") return [];
+        const scopeRaw = String(entry.scope ?? "site").trim();
+        const scope = scopeRaw === "network" ? "network" : "site";
+        const route = String(entry.route ?? "").trim().toLowerCase();
+        const params = entry.params && typeof entry.params === "object" ? (entry.params as Record<string, unknown>) : {};
+        return [
+          {
+            key,
+            source: "content.list" as const,
+            scope,
+            route,
+            params,
+          },
+        ];
+      }),
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),
   };
 }

@@ -16,7 +16,12 @@ export type KernelFilterName =
   | "nav:items"
   | "theme:tokens"
   | "page:meta"
-  | "render:layout";
+  | "render:layout"
+  | "auth:providers"
+  | "auth:adapter"
+  | "auth:callbacks:signIn"
+  | "auth:callbacks:jwt"
+  | "auth:callbacks:session";
 
 export type MenuLocation = "header" | "footer" | "dashboard";
 
@@ -39,6 +44,11 @@ export type PluginServerHandlerRegistration = {
   path?: string;
 };
 
+export type PluginAuthAdapterRegistration = {
+  id: string;
+  create: () => unknown | Promise<unknown>;
+};
+
 type ActionCallback = (payload?: unknown) => void | Promise<void>;
 type FilterCallback<T = unknown> = (value: T, context?: unknown) => T | Promise<T>;
 
@@ -52,6 +62,7 @@ export class Kernel {
   private menuItems = new Map<MenuLocation, MenuItem[]>();
   private pluginContentTypes = new Map<string, PluginContentTypeRegistration[]>();
   private pluginServerHandlers = new Map<string, PluginServerHandlerRegistration[]>();
+  private pluginAuthAdapters = new Map<string, PluginAuthAdapterRegistration[]>();
 
   addAction(name: KernelActionName, callback: ActionCallback, priority = 10) {
     const existing = this.actions.get(name) ?? [];
@@ -136,6 +147,25 @@ export class Kernel {
 
   getPluginServerHandlers(pluginId: string) {
     return [...(this.pluginServerHandlers.get(pluginId) ?? [])];
+  }
+
+  registerPluginAuthAdapter(pluginId: string, registration: PluginAuthAdapterRegistration) {
+    const list = this.pluginAuthAdapters.get(pluginId) ?? [];
+    list.push(registration);
+    this.pluginAuthAdapters.set(pluginId, list);
+    trace("kernel", "plugin auth adapter registered", { pluginId, id: registration.id });
+  }
+
+  getPluginAuthAdapters(pluginId: string) {
+    return [...(this.pluginAuthAdapters.get(pluginId) ?? [])];
+  }
+
+  getAllPluginAuthAdapters() {
+    const rows: Array<PluginAuthAdapterRegistration & { pluginId: string }> = [];
+    for (const [pluginId, regs] of this.pluginAuthAdapters.entries()) {
+      for (const reg of regs) rows.push({ pluginId, ...reg });
+    }
+    return rows;
   }
 }
 

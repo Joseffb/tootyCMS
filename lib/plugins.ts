@@ -12,6 +12,8 @@ import {
   type ExtensionSettingsField,
   validatePluginContract,
 } from "@/lib/extension-contracts";
+import { CORE_VERSION, isCoreVersionCompatible } from "@/lib/core-version";
+import { trace } from "@/lib/debug";
 
 export type PluginFieldType = ExtensionFieldType;
 
@@ -67,6 +69,15 @@ export async function getAvailablePlugins(): Promise<PluginManifest[]> {
       const parsed = parseJsonObject<unknown>(raw, {});
       const validated = validatePluginContract(parsed, entry);
       if (!validated) continue;
+      if (!isCoreVersionCompatible(validated.minCoreVersion)) {
+        trace("extensions", "plugin skipped due core version mismatch", {
+          pluginId: validated.id,
+          pluginVersion: validated.version || "",
+          minCoreVersion: validated.minCoreVersion || "",
+          coreVersion: CORE_VERSION,
+        });
+        continue;
+      }
       manifests.push({
         ...validated,
         menu: validated.menu

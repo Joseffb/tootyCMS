@@ -2,7 +2,8 @@
   "id": "hello-hamilton",
   "name": "Hello Hamilton",
   "description": "A Hello Dolly style plugin that surfaces a Hamilton quote in admin settings.",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,

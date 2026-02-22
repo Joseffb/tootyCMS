@@ -2,7 +2,8 @@
   "id": "dev-tools",
   "name": "Dev Tools",
   "description": "Adds developer-focused dashboard tools and optional render hooks.",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,

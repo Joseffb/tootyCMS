@@ -5,7 +5,8 @@ import { getSiteData, getTaxonomyArchiveData } from "@/lib/fetchers";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getActiveThemeForSite, getThemeTemplateByHierarchy } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
-import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
+import { buildDetailPath } from "@/lib/permalink";
 
 type Params = Promise<{ domain: string; slug: string }>;
 
@@ -20,6 +21,8 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   );
   if (!data) notFound();
   const site = await getSiteData(decodedDomain);
+  if (!site) notFound();
+  const writing = await getSiteWritingSettings(site.id);
   const activeTheme = site?.id ? await getActiveThemeForSite(site.id) : null;
   const documentationCategorySlug =
     typeof activeTheme?.config?.documentation_category_slug === "string" &&
@@ -29,7 +32,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   const themeId = activeTheme?.id || "tooty-default";
   const rootUrl = getRootSiteUrl();
   const isPrimary = Boolean(site?.isPrimary) || site?.subdomain === "main";
-  const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+  const configuredRootUrl = (await getSiteUrlSettingForSite(site.id, "")).value.trim();
   const derivedSiteUrl = getSitePublicUrl({
     subdomain: decodedDomain.split(".")[0] || "main",
     customDomain: decodedDomain.includes(".") ? null : decodedDomain,
@@ -41,7 +44,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
     const tagTemplate = await getThemeTemplateByHierarchy(site.id, {
       taxonomy: "tag",
       slug: decodedSlug,
-      dataDomain: "data_domain",
+      dataDomain: "post",
     });
     if (tagTemplate) {
       const html = renderThemeTemplate(tagTemplate.template, {
@@ -61,7 +64,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         posts: data.posts.map((post) => ({
           title: post.title,
           description: post.description || "",
-          href: `/${decodedDomain}/${post.slug}`,
+          href: `${siteUrl}${buildDetailPath("post", post.slug, writing)}`,
           created_at: toDateString(post.createdAt),
         })),
         links: {
@@ -122,7 +125,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         <div className="grid gap-4">
           {data.posts.map((post) => (
             <article key={post.slug} className="tooty-archive-card rounded-xl border p-4">
-              <Link href={`/${decodedDomain}/${post.slug}`} className="tooty-post-title font-semibold hover:underline">
+              <Link href={buildDetailPath("post", post.slug, writing)} className="tooty-post-title font-semibold hover:underline">
                 {post.title}
               </Link>
               <p className="tooty-post-meta mt-1 text-sm">{toDateString(post.createdAt)}</p>

@@ -11,6 +11,9 @@ import { pickRandomTootyImage } from "@/lib/tooty-images";
 import {
   getReadingSettings,
   getScheduleSettings,
+  getSiteBooleanSetting,
+  getSiteTextSetting,
+  getSiteWritingSettings,
   getWritingSettings,
   MAIN_HEADER_ENABLED_KEY,
   MAIN_HEADER_SHOW_NETWORK_SITES_KEY,
@@ -20,13 +23,20 @@ import {
   SEO_META_TITLE_KEY,
   SCHEDULES_ENABLED_KEY,
   SCHEDULES_PING_SITEMAP_KEY,
+  setSiteBooleanSetting,
+  setSiteTextSetting,
   setBooleanSetting,
   setRandomDefaultImagesEnabled,
   setSiteUrlSetting,
   setTextSetting,
   WRITING_CATEGORY_BASE_KEY,
   WRITING_EDITOR_MODE_KEY,
+  WRITING_LIST_PATTERN_KEY,
+  WRITING_NO_DOMAIN_DATA_DOMAIN_KEY,
+  WRITING_NO_DOMAIN_PREFIX_KEY,
+  WRITING_PERMALINK_MODE_KEY,
   WRITING_PERMALINK_STYLE_KEY,
+  WRITING_SINGLE_PATTERN_KEY,
   WRITING_TAG_BASE_KEY,
 } from "@/lib/cms-config";
 import { put } from "@vercel/blob";
@@ -1930,6 +1940,20 @@ function revalidateSettingsPath(path: string) {
   revalidatePath(appPath);
 }
 
+async function requireOwnedSite(siteIdRaw: string) {
+  const session = await getSession();
+  if (!session?.user?.id) return { error: "Not authenticated" as const };
+  const siteId = decodeURIComponent(siteIdRaw);
+  const site = await db.query.sites.findFirst({
+    where: eq(sites.id, siteId),
+    columns: { id: true, userId: true, subdomain: true, customDomain: true, isPrimary: true },
+  });
+  if (!site || site.userId !== session.user.id) {
+    return { error: "Not authorized" as const };
+  }
+  return { site };
+}
+
 export const listUsersAdmin = async () => {
   await requireAdminSession();
 
@@ -2216,6 +2240,106 @@ export const updateWritingSettings = async (formData: FormData) => {
   ]);
 
   revalidateSettingsPath("/settings/writing");
+};
+
+export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+
+  const [randomDefaults, indexingEnabled, mainHeaderEnabled, showNetworkSites, seoMetaTitle, seoMetaDescription, writingSettings, domains] =
+    await Promise.all([
+      getSiteBooleanSetting(site.id, "random_default_images_enabled", true),
+      getSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, true),
+      getSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, true),
+      getSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, false),
+      getSiteTextSetting(site.id, SEO_META_TITLE_KEY, ""),
+      getSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, ""),
+      getSiteWritingSettings(site.id),
+      getAllDataDomains(site.id),
+    ]);
+
+  return {
+    siteId: site.id,
+    randomDefaultsEnabled: randomDefaults,
+    indexingEnabled,
+    mainHeaderEnabled,
+    showNetworkSites,
+    seoMetaTitle,
+    seoMetaDescription,
+    writingSettings,
+    dataDomains: domains.map((domain) => ({ key: domain.key, label: domain.label })),
+  };
+};
+
+export const updateSiteReadingSettings = async (formData: FormData) => {
+  const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+
+  const randomDefaultsEnabled = formData.get("random_default_images_enabled") === "on";
+  const indexingEnabled = formData.get("seo_indexing_enabled") === "on";
+  const mainHeaderEnabled = formData.get("main_header_enabled") === "on";
+  const mainHeaderShowNetworkSites = formData.get("main_header_show_network_sites") === "on";
+  const seoMetaTitle = ((formData.get("seo_meta_title") as string | null) ?? "").trim();
+  const seoMetaDescription = ((formData.get("seo_meta_description") as string | null) ?? "").trim();
+  const permalinkModeRaw = ((formData.get("writing_permalink_mode") as string | null) ?? "default").trim().toLowerCase();
+  const permalinkMode = permalinkModeRaw === "custom" ? "custom" : "default";
+  const singlePattern = ((formData.get("writing_single_pattern") as string | null) ?? "/%domain%/%slug%").trim() || "/%domain%/%slug%";
+  const listPattern = ((formData.get("writing_list_pattern") as string | null) ?? "/%domain_plural%").trim() || "/%domain_plural%";
+  const noDomainPrefix = ((formData.get("writing_no_domain_prefix") as string | null) ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/[^a-z0-9-]/g, "");
+  const noDomainDataDomain = ((formData.get("writing_no_domain_data_domain") as string | null) ?? "post")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "") || "post";
+
+  await Promise.all([
+    setSiteBooleanSetting(site.id, "random_default_images_enabled", randomDefaultsEnabled),
+    setSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, indexingEnabled),
+    setSiteTextSetting(site.id, SEO_META_TITLE_KEY, seoMetaTitle),
+    setSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, seoMetaDescription),
+    setSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, mainHeaderEnabled),
+    setSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, mainHeaderShowNetworkSites),
+    setSiteTextSetting(site.id, WRITING_PERMALINK_MODE_KEY, permalinkMode),
+    setSiteTextSetting(site.id, WRITING_SINGLE_PATTERN_KEY, singlePattern),
+    setSiteTextSetting(site.id, WRITING_LIST_PATTERN_KEY, listPattern),
+    setSiteTextSetting(site.id, WRITING_NO_DOMAIN_PREFIX_KEY, noDomainPrefix),
+    setSiteTextSetting(site.id, WRITING_NO_DOMAIN_DATA_DOMAIN_KEY, noDomainDataDomain),
+  ]);
+
+  revalidatePath(`/site/${site.id}/settings/reading`);
+  revalidatePath("/sitemap.xml");
+  revalidatePath("/robots.txt");
+  return { ok: true };
+};
+
+export const getSiteEditorSettingsAdmin = async (siteIdRaw: string) => {
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+  const writing = await getSiteWritingSettings(site.id);
+  return {
+    siteId: site.id,
+    editorMode: writing.editorMode,
+  };
+};
+
+export const updateSiteEditorSettings = async (formData: FormData) => {
+  const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+
+  const editorMode = ((formData.get("writing_editor_mode") as string | null) ?? "rich-text").trim() || "rich-text";
+  await setSiteTextSetting(site.id, WRITING_EDITOR_MODE_KEY, editorMode);
+
+  revalidatePath(`/site/${site.id}/settings/writing`);
+  return { ok: true };
 };
 
 export const getScheduleSettingsAdmin = async () => {

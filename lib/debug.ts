@@ -30,13 +30,26 @@ export function isDebugMode() {
   return process.env.NODE_ENV === "development";
 }
 
+type TraceTier = "Test" | "Dev" | "Prod";
+
+function getTraceTier(): TraceTier {
+  const configured = (process.env.TRACE_PROFILE || "").trim().toLowerCase();
+  if (configured === "test") return "Test";
+  if (configured === "prod" || configured === "production") return "Prod";
+  if (configured === "dev" || configured === "development") return "Dev";
+  if (process.env.NODE_ENV === "production") return "Prod";
+  if (process.env.NODE_ENV === "test") return "Test";
+  return "Dev";
+}
+
 export function trace(scope: string, message: string, payload?: unknown) {
   if (!isDebugMode()) return;
+  const tier = getTraceTier();
   const safePayload = payload === undefined ? undefined : redact(payload);
   if (payload === undefined) {
-    console.debug(`[trace:${scope}] ${message}`);
+    console.debug(`[trace:${tier}:${scope}] ${message}`);
   } else {
-    console.debug(`[trace:${scope}] ${message}`, safePayload);
+    console.debug(`[trace:${tier}:${scope}] ${message}`, safePayload);
   }
 
   // Fire-and-forget JSONL trace persistence for Node runtime.
@@ -56,6 +69,7 @@ export function trace(scope: string, message: string, payload?: unknown) {
         await mkdir(dir, { recursive: true });
         const line = JSON.stringify({
           ts: now.toISOString(),
+          tier,
           scope,
           message,
           payload: safePayload,

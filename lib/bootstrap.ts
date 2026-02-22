@@ -284,9 +284,14 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
 export async function ensureMainSiteForCurrentUser() {
   const session = await getSession();
   if (!session?.user?.id) return;
+  await ensureMainSiteForUser(session.user.id);
+}
+
+export async function ensureMainSiteForUser(userId: string) {
+  if (!userId) return;
 
   const existingPrimary = await db.query.sites.findFirst({
-    where: (table, { and, eq }) => and(eq(table.userId, session.user.id), eq(table.isPrimary, true)),
+    where: (table, { and, eq }) => and(eq(table.userId, userId), eq(table.isPrimary, true)),
     columns: { id: true, subdomain: true },
   });
   if (existingPrimary) {
@@ -296,13 +301,13 @@ export async function ensureMainSiteForCurrentUser() {
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
     await ensureSeedSiteThumbnail(existingPrimary.id);
     await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingPrimary.id), isNull(posts.layout)));
-    await ensureDefaultStarterPosts(existingPrimary.id, session.user.id, useRandomDefaultImages);
+    await ensureDefaultStarterPosts(existingPrimary.id, userId, useRandomDefaultImages);
     await removeLegacyDocumentationPost(existingPrimary.id);
     return;
   }
 
   const existingAny = await db.query.sites.findFirst({
-    where: (table, { eq }) => eq(table.userId, session.user.id),
+    where: (table, { eq }) => eq(table.userId, userId),
     columns: { id: true, subdomain: true },
     orderBy: (table, { asc }) => [asc(table.createdAt)],
   });
@@ -317,7 +322,7 @@ export async function ensureMainSiteForCurrentUser() {
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
     await ensureSeedSiteThumbnail(existingAny.id);
     await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingAny.id), isNull(posts.layout)));
-    await ensureDefaultStarterPosts(existingAny.id, session.user.id, useRandomDefaultImages);
+    await ensureDefaultStarterPosts(existingAny.id, userId, useRandomDefaultImages);
     await removeLegacyDocumentationPost(existingAny.id);
     return;
   }
@@ -327,7 +332,7 @@ export async function ensureMainSiteForCurrentUser() {
   const [site] = await db
     .insert(sites)
     .values({
-      userId: session.user.id,
+      userId,
       name: "Main Site",
       description: "Your default Tooty site. Edit this anytime in settings.",
       subdomain: PRIMARY_SUBDOMAIN,
@@ -336,6 +341,6 @@ export async function ensureMainSiteForCurrentUser() {
     })
     .returning({ id: sites.id });
 
-  await ensureDefaultStarterPosts(site.id, session.user.id, useRandomDefaultImages);
+  await ensureDefaultStarterPosts(site.id, userId, useRandomDefaultImages);
   await removeLegacyDocumentationPost(site.id);
 }

@@ -8,10 +8,9 @@ const items = [
   { name: "Sites", href: "/settings/sites", segment: "sites" },
   { name: "Themes", href: "/settings/themes", segment: "themes" },
   { name: "Plugins", href: "/settings/plugins", segment: "plugins" },
+  { name: "Database", href: "/settings/database", segment: "database" },
   { name: "Schedules", href: "/settings/schedules", segment: "schedules" },
   { name: "Users", href: "/settings/users", segment: "users" },
-  { name: "Reading", href: "/settings/reading", segment: "reading" },
-  { name: "Writing", href: "/settings/writing", segment: "writing" },
 ];
 
 export default function GlobalSettingsNav() {

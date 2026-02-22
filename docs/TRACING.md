@@ -19,11 +19,26 @@ When debug mode is on:
 2. Trace events are persisted as JSONL on local Node runtime:
    - `logs/traces/YYYY-MM-DD.jsonl`
 
+## Trace tier prefix
+
+Each trace is tagged with a tier prefix:
+
+- `Test`
+- `Dev`
+- `Prod`
+
+Resolution order:
+
+1. `TRACE_PROFILE` (`test|dev|prod`)
+2. fallback by `NODE_ENV`
+3. default `Dev`
+
 Each line is a JSON object:
 
 ```json
 {
   "ts": "2026-02-20T22:13:59.871Z",
+  "tier": "Dev",
   "scope": "media.api",
   "message": "request success",
   "payload": { "traceId": "...", "siteId": "...", "count": 1 }

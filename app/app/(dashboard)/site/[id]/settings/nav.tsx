@@ -25,6 +25,16 @@ export default function SiteSettingsNav() {
       segment: "domains",
     },
     {
+      name: "Reading",
+      href: `/site/${id}/settings/reading`,
+      segment: "reading",
+    },
+    {
+      name: "Writing",
+      href: `/site/${id}/settings/writing`,
+      segment: "writing",
+    },
+    {
       name: "Menus",
       href: `/site/${id}/settings/menus`,
       segment: "menus",

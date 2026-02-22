@@ -10,7 +10,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "npm run dev -- --port 3000",
+    command: "TRACE_PROFILE=Test npm run dev -- --port 3000",
     url: "http://localhost:3000",
     reuseExistingServer: true,
     timeout: 120_000,

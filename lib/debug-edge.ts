@@ -8,11 +8,22 @@ export function isDebugModeEdge() {
   return process.env.NODE_ENV === "development";
 }
 
+function getTraceTier() {
+  const configured = (process.env.TRACE_PROFILE || "").trim().toLowerCase();
+  if (configured === "test") return "Test";
+  if (configured === "prod" || configured === "production") return "Prod";
+  if (configured === "dev" || configured === "development") return "Dev";
+  if (process.env.NODE_ENV === "production") return "Prod";
+  if (process.env.NODE_ENV === "test") return "Test";
+  return "Dev";
+}
+
 export function traceEdge(scope: string, message: string, payload?: unknown) {
   if (!isDebugModeEdge()) return;
+  const tier = getTraceTier();
   if (payload === undefined) {
-    console.debug(`[trace:${scope}] ${message}`);
+    console.debug(`[trace:${tier}:${scope}] ${message}`);
     return;
   }
-  console.debug(`[trace:${scope}] ${message}`, payload);
+  console.debug(`[trace:${tier}:${scope}] ${message}`, payload);
 }

@@ -5,7 +5,14 @@ import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { getSitePublicUrl } from "@/lib/site-url";
-import { getSiteUrlSetting } from "@/lib/cms-config";
+import {
+  getSiteUrlSetting,
+  getTextSetting,
+  setBooleanSetting,
+  setTextSetting,
+  THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY,
+  THEME_QUERY_NETWORK_ENABLED_KEY,
+} from "@/lib/cms-config";
 
 function getSiteUrl(
   site: { subdomain: string | null; customDomain: string | null; isPrimary?: boolean },
@@ -44,9 +51,59 @@ export default async function SitesSettingsIndexPage() {
     orderBy: (t, { asc }) => [asc(t.name)],
   });
   const configuredRootUrl = (await getSiteUrlSetting()).value.trim();
+  const [queryNetworkEnabled, queryNetworkAllowedSiteIds] = await Promise.all([
+    getTextSetting(THEME_QUERY_NETWORK_ENABLED_KEY, "false"),
+    getTextSetting(THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY, ""),
+  ]);
+
+  async function updateQueryNetworkSettings(formData: FormData) {
+    "use server";
+    const session = await getSession();
+    if (!session?.user?.id) redirect("/login");
+    const me = await db.query.users.findFirst({
+      where: eq(users.id, session.user.id),
+      columns: { role: true },
+    });
+    if (me?.role !== "administrator") return;
+    const enabled = formData.get("enabled") === "on";
+    const allowedSiteIds = String(formData.get("allowedSiteIds") || "");
+    await setBooleanSetting(THEME_QUERY_NETWORK_ENABLED_KEY, enabled);
+    await setTextSetting(THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY, allowedSiteIds);
+  }
 
   return (
     <div className="space-y-4">
+      <section className="rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
+        <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Theme Query Network (Governance)</h3>
+        <p className="mt-1 text-xs text-stone-600 dark:text-stone-300">
+          Enables `scope=network` theme queries. Main site can aggregate all owner sites. Non-main sites must be listed here.
+        </p>
+        <form action={updateQueryNetworkSettings} className="mt-3 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-stone-700 dark:text-stone-200">
+            <input
+              type="checkbox"
+              name="enabled"
+              defaultChecked={queryNetworkEnabled === "true"}
+              className="h-4 w-4 rounded border-stone-300"
+            />
+            Enable Query Network
+          </label>
+          <label className="block text-sm text-stone-700 dark:text-stone-200">
+            <span className="mb-1 block text-xs">Permissioned Site IDs (comma-separated)</span>
+            <input
+              type="text"
+              name="allowedSiteIds"
+              defaultValue={queryNetworkAllowedSiteIds}
+              placeholder="site_id_1,site_id_2"
+              className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-900"
+            />
+          </label>
+          <button type="submit" className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white">
+            Save Query Network Settings
+          </button>
+        </form>
+      </section>
+
       <p className="text-sm text-stone-600 dark:text-stone-300">
         Open any site-specific settings page from this table.
       </p>

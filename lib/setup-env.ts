@@ -39,6 +39,8 @@ export const SETUP_ENV_FIELDS: SetupEnvField[] = [
   { key: "TB_INGEST_TOKEN", label: "Tinybird Ingest Token", type: "password" },
   { key: "TB_DASH_TOKEN", label: "Tinybird Dashboard Token", type: "password" },
   { key: "DEBUG_MODE", label: "Debug Mode (true/false)", placeholder: "false" },
+  { key: "TRACE_PROFILE", label: "Trace Profile (Test/Dev/Prod)", placeholder: "Dev" },
+  { key: "TRACE_LOG_DIR", label: "Trace Log Directory", placeholder: "logs/traces" },
   { key: "NO_IMAGE_MODE", label: "No Image Mode (true/false)", placeholder: "false" },
   { key: "NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX", label: "Vercel Deployment Suffix", placeholder: "vercel.app" },
 ];
