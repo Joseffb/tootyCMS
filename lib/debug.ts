@@ -1,6 +1,9 @@
 type AnyRecord = Record<string, unknown>;
 
 const SENSITIVE_KEY_PATTERN = /(token|secret|password|key|authorization|cookie)/i;
+const TRACE_DIR = process.env.TRACE_LOG_DIR || "logs/traces";
+let traceWriteChain = Promise.resolve();
+let traceFsUnavailable = false;
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -47,4 +50,32 @@ export function trace(scope: string, message: string, payload?: unknown) {
   } else {
     console.debug(`[trace:${tier}:${scope}] ${message}`, safePayload);
   }
+
+  if (typeof window !== "undefined") return;
+
+  traceWriteChain = traceWriteChain
+    .then(async () => {
+      if (traceFsUnavailable) return;
+      try {
+        if (typeof (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime !== "undefined") return;
+        const { mkdir, appendFile } = await import("node:fs/promises");
+        const now = new Date();
+        const day = now.toISOString().slice(0, 10);
+        const filePath = `${TRACE_DIR}/${day}.jsonl`;
+        await mkdir(TRACE_DIR, { recursive: true });
+        const line = JSON.stringify({
+          ts: now.toISOString(),
+          tier,
+          scope,
+          message,
+          payload: safePayload,
+        });
+        await appendFile(filePath, `${line}\n`, "utf8");
+      } catch {
+        traceFsUnavailable = true;
+      }
+    })
+    .catch(() => {
+      // ignore trace write failures
+    });
 }

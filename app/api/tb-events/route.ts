@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isDebugMode, trace } from '@/lib/debug';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 const DATASOURCE = 'website_visitors';
 const HOST = process.env.NEXT_PUBLIC_TB_HOST ?? 'https://api.us-east.aws.tinybird.co';

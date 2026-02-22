@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { trace } from '@/lib/debug';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 // Allow override to point at local Tinybird or cloud Tinybird
 const TB_HOST  = process.env.NEXT_PUBLIC_TB_HOST ?? 'https://api.us-east.aws.tinybird.co';
