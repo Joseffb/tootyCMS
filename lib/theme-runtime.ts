@@ -2,6 +2,11 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
 import { getThemesDir } from "@/lib/extension-paths";
+import {
+  domainDetailTemplateCandidates,
+  homeTemplateCandidates,
+  taxonomyArchiveTemplateCandidates,
+} from "@/lib/theme-fallback";
 
 function isExternal(url: string) {
   return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/");
@@ -65,7 +70,7 @@ export async function getThemeTemplateForSite(siteId: string, templateName: "hom
   const configured = typeof manifestTemplates[templateName] === "string" ? manifestTemplates[templateName] : "";
   const candidates =
     templateName === "home"
-      ? [configured, "home.html", "index.html"]
+      ? homeTemplateCandidates(configured)
       : [configured, "post.html", "single.html", "index.html"];
 
   for (const candidate of candidates) {
@@ -145,26 +150,12 @@ export async function getThemeTemplateByHierarchy(
   const slug = opts.slug.trim().toLowerCase();
   const dataDomain = (opts.dataDomain || "data_domain").trim().toLowerCase();
   const taxonomy = opts.taxonomy;
-  const candidates =
+  const taxonomyCandidates = taxonomyArchiveTemplateCandidates(taxonomy, slug);
+  const domainCandidates =
     taxonomy === "category"
-      ? [
-          `tax_${slug}.html`,
-          `tax_category_${slug}.html`,
-          `${dataDomain}-category-${slug}.html`,
-          `category-${slug}.html`,
-          "category.html",
-          "archive.html",
-          "index.html",
-        ]
-      : [
-          `tax_${slug}.html`,
-          `tax_tag_${slug}.html`,
-          `${dataDomain}-tag-${slug}.html`,
-          `tag-${slug}.html`,
-          "tag.html",
-          "archive.html",
-          "index.html",
-        ];
+      ? [`${dataDomain}-category-${slug}.html`]
+      : [`${dataDomain}-tag-${slug}.html`];
+  const candidates = [...domainCandidates, ...taxonomyCandidates];
 
   return getThemeTemplateFromCandidates(siteId, candidates);
 }
@@ -175,18 +166,7 @@ export async function getThemeDetailTemplateByHierarchy(
 ) {
   const dataDomain = opts.dataDomain.trim().toLowerCase();
   const slug = opts.slug.trim().toLowerCase();
-  const candidates = [
-    `${dataDomain}-${slug}.html`,
-    `${dataDomain}_${slug}.html`,
-    `data-domain_${dataDomain}_${slug}.html`,
-    `data_domain-${dataDomain}-${slug}.html`,
-    `data-domain_${dataDomain}.html`,
-    `data_domain-${dataDomain}.html`,
-    `${dataDomain}.html`,
-    "single.html",
-    "post.html",
-    "index.html",
-  ];
+  const candidates = domainDetailTemplateCandidates(dataDomain, slug);
   return getThemeTemplateFromCandidates(siteId, candidates);
 }
 

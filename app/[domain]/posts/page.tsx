@@ -6,6 +6,9 @@ import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSetting } from "@/lib/cms-config";
 import { getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { getSiteMenu } from "@/lib/menu-system";
+import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
 
 type Params = Promise<{ domain: string }>;
 
@@ -28,13 +31,21 @@ export default async function SitePostsPage({ params }: { params: Params }) {
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
   const siteId = site.id as string;
+  const kernel = await createKernelForRequest();
+  const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
+  const menuItems = siteId
+    ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
+        location: "header",
+        domain: decodedDomain,
+        siteId,
+      })
+    : [];
 
   if (siteId) {
-    const themedTemplate = await getThemeTemplateFromCandidates(siteId, [
-      "posts.html",
-      "archive-posts.html",
-      "archive.html",
-    ]);
+    const themedTemplate = await getThemeTemplateFromCandidates(
+      siteId,
+      domainArchiveTemplateCandidates("post", "posts"),
+    );
     if (themedTemplate) {
       const html = renderThemeTemplate(themedTemplate.template, {
         theme_header: themedTemplate.partials?.header || "",
@@ -58,6 +69,12 @@ export default async function SitePostsPage({ params }: { params: Params }) {
           root: rootUrl,
           main_site: siteUrl,
           posts: `${siteUrl.replace(/\/$/, "")}/posts`,
+        },
+        menu_items: menuItems,
+        theme: {
+          id: themedTemplate.themeId || "",
+          name: themedTemplate.themeName || "",
+          ...(themedTemplate.config || {}),
         },
         route_kind: "post_archive",
         data_domain: "post",

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { dataDomains, posts, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu } from "@/lib/menu-system";
-import { getActiveThemeForSite, getThemeLayoutTemplateForSite, getThemeTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
+import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { toDateString } from "@/lib/utils";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
@@ -16,6 +16,7 @@ import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
 import { isDomainArchiveSegment, normalizeDomainKeyFromSegment, normalizeDomainSegment } from "@/lib/data-domain-routing";
+import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
@@ -76,11 +77,10 @@ export default async function SitePostPage({
           : [];
 
         if (siteId) {
-          const themeTemplate = await getThemeTemplateFromCandidates(siteId, [
-            `archive-${domainRow.key}.html`,
-            "archive.html",
-            "posts.html",
-          ]);
+          const themeTemplate = await getThemeTemplateFromCandidates(
+            siteId,
+            domainArchiveTemplateCandidates(domainRow.key, normalizedSlug),
+          );
           if (themeTemplate) {
             const html = renderThemeTemplate(themeTemplate.template, {
               theme_header: themeTemplate.partials?.header || "",
@@ -201,6 +201,10 @@ export default async function SitePostPage({
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
     const themeTemplate =
       (await getThemeLayoutTemplateForSite(siteId, { layout: normalizedLayout })) ||
+      (await getThemeDetailTemplateByHierarchy(siteId, {
+        dataDomain: "post",
+        slug: decodedSlug,
+      })) ||
       (await getThemeTemplateForSite(siteId, "post"));
     if (themeTemplate) {
       const html = renderThemeTemplate(themeTemplate.template, {

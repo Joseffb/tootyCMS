@@ -177,8 +177,45 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.settings.seoMetaDescription`
 - `tooty.domains`
 - `tooty.pluginSettings`
+- `tooty.query` (Core-resolved, read-only query results)
+
+### Theme Query Contract
+
+Themes may consume Core query results from `tooty.query.<key>`.
+Queries are not raw SQL and are never theme-executed directly.
+
+Current generic query source:
+- `content.list`
+
+Example request shape (set by Core route code):
+- `key`: result key for template access
+- `source`: `"content.list"`
+- `scope`: `"site"` or `"network"`
+- `params`: whitelisted query params (`dataDomain`, `taxonomy`, `withTerm`, `limit`, `metaKeys`)
+
+Governance:
+- Queries are read-only.
+- Params are normalized and bounded.
+- `scope="network"` is enabled only through global settings and only for main site or permissioned site IDs.
+- Network results are restricted to the same owner network.
 
 1. Start from existing manifest and change tokens incrementally.
 2. Keep token names consistent.
 3. Keep contrast accessible for text/navigation.
 4. Avoid relying on runtime-only classes that may be purged.
+
+## Template Fallback Hierarchy
+
+Theme authors should rely on the core fallback contract when naming templates.
+
+### Core resolution order
+
+- Home: `home.html` -> `index.html`
+- Domain detail: `single-<plural-domain>-<slug>.html` -> `single-<domain>-<slug>.html` -> `single-<plural-domain>.html` -> `single-<domain>.html` -> `<plural-domain>-<slug>.html` -> `<domain>-<slug>.html` -> `<plural-domain>.html` -> `<domain>.html` -> `single.html` -> `post.html` -> `index.html`
+- Domain archive: `archive-<plural-domain>.html` -> `archive-<domain>.html` -> `archive.html` -> `<plural-domain>.html` -> `<domain>.html` -> `index.html`
+- Taxonomy: `taxonomy-<taxonomy>-<term>.html` -> `taxonomy-<taxonomy>.html` -> `taxonomy.html` -> `archive.html` -> `index.html`
+
+Guidance:
+- Prefer route-specific files (`archive-projects.html`, `single-project.html`) for precise control.
+- Provide `single.html` and `archive.html` as broad fallbacks for all content domains.
+- Keep data-domain identity singular (`project`) while route/archive naming is plural (`projects`), including `post` -> `posts`.

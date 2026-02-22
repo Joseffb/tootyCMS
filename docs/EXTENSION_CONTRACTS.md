@@ -87,3 +87,54 @@ Optional runtime overrides:
 - `PLUGINS_PATH`
 
 When set, paths may be absolute or workspace-relative.
+
+## Theme Template Fallback Contract (MUST)
+
+Core resolves template files in deterministic order. Themes should implement the highest-priority files they need.
+
+### Home Route
+
+1. `home.html`
+2. `index.html`
+
+### Data-Domain Detail Route (`/<domain>/<slug>`)
+
+Where `<domain>` is canonical singular key and plural aliases are supported. `post` is treated as a normal domain key.
+
+1. `single-<plural-domain>-<slug>.html`
+2. `single-<domain>-<slug>.html`
+3. `single-<plural-domain>.html`
+4. `single-<domain>.html`
+5. `<plural-domain>-<slug>.html`
+6. `<domain>-<slug>.html`
+7. `<plural-domain>.html`
+8. `<domain>.html`
+9. `single.html`
+10. `post.html`
+11. `index.html`
+
+### Data-Domain Archive Route (`/<plural-domain>`)
+
+1. `archive-<plural-domain>.html`
+2. `archive-<domain>.html`
+3. `archive.html`
+4. `<plural-domain>.html`
+5. `<domain>.html`
+6. `index.html`
+
+### Taxonomy Route (`/c/<term>`, `/t/<term>`, domain taxonomies)
+
+1. `taxonomy-<taxonomy>-<term>.html`
+2. `taxonomy-<taxonomy>.html`
+3. `taxonomy.html`
+4. `archive.html`
+5. `index.html`
+
+### 404 Route
+
+1. `404.html`
+2. `index.html`
+
+Rules:
+- Core must not fall back to unrelated route templates (e.g. domain archives must not force `posts.html`).
+- Data-domain identity remains singular in data contracts; listing routes remain plural.
