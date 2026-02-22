@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth";
 import { applyDatabaseCompatibilityFixes, getDatabaseHealthReport } from "@/lib/db-health";
+import { isAdministrator } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -11,8 +12,7 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
   const session = await getSession();
   if (!session?.user?.id) redirect("/login");
 
-  const role = String((session.user as any).role || "").toLowerCase();
-  if (role !== "administrator") {
+  if (!isAdministrator((session.user as any).role)) {
     return (
       <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-5 text-sm text-stone-700 dark:border-stone-700 dark:bg-black dark:text-stone-300">
         You must be an administrator to manage database updates.
@@ -27,8 +27,7 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
   async function runDbFixes() {
     "use server";
     const current = await getSession();
-    const currentRole = String((current?.user as any)?.role || "").toLowerCase();
-    if (!current?.user?.id || currentRole !== "administrator") return;
+    if (!current?.user?.id || !isAdministrator((current.user as any)?.role)) return;
     await applyDatabaseCompatibilityFixes();
     revalidatePath("/settings/database");
     revalidatePath("/app");

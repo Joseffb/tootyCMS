@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import db from "@/lib/db";
+import { isAdministrator } from "@/lib/rbac";
 import { getSession } from "@/lib/auth";
 import { media, sites, users } from "@/lib/schema";
 import { trace } from "@/lib/debug";
@@ -38,7 +39,7 @@ export async function GET(req: Request) {
     trace("media.api", "site not found", { traceId, siteId });
     return NextResponse.json({ error: "Site not found" }, { status: 404 });
   }
-  const canAccess = actor?.role === "admin" || actor?.role === "administrator" || site.userId === session.user.id;
+  const canAccess = isAdministrator(actor?.role) || site.userId === session.user.id;
   if (!canAccess) {
     trace("media.api", "forbidden", { traceId, siteId, userId: session.user.id });
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

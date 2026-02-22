@@ -48,6 +48,7 @@ import db from "./db";
 import { SelectPost, SelectSite, cmsSettings, posts, sites, users } from "./schema";
 import { categories, dataDomains, domainPostMeta, domainPosts, postCategories, postMeta, postTags, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
+import { USER_ROLES, type UserRole, isAdministrator } from "./rbac";
 export const getAllCategories = async () => {
   try {
     const response = await db
@@ -481,7 +482,7 @@ export const setDataDomainActivation = async (input: {
     where: eq(users.id, session.user.id),
     columns: { role: true },
   });
-  if (!actor || actor.role !== "admin") {
+  if (!actor || !isAdministrator(actor.role)) {
     return { error: "Admin role required" };
   }
 
@@ -1853,8 +1854,6 @@ export const editUser = async (
   }
 };
 
-const USER_ROLES = ["administrator", "editor", "author", "subscriber"] as const;
-type UserRole = (typeof USER_ROLES)[number];
 const OAUTH_PROVIDER_IDS = ["github", "google", "facebook", "apple"] as const;
 type OAuthProviderId = (typeof OAUTH_PROVIDER_IDS)[number];
 
@@ -1912,7 +1911,7 @@ async function requireAdminSession() {
       .where(eq(users.id, session.user.id));
     self = { role: "administrator" as UserRole };
   }
-  if (self?.role === "administrator") {
+  if (isAdministrator(self?.role)) {
     return session;
   }
 

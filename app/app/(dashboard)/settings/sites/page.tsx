@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import db from "@/lib/db";
+import { isAdministrator } from "@/lib/rbac";
 import { sites, users } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { getSitePublicUrl } from "@/lib/site-url";
@@ -39,7 +40,7 @@ export default async function SitesSettingsIndexPage() {
   });
 
   const sitesList = await db.query.sites.findMany({
-    where: me?.role === "administrator" ? undefined : eq(sites.userId, session.user.id),
+    where: isAdministrator(me?.role) ? undefined : eq(sites.userId, session.user.id),
     columns: {
       id: true,
       name: true,
@@ -64,7 +65,7 @@ export default async function SitesSettingsIndexPage() {
       where: eq(users.id, session.user.id),
       columns: { role: true },
     });
-    if (me?.role !== "administrator") return;
+    if (!isAdministrator(me?.role)) return;
     const enabled = formData.get("enabled") === "on";
     const allowedSiteIds = String(formData.get("allowedSiteIds") || "");
     await setBooleanSetting(THEME_QUERY_NETWORK_ENABLED_KEY, enabled);
