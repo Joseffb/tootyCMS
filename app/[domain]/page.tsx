@@ -6,12 +6,13 @@ import BlogCard from "@/components/blog-card";
 import { getPostsForSite, getSiteData } from "@/lib/fetchers";
 import Image from "next/image";
 import db from "@/lib/db";
-import { getThemeTemplateForSite } from "@/lib/theme-runtime";
+import { getThemeQueryRequestsForSite, getThemeTemplateForSite } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getInstallState } from "@/lib/install-state";
 import { getThemeContextApi } from "@/lib/extension-api";
-import { getSiteUrlSetting, getWritingSettings } from "@/lib/cms-config";
+import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
+import { buildArchivePath, buildDetailPath } from "@/lib/permalink";
 
 // Type Definitions
 interface SeriesLink {
@@ -101,14 +102,15 @@ export default async function SiteHomePage({ params }: { params: Params }) {
   } else {
     PANELS = data.seriesCards || [];
   }
-  const themedTemplate = await getThemeTemplateForSite(data.id as string, "home");
+  const themedTemplate = await getThemeTemplateForSite(data.id as string);
   if (themedTemplate) {
     const rootUrl = getRootSiteUrl();
     const installState = await getInstallState();
-    const themeApi = await getThemeContextApi(data.id as string);
-    const writingSettings = await getWritingSettings();
+    const routeThemeQueries = await getThemeQueryRequestsForSite(data.id as string, "home");
+    const themeApi = await getThemeContextApi(data.id as string, routeThemeQueries);
+    const writingSettings = await getSiteWritingSettings(data.id as string);
     const isPrimary = Boolean((data as any).isPrimary) || (data as any).subdomain === "main";
-    const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+    const configuredRootUrl = (await getSiteUrlSettingForSite(data.id as string, "")).value.trim();
     const derivedSiteUrl = getSitePublicUrl({
       subdomain: data.subdomain,
       customDomain: data.customDomain,
@@ -118,7 +120,7 @@ export default async function SiteHomePage({ params }: { params: Params }) {
     const themePosts = posts.map((post: any) => ({
       title: post.title || "Untitled",
       description: post.description || "",
-      href: `${siteUrl.replace(/\/$/, "")}/${post.slug}`,
+      href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("post", post.slug, writingSettings)}`,
       created_at: toDateString(post.createdAt),
       slug: post.slug,
     }));
@@ -153,13 +155,14 @@ export default async function SiteHomePage({ params }: { params: Params }) {
       links: {
         root: rootUrl,
         main_site: siteUrl,
-        documentation: `${siteUrl}/c/documentation`,
+        documentation: `${siteUrl}/${writingSettings.categoryBase || "c"}/documentation`,
         setup: installState.setupRequired ? `${rootUrl}/setup` : "",
       },
       route_kind: "home",
       data_domain: "post",
       category_base: writingSettings.categoryBase || "c",
       tag_base: writingSettings.tagBase || "t",
+      posts_url: `${siteUrl.replace(/\/$/, "")}${buildArchivePath("post", writingSettings)}`,
     });
 
     return (

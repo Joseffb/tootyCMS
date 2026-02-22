@@ -71,6 +71,24 @@ describe("extension guardrails", () => {
     expect(() => api.registerContentType({ key: "docs" })).toThrow(/unavailable outside Core runtime/i);
   });
 
+  it("throws when plugin registers auth adapter without capability", () => {
+    const api = createPluginExtensionApi("guarded-plugin", {
+      capabilities: { authExtensions: false },
+      coreRegistry: {
+        registerContentType: vi.fn(),
+        registerServerHandler: vi.fn(),
+        registerAuthAdapter: vi.fn(),
+      },
+    });
+
+    expect(() =>
+      api.registerAuthAdapter({
+        id: "custom-auth",
+        create: () => ({ id: "custom-auth" }),
+      }),
+    ).toThrow(/plugin-guard/i);
+  });
+
   it("blocks theme side-effect settings writes", async () => {
     const api = createThemeExtensionApi();
 
@@ -78,4 +96,3 @@ describe("extension guardrails", () => {
     await expect(api.setPluginSetting("foo", "bar")).rejects.toThrow(/theme-guard/i);
   });
 });
-

@@ -1,3 +1,5 @@
+import { pluralizeLabel } from "@/lib/data-domain-labels";
+
 export function uniqueCandidates(candidates: Array<string | null | undefined>) {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -20,7 +22,7 @@ export function homeTemplateCandidates(configured?: string) {
 
 export function domainDetailTemplateCandidates(dataDomain: string, slug: string) {
   const key = dataDomain.trim().toLowerCase();
-  const plural = key.endsWith("s") ? key : `${key}s`;
+  const plural = pluralizeLabel(key).trim().toLowerCase();
   const safeSlug = slug.trim().toLowerCase();
   return uniqueCandidates([
     safeSlug ? `single-${plural}-${safeSlug}.html` : "",
@@ -29,24 +31,20 @@ export function domainDetailTemplateCandidates(dataDomain: string, slug: string)
     `single-${key}.html`,
     safeSlug ? `${plural}-${safeSlug}.html` : "",
     safeSlug ? `${key}-${safeSlug}.html` : "",
-    `${plural}.html`,
-    `${key}.html`,
     "single.html",
-    "post.html",
     "index.html",
   ]);
 }
 
 export function domainArchiveTemplateCandidates(domainKey: string, domainPluralSegment: string) {
   const key = domainKey.trim().toLowerCase();
-  const plural = domainPluralSegment.trim().toLowerCase();
+  const plural = (domainPluralSegment || pluralizeLabel(key)).trim().toLowerCase();
   return uniqueCandidates([
     `archive-${plural}.html`,
     `archive-${key}.html`,
     "archive.html",
     `${plural}.html`,
     `${key}.html`,
-    "index.html",
   ]);
 }
 
@@ -61,7 +59,6 @@ export function taxonomyArchiveTemplateCandidates(taxonomy: "category" | "tag", 
     `${taxonomy}.html`,
     "taxonomy.html",
     "archive.html",
-    "index.html",
   ]);
 }
 

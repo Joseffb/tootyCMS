@@ -1,22 +1,24 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getDomainPostsForSite, getPostData, getSiteData } from "@/lib/fetchers";
 import SitePostContent from "./page-content";
 import db from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { dataDomains, posts, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
+import { dataDomains, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu } from "@/lib/menu-system";
-import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
+import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { toDateString } from "@/lib/utils";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
-import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
 import { isDomainArchiveSegment, normalizeDomainKeyFromSegment, normalizeDomainSegment } from "@/lib/data-domain-routing";
 import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
+import { buildArchivePath, buildDetailPath, domainPluralSegment, resolveNoDomainPrefixDomain } from "@/lib/permalink";
+import { trace } from "@/lib/debug";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
@@ -28,36 +30,49 @@ export default async function SitePostPage({
 }) {
   // Await the entire params object.
   const resolvedParams = await params;
-  const post = await db.query.posts.findFirst({
-    where: eq(posts.slug, resolvedParams.slug),
-    columns: {
-      title: true,
-      content: true,
-      layout: true,
-      slug: true,
-    },
-  });
 
   const decodedDomain = decodeURIComponent(resolvedParams.domain);
   const decodedSlug = decodeURIComponent(resolvedParams.slug);
+  const site = await getSiteData(decodedDomain);
+  if (!site) notFound();
+  const writing = await getSiteWritingSettings(site.id as string);
+  const existingPost = await getPostData(decodedDomain, decodedSlug);
   const normalizedSlug = normalizeDomainSegment(decodedSlug);
   const singularFromSlug = normalizeDomainKeyFromSegment(decodedSlug);
+  const noDomainPrefixDomainKey = resolveNoDomainPrefixDomain(decodedSlug, writing);
+  trace("routing", "primary slug route resolved", {
+    domain: decodedDomain,
+    slug: decodedSlug,
+    hasCorePost: Boolean(existingPost),
+    singularFromSlug,
+    noDomainPrefixDomainKey,
+    permalinkMode: writing.permalinkMode,
+  });
 
-  if (singularFromSlug && singularFromSlug !== "post") {
+  if (existingPost) {
+    const canonicalPath = buildDetailPath("post", decodedSlug, writing);
+    if (canonicalPath !== `/${decodedSlug}`) {
+      trace("routing", "core post redirect to canonical", {
+        from: `/${decodedSlug}`,
+        to: canonicalPath,
+      });
+      redirect(canonicalPath);
+    }
+  }
+
+  if (!existingPost && ((singularFromSlug && singularFromSlug !== "post") || noDomainPrefixDomainKey)) {
+    const domainKeyForArchive = noDomainPrefixDomainKey || singularFromSlug;
+    if (!domainKeyForArchive) notFound();
     const domainRow = await db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, singularFromSlug),
+      where: eq(dataDomains.key, domainKeyForArchive),
       columns: { key: true, label: true },
     });
     if (domainRow) {
-      if (isDomainArchiveSegment(normalizedSlug, domainRow.key, domainRow.label)) {
-        const [site, entries] = await Promise.all([
-          getSiteData(decodedDomain),
-          getDomainPostsForSite(decodedDomain, domainRow.key),
-        ]);
-        if (!site) notFound();
-
+      const isMappedNoDomainArchive = Boolean(noDomainPrefixDomainKey);
+      if (isMappedNoDomainArchive || isDomainArchiveSegment(normalizedSlug, domainRow.key, domainRow.label)) {
+        const entries = await getDomainPostsForSite(decodedDomain, domainRow.key);
         const isPrimary = Boolean((site as any).isPrimary) || (site as any).subdomain === "main";
-        const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+        const configuredRootUrl = (await getSiteUrlSettingForSite(site.id as string, "")).value.trim();
         const derivedSiteUrl = getSitePublicUrl({
           subdomain: site.subdomain,
           customDomain: site.customDomain,
@@ -77,9 +92,15 @@ export default async function SitePostPage({
           : [];
 
         if (siteId) {
+          const archiveCandidates = domainArchiveTemplateCandidates(domainRow.key, domainPluralSegment(domainRow.key));
+          trace("theme", "domain archive template candidates", {
+            siteId,
+            domainKey: domainRow.key,
+            candidates: archiveCandidates,
+          });
           const themeTemplate = await getThemeTemplateFromCandidates(
             siteId,
-            domainArchiveTemplateCandidates(domainRow.key, normalizedSlug),
+            archiveCandidates,
           );
           if (themeTemplate) {
             const html = renderThemeTemplate(themeTemplate.template, {
@@ -97,13 +118,13 @@ export default async function SitePostPage({
                 title: entry.title || "Untitled",
                 description: entry.description || "",
                 slug: entry.slug,
-                href: `${siteUrl.replace(/\/$/, "")}/${domainRow.key}/${entry.slug}`,
+                href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath(domainRow.key, entry.slug, writing)}`,
                 created_at: toDateString(entry.createdAt),
               })),
               links: {
                 root: rootUrl,
                 main_site: siteUrl,
-                posts: `${siteUrl.replace(/\/$/, "")}/${normalizedSlug}`,
+                posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath(domainRow.key, writing)}`,
               },
               menu_items: menuItems,
               theme: {
@@ -111,7 +132,7 @@ export default async function SitePostPage({
                 name: themeTemplate.themeName || "",
                 ...(themeTemplate.config || {}),
               },
-              route_kind: "post_archive",
+              route_kind: "domain_archive",
               data_domain: domainRow.key,
             });
             return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
@@ -132,7 +153,7 @@ export default async function SitePostPage({
                 entries.map((entry) => (
                   <article key={entry.id} className="rounded-lg border border-[#3b2b1e] bg-[#0f121b] p-5">
                     <Link
-                      href={`${siteUrl.replace(/\/$/, "")}/${domainRow.key}/${entry.slug}`}
+                      href={`${siteUrl.replace(/\/$/, "")}${buildDetailPath(domainRow.key, entry.slug, writing)}`}
                       className="text-2xl font-semibold text-[#f3d7b2] hover:underline"
                     >
                       {entry.title || "Untitled"}
@@ -150,12 +171,12 @@ export default async function SitePostPage({
   }
   const kernel = await createKernelForRequest();
   await kernel.doAction("content:load", { domain: decodedDomain, slug: decodedSlug });
-  const data = await getPostData(decodedDomain, decodedSlug);
+  const data = existingPost;
   if (!data) {
     notFound();
   }
 
-  const layout = await kernel.applyFilters("render:layout", post?.layout ?? "post", {
+  const layout = await kernel.applyFilters("render:layout", (data as any)?.layout ?? "post", {
     domain: decodedDomain,
     slug: decodedSlug,
   });
@@ -188,7 +209,7 @@ export default async function SitePostPage({
     .filter((slug): slug is string => typeof slug === "string");
   const themeId = activeTheme?.id || "tooty-default";
   const isPrimary = Boolean((data as any)?.site?.isPrimary) || (data as any)?.site?.subdomain === "main";
-  const configuredRootUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
+  const configuredRootUrl = siteId ? (await getSiteUrlSettingForSite(siteId, "")).value.trim() : "";
   const derivedSiteUrl = getSitePublicUrl({
     subdomain: (data as any)?.site?.subdomain,
     customDomain: (data as any)?.site?.customDomain,
@@ -200,12 +221,12 @@ export default async function SitePostPage({
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
     const themeTemplate =
-      (await getThemeLayoutTemplateForSite(siteId, { layout: normalizedLayout })) ||
       (await getThemeDetailTemplateByHierarchy(siteId, {
         dataDomain: "post",
         slug: decodedSlug,
       })) ||
-      (await getThemeTemplateForSite(siteId, "post"));
+      (await getThemeLayoutTemplateForSite(siteId, { layout: normalizedLayout })) ||
+      (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"]));
     if (themeTemplate) {
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
@@ -222,7 +243,7 @@ export default async function SitePostPage({
           title: (data as any)?.title || "Untitled",
           description: (data as any)?.description || "",
           slug: (data as any)?.slug || decodedSlug,
-          href: `${siteUrl.replace(/\/$/, "")}/${(data as any)?.slug || decodedSlug}`,
+          href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("post", (data as any)?.slug || decodedSlug, writing)}`,
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
           content_html: toThemePostHtml((data as any)?.content || ""),
@@ -232,7 +253,7 @@ export default async function SitePostPage({
         links: {
           root: rootUrl,
           main_site: siteUrl,
-          posts: `${siteUrl.replace(/\/$/, "")}/posts`,
+          posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath("post", writing)}`,
         },
         menu_items: menuItems,
         theme: {
@@ -240,7 +261,7 @@ export default async function SitePostPage({
           name: themeTemplate.themeName || "",
           ...(themeTemplate.config || {}),
         },
-        route_kind: "post_detail",
+        route_kind: "domain_detail",
         data_domain: "post",
       });
       return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;

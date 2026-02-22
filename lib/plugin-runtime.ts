@@ -17,6 +17,16 @@ import path from "node:path";
 import { trace } from "@/lib/debug";
 import { getPluginsDir } from "@/lib/extension-paths";
 
+function isAuthFilterName(name: unknown) {
+  return (
+    name === "auth:providers" ||
+    name === "auth:adapter" ||
+    name === "auth:callbacks:signIn" ||
+    name === "auth:callbacks:jwt" ||
+    name === "auth:callbacks:session"
+  );
+}
+
 function parseJson<T>(raw: string | undefined, fallback: T): T {
   if (!raw) return fallback;
   try {
@@ -61,6 +71,7 @@ function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
     adminExtensions: Boolean(caps.adminExtensions ?? true),
     contentTypes: Boolean(caps.contentTypes ?? false),
     serverHandlers: Boolean(caps.serverHandlers ?? false),
+    authExtensions: Boolean(caps.authExtensions ?? false),
   };
 }
 
@@ -85,6 +96,9 @@ function createGuardedKernelView(
     },
     addFilter: (...args: Parameters<typeof kernel.addFilter>) => {
       ensure(capabilities.hooks, "kernel.addFilter");
+      if (isAuthFilterName(args[0])) {
+        ensure(capabilities.authExtensions, `kernel.addFilter(${String(args[0])})`);
+      }
       return kernel.addFilter(...args);
     },
     registerMenuLocation: (...args: Parameters<typeof kernel.registerMenuLocation>) => {
@@ -116,12 +130,23 @@ async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnT
           registerServerHandler(registration) {
             kernel.registerPluginServerHandler(pluginId, registration);
           },
+          registerAuthAdapter(registration) {
+            kernel.registerPluginAuthAdapter(pluginId, registration);
+          },
         },
       });
       await mod.register(guardedKernel, guardedApi);
     }
-  } catch {
-    // Plugin hook entry is optional.
+  } catch (error: any) {
+    if (error?.code === "ENOENT" || error?.code === "ERR_MODULE_NOT_FOUND") {
+      trace("plugins", "plugin runtime entry not found", { pluginId, entry: absEntry });
+      return;
+    }
+    trace("plugins", "plugin runtime registration failed", {
+      pluginId,
+      entry: absEntry,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

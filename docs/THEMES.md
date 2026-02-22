@@ -187,10 +187,11 @@ Queries are not raw SQL and are never theme-executed directly.
 Current generic query source:
 - `content.list`
 
-Example request shape (set by Core route code):
+Example request shape (declared in `theme.json` under `queries`):
 - `key`: result key for template access
 - `source`: `"content.list"`
 - `scope`: `"site"` or `"network"`
+- `route`: optional route selector (`home`, `domain_archive`, `domain_detail`, etc.)
 - `params`: whitelisted query params (`dataDomain`, `taxonomy`, `withTerm`, `limit`, `metaKeys`)
 
 Governance:
@@ -211,7 +212,7 @@ Theme authors should rely on the core fallback contract when naming templates.
 ### Core resolution order
 
 - Home: `home.html` -> `index.html`
-- Domain detail: `single-<plural-domain>-<slug>.html` -> `single-<domain>-<slug>.html` -> `single-<plural-domain>.html` -> `single-<domain>.html` -> `<plural-domain>-<slug>.html` -> `<domain>-<slug>.html` -> `<plural-domain>.html` -> `<domain>.html` -> `single.html` -> `post.html` -> `index.html`
+- Domain detail: `single-<plural-domain>-<slug>.html` -> `single-<domain>-<slug>.html` -> `single-<plural-domain>.html` -> `single-<domain>.html` -> `<plural-domain>-<slug>.html` -> `<domain>-<slug>.html` -> `single.html` -> `index.html`
 - Domain archive: `archive-<plural-domain>.html` -> `archive-<domain>.html` -> `archive.html` -> `<plural-domain>.html` -> `<domain>.html` -> `index.html`
 - Taxonomy: `taxonomy-<taxonomy>-<term>.html` -> `taxonomy-<taxonomy>.html` -> `taxonomy.html` -> `archive.html` -> `index.html`
 

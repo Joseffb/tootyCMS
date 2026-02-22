@@ -35,7 +35,8 @@ Optional:
   "id": "dev-tools",
   "name": "Dev Tools",
   "description": "Trace and diagnostics helpers",
-  "version": "1.0.0",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -49,10 +50,16 @@ Optional:
 }
 ```
 
+Versioning notes:
+- Core is currently in `0.x` (early-contract phase).
+- Use `minCoreVersion` to declare the minimum compatible core line for a plugin.
+- `x` wildcard is allowed in `minCoreVersion` (`0.1.x` means `>= 0.1.0`).
+
 ## State keys
 
 - enable key: `plugin_<id>_enabled`
 - config key: `plugin_<id>_config`
+- theme-visible plugin keys must be explicitly allowlisted in `theme_public_plugin_setting_keys` (comma-separated exact setting keys).
 
 ## Runtime registration
 
@@ -96,6 +103,7 @@ Plugins with a `menu` object are surfaced in dashboard nav via `/api/plugins/men
 5. Fail gracefully if plugin runtime file is missing or invalid.
 6. Treat Core as the only side-effect authority; plugin writes must flow through Core extension APIs.
 7. Do not bypass auth/routing/schema contracts.
+8. Plugin runtime registration failures must emit trace events (`plugins` channel) for auditability.
 
 See: `docs/EXTENSION_CONTRACTS.md`.
 

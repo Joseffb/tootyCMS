@@ -11,6 +11,8 @@ import {
   type ExtensionSettingsField,
   validateThemeContract,
 } from "@/lib/extension-contracts";
+import { CORE_VERSION, CORE_VERSION_SERIES, isCoreVersionCompatible } from "@/lib/core-version";
+import { trace } from "@/lib/debug";
 
 export type ThemeSettingsField = ExtensionSettingsField;
 
@@ -106,6 +108,15 @@ export async function getAvailableThemes(): Promise<ThemeManifest[]> {
       const parsed = parseJson<unknown>(raw, {});
       const validated = validateThemeContract(parsed, entry);
       if (!validated) continue;
+      if (!isCoreVersionCompatible(validated.minCoreVersion)) {
+        trace("extensions", "theme skipped due core version mismatch", {
+          themeId: validated.id,
+          themeVersion: validated.version || "",
+          minCoreVersion: validated.minCoreVersion || "",
+          coreVersion: CORE_VERSION,
+        });
+        continue;
+      }
       manifests.push(validated);
     } catch {
       continue;
@@ -123,7 +134,8 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
         id: "tooty-default",
         name: "Tooty Light",
         description: "Built-in fallback theme",
-        version: "1.0.0",
+        version: CORE_VERSION,
+        minCoreVersion: CORE_VERSION_SERIES,
         tokens: fallbackTokens,
         settingsFields: [],
         enabled: true,

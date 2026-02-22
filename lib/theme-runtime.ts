@@ -3,10 +3,13 @@ import path from "node:path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
 import { getThemesDir } from "@/lib/extension-paths";
 import {
+  domainArchiveTemplateCandidates,
   domainDetailTemplateCandidates,
   homeTemplateCandidates,
   taxonomyArchiveTemplateCandidates,
 } from "@/lib/theme-fallback";
+import type { ThemeQueryRequest } from "@/lib/theme-query";
+import { resolveThemeQueryRequests } from "@/lib/theme-query-contract";
 
 function isExternal(url: string) {
   return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/");
@@ -61,17 +64,14 @@ export async function getThemeAssetsForSite(siteId: string) {
   return { styles, scripts };
 }
 
-export async function getThemeTemplateForSite(siteId: string, templateName: "home" | "post") {
+export async function getThemeTemplateForSite(siteId: string) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
   const themesDir = getThemesDir();
 
   const manifestTemplates = (active as any).templates || {};
-  const configured = typeof manifestTemplates[templateName] === "string" ? manifestTemplates[templateName] : "";
-  const candidates =
-    templateName === "home"
-      ? homeTemplateCandidates(configured)
-      : [configured, "post.html", "single.html", "index.html"];
+  const configured = typeof manifestTemplates.home === "string" ? manifestTemplates.home : "";
+  const candidates = homeTemplateCandidates(configured);
 
   for (const candidate of candidates) {
     if (!candidate) continue;
@@ -104,6 +104,11 @@ export async function getThemeTemplateForSite(siteId: string, templateName: "hom
   }
 
   return null;
+}
+
+export async function getThemeQueryRequestsForSite(siteId: string, routeKind: string): Promise<ThemeQueryRequest[]> {
+  const active = await getActiveThemeForSite(siteId);
+  return resolveThemeQueryRequests(active, routeKind);
 }
 
 export async function getThemeTemplateFromCandidates(siteId: string, candidates: string[]) {
@@ -151,11 +156,12 @@ export async function getThemeTemplateByHierarchy(
   const dataDomain = (opts.dataDomain || "data_domain").trim().toLowerCase();
   const taxonomy = opts.taxonomy;
   const taxonomyCandidates = taxonomyArchiveTemplateCandidates(taxonomy, slug);
+  const domainArchiveCandidates = domainArchiveTemplateCandidates(dataDomain, "");
   const domainCandidates =
     taxonomy === "category"
       ? [`${dataDomain}-category-${slug}.html`]
       : [`${dataDomain}-tag-${slug}.html`];
-  const candidates = [...domainCandidates, ...taxonomyCandidates];
+  const candidates = [...domainCandidates, ...taxonomyCandidates, ...domainArchiveCandidates];
 
   return getThemeTemplateFromCandidates(siteId, candidates);
 }

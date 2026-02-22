@@ -1,7 +1,12 @@
 import db from "@/lib/db";
 import { cmsSettings, dataDomains, siteDataDomains, sites } from "@/lib/schema";
-import { eq, like } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import type {
+  KernelFilterName,
+  FilterCallback,
+  KernelActionName,
+  PluginAuthAdapterRegistration,
   PluginContentTypeRegistration,
   PluginServerHandlerRegistration,
 } from "@/lib/kernel";
@@ -25,11 +30,13 @@ export type PluginCapabilities = {
   adminExtensions: boolean;
   contentTypes: boolean;
   serverHandlers: boolean;
+  authExtensions: boolean;
 };
 
 type PluginCoreRegistry = {
   registerContentType: (registration: PluginContentTypeRegistration) => void;
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
+  registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
 };
 
 type PluginExtensionApiOptions = {
@@ -42,6 +49,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
   setPluginSetting: (key: string, value: string) => Promise<void>;
   registerContentType: (registration: PluginContentTypeRegistration) => void;
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
+  registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
@@ -54,6 +62,7 @@ const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
   adminExtensions: true,
   contentTypes: false,
   serverHandlers: false,
+  authExtensions: false,
 };
 
 function pluginSettingKey(pluginId: string | undefined, key: string) {
@@ -168,6 +177,15 @@ export function createPluginExtensionApi(
       }
       options.coreRegistry.registerServerHandler(registration);
     },
+    registerAuthAdapter(registration: PluginAuthAdapterRegistration) {
+      requireCapability("authExtensions", "registerAuthAdapter()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerAuthAdapter() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerAuthAdapter(registration);
+    },
   };
 }
 
@@ -191,7 +209,7 @@ export function createThemeExtensionApi(): ThemeExtensionApi {
 // Backward-compatible alias for plugin runtime call sites.
 export const createExtensionApi = createPluginExtensionApi;
 
-export async function getThemeContextApi(siteId: string) {
+export async function getThemeContextApi(siteId: string, queryRequests: ThemeQueryRequest[] = []) {
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
     columns: {
@@ -228,10 +246,24 @@ export async function getThemeContextApi(siteId: string) {
       })
     )?.value ?? "";
 
-  const pluginSettings = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(like(cmsSettings.key, "plugin_%"));
+  const publicPluginSettingsAllowlist =
+    (
+      await db.query.cmsSettings.findFirst({
+        where: eq(cmsSettings.key, "theme_public_plugin_setting_keys"),
+        columns: { value: true },
+      })
+    )?.value ?? "";
+  const allowedPluginSettingKeys = publicPluginSettingsAllowlist
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.startsWith("plugin_"));
+  const pluginSettings = allowedPluginSettingKeys.length
+    ? await db
+        .select({ key: cmsSettings.key, value: cmsSettings.value })
+        .from(cmsSettings)
+        .where(inArray(cmsSettings.key, allowedPluginSettingKeys))
+    : [];
+  const query = await runThemeQueries(siteId, queryRequests);
 
   return {
     site,
@@ -242,5 +274,6 @@ export async function getThemeContextApi(siteId: string) {
     },
     domains,
     pluginSettings: Object.fromEntries(pluginSettings.map((row) => [row.key, row.value])),
+    query,
   };
 }

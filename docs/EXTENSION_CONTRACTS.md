@@ -26,6 +26,25 @@ Core is the only authority for:
 - Example: `posts` = listing, `post/:id` = detail.
 - This convention applies to internal APIs and extension-facing routes.
 
+## Permalink Contract (MUST)
+
+Default SEO permalink system for new installs:
+
+- Canonical detail URL: `/%domain%/%postname%/`
+- Canonical archive URL: `/%domain_plural%/`
+- `post` is a normal domain key (detail: `/post/<slug>`, archive: `/posts`)
+
+Strict defaults:
+
+- No flat slug permalinks (`/%postname%/`) by default.
+- No taxonomy shortcut permalinks (`/c/<slug>`, `/t/<slug>`, `/<taxonomy>/<slug>`) by default.
+- Non-canonical routes return `404` unless a site-level override enables alternate patterns.
+
+Per-site overrides:
+
+- A site may define custom permalink tokens in settings (WordPress-style), but the default contract above must remain the system default.
+- When overrides are enabled, canonical URL output, sitemap generation, and route resolution must use the active site pattern.
+
 ## Plugin Contract
 
 Typed contract: `PluginContract` (`lib/extension-contracts.ts`)
@@ -65,6 +84,7 @@ Runtime guardrails:
 - Plugin runtime enforces declared capability flags and throws `[plugin-guard]` on unauthorized operations.
 - Theme query surfaces are read-only and whitelisted by Core (`lib/theme-query.ts`), with validated params and strict limits.
 - `scope="network"` queries are governance-gated: only main site or permissioned site IDs can aggregate network content, and only within the same owner network.
+- Theme query requests are declared by themes in `theme.json` (`queries`) and resolved by route in Core. Core routes must not hardcode theme-specific query keys.
 
 ## Loader Validation
 
@@ -107,11 +127,8 @@ Where `<domain>` is canonical singular key and plural aliases are supported. `po
 4. `single-<domain>.html`
 5. `<plural-domain>-<slug>.html`
 6. `<domain>-<slug>.html`
-7. `<plural-domain>.html`
-8. `<domain>.html`
-9. `single.html`
-10. `post.html`
-11. `index.html`
+7. `single.html`
+8. `index.html`
 
 ### Data-Domain Archive Route (`/<plural-domain>`)
 

@@ -1,43 +1,29 @@
 import { describe, expect, it } from "vitest";
-import {
-  domainArchiveTemplateCandidates,
-  domainDetailTemplateCandidates,
-  homeTemplateCandidates,
-} from "@/lib/theme-fallback";
+import { domainArchiveTemplateCandidates, domainDetailTemplateCandidates } from "@/lib/theme-fallback";
 
 describe("theme fallback contract", () => {
-  it("keeps home fallback simple", () => {
-    expect(homeTemplateCandidates("home.html")).toEqual([
-      "home.html",
+  it("resolves domain detail templates without post-specific fallback", () => {
+    const candidates = domainDetailTemplateCandidates("project", "fernain-jobs");
+    expect(candidates).toEqual([
+      "single-projects-fernain-jobs.html",
+      "single-project-fernain-jobs.html",
+      "single-projects.html",
+      "single-project.html",
+      "projects-fernain-jobs.html",
+      "project-fernain-jobs.html",
+      "single.html",
       "index.html",
     ]);
   });
 
-  it("resolves domain archive with plural then singular", () => {
-    expect(domainArchiveTemplateCandidates("project", "projects").slice(0, 5)).toEqual([
+  it("resolves domain archive templates with plural and singular keys", () => {
+    const candidates = domainArchiveTemplateCandidates("project", "projects");
+    expect(candidates).toEqual([
       "archive-projects.html",
       "archive-project.html",
       "archive.html",
       "projects.html",
       "project.html",
-    ]);
-  });
-
-  it("resolves domain detail with single-domain templates first", () => {
-    const candidates = domainDetailTemplateCandidates("project", "alpha");
-    expect(candidates[0]).toBe("single-projects-alpha.html");
-    expect(candidates).toContain("single-project.html");
-    expect(candidates).toContain("single.html");
-  });
-
-  it("treats post as a normal domain archive", () => {
-    expect(domainArchiveTemplateCandidates("post", "posts")).toEqual([
-      "archive-posts.html",
-      "archive-post.html",
-      "archive.html",
-      "posts.html",
-      "post.html",
-      "index.html",
     ]);
   });
 });
