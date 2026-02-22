@@ -38,7 +38,6 @@ import {
   Unlink2,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { SelectPost } from "@/lib/schema";
 import LoadingDots from "../icons/loading-dots";
 import { getSitePublicUrl } from "@/lib/site-url";
 import { createSaveQueue, type SaveQueueStatus } from "@/lib/editor-save-queue";
@@ -81,12 +80,34 @@ type SidebarMediaItem = {
 
 const extensions = [...defaultExtensions, slashCommand];
 
-type PostWithSite = SelectPost & {
+type PostWithSite = {
+  id: string;
+  siteId: string | null;
+  title: string | null;
+  description: string | null;
+  content: string | null;
+  layout: string | null;
+  slug: string;
+  published: boolean;
+  image?: string | null;
   site?: { subdomain: string | null } | null;
   categories?: { categoryId: number }[];
   tags?: { tagId: number }[];
   meta?: PostMetaEntry[];
 };
+
+type SavePostAction = (data: {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  content?: string | null;
+  layout?: string | null;
+  categoryIds?: number[];
+  tagIds?: number[];
+  metaEntries?: Array<{ key: string; value: string }>;
+}) => Promise<any>;
+
+type UpdatePostMetadataAction = (formData: FormData, postId: string, key: string) => Promise<any>;
 
 function parseInitialContent(raw: string | null | undefined): JSONContent {
   if (!raw) return defaultEditorContent as JSONContent;
@@ -156,9 +177,15 @@ function fileNameFromUrl(url: string) {
 export default function Editor({
   post,
   defaultEditorMode = "rich-text",
+  onSave = updatePost,
+  onUpdateMetadata = updatePostMetadata,
+  enableThumbnail = true,
 }: {
   post: PostWithSite;
   defaultEditorMode?: EditorMode;
+  onSave?: SavePostAction;
+  onUpdateMetadata?: UpdatePostMetadataAction;
+  enableThumbnail?: boolean;
 }) {
   const [initialContent, setInitialContent] = useState<JSONContent | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
@@ -340,7 +367,7 @@ export default function Editor({
       }>({
         debounceMs: 600,
         save: async (payload) => {
-          const result = await updatePost(payload);
+          const result = await onSave(payload);
           if ((result as any)?.error) {
             throw new Error(String((result as any).error));
           }
@@ -351,7 +378,7 @@ export default function Editor({
           setSaveError(error instanceof Error ? error.message : error ? String(error) : null);
         },
       }),
-    [],
+    [onSave],
   );
 
   useEffect(() => {
@@ -444,7 +471,7 @@ export default function Editor({
     setSaveStatus("saving");
     setSaveError(null);
     try {
-      const result = await updatePost({
+      const result = await onSave({
         id: latest.id,
         title: latest.title ?? "",
         description: latest.description ?? "",
@@ -580,7 +607,7 @@ export default function Editor({
         const formData = new FormData();
         formData.append("imageUrl", uploaded.url);
         formData.append("imageFinalName", uploaded.url);
-        const response = await updatePostMetadata(formData, post.id, "image");
+        const response = await onUpdateMetadata(formData, post.id, "image");
         if ((response as any)?.error) {
           throw new Error(String((response as any).error));
         }
@@ -598,7 +625,7 @@ export default function Editor({
         const formData = new FormData();
         formData.append("imageUrl", item.url);
         formData.append("imageFinalName", item.url);
-        const response = await updatePostMetadata(formData, post.id, "image");
+        const response = await onUpdateMetadata(formData, post.id, "image");
         if ((response as any)?.error) {
           throw new Error(String((response as any).error));
         }
@@ -675,7 +702,7 @@ export default function Editor({
                 const formData = new FormData();
                 formData.append("published", String(!data.published));
                 startTransitionPublishing(async () => {
-                  await updatePostMetadata(formData, post.id, "published").then(() => {
+                  await onUpdateMetadata(formData, post.id, "published").then(() => {
                     toast.success(`Successfully ${data.published ? "unpublished" : "published"} your post.`);
                     setData((prev) => ({ ...prev, published: !prev.published }));
                   });
@@ -1260,7 +1287,8 @@ export default function Editor({
               ))
             )}
 
-            <div className="pt-2">
+            {enableThumbnail && (
+              <div className="pt-2">
               <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Thumbnail</div>
               <div className="mt-2 space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
                 <div className="aspect-video w-full overflow-hidden rounded border border-stone-200 bg-white">
@@ -1296,6 +1324,7 @@ export default function Editor({
                 </button>
               </div>
             </div>
+            )}
           </div>
         )}
       </aside>
@@ -1326,7 +1355,7 @@ export default function Editor({
                       type="button"
                       className="group overflow-hidden rounded-lg border border-stone-200 bg-stone-50 text-left hover:border-cyan-300 hover:bg-cyan-50"
                       onClick={() => {
-                        if (mediaModalMode === "thumbnail") {
+                        if (enableThumbnail && mediaModalMode === "thumbnail") {
                           setThumbnailFromMediaItem(item);
                           setMediaModalOpen(false);
                           return;

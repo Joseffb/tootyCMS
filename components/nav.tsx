@@ -75,9 +75,36 @@ export default function Nav({ children }: { children: ReactNode }) {
   }, [currentSiteId]);
 
   const tabs = useMemo(() => {
-    if (segments[0] === "site" && id) {
+    const domainPostMatch = pathname?.match(
+      /^\/site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
+    );
+    if (segments[0] === "site" && id && domainPostMatch) {
+      const domainKey = domainPostMatch[2];
+      const postId = domainPostMatch[3];
+      const baseHref = `/site/${id}/domain/${domainKey}/post/${postId}`;
       return [
-        { name: "Back to All Sites", href: "/sites", icon: <ArrowLeft width={18} /> },
+        {
+          name: "Back to Entries",
+          href: `/site/${id}/domain/${domainKey}`,
+          icon: <ArrowLeft width={18} />,
+        },
+        {
+          name: "Editor",
+          href: baseHref,
+          isActive: pathname === baseHref,
+          icon: <Edit3 width={18} />,
+        },
+        {
+          name: "Settings",
+          href: `${baseHref}/settings`,
+          isActive: pathname === `${baseHref}/settings`,
+          icon: <Settings width={18} />,
+        },
+      ];
+    }
+
+    if (segments[0] === "site" && id) {
+      const siteTabs = [
         {
           name: "Posts",
           href: `/site/${id}`,
@@ -102,6 +129,11 @@ export default function Nav({ children }: { children: ReactNode }) {
           isActive: pathname?.includes(item.href),
           icon: <Globe width={18} />,
         })),
+      ].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+      return [
+        { name: "Back to All Sites", href: "/sites", icon: <ArrowLeft width={18} /> },
+        ...siteTabs,
       ];
     }
 

@@ -9,13 +9,15 @@ import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { toDateString } from "@/lib/utils";
 import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
+import { getSiteMenu } from "@/lib/menu-system";
+import { normalizeDomainKeyFromSegment } from "@/lib/data-domain-routing";
 
 type Params = Promise<{ domain: string; slug: string; child: string }>;
 
 export default async function DomainPostPage({ params }: { params: Params }) {
   const resolved = await params;
   const decodedDomain = decodeURIComponent(resolved.domain);
-  const decodedDataDomain = decodeURIComponent(resolved.slug);
+  const decodedDataDomain = normalizeDomainKeyFromSegment(decodeURIComponent(resolved.slug));
   const decodedSlug = decodeURIComponent(resolved.child);
 
   const kernel = await createKernelForRequest();
@@ -45,6 +47,14 @@ export default async function DomainPostPage({ params }: { params: Params }) {
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
+  const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
+  const menuItems = siteId
+    ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
+        location: "header",
+        domain: decodedDomain,
+        siteId,
+      })
+    : [];
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
@@ -86,6 +96,7 @@ export default async function DomainPostPage({ params }: { params: Params }) {
           main_site: siteUrl,
           posts: `${siteUrl.replace(/\/$/, "")}/posts`,
         },
+        menu_items: menuItems,
         route_kind: "post_detail",
         data_domain: decodedDataDomain,
       });

@@ -11,6 +11,21 @@ Core is the only authority for:
 - Render pipeline and extension loading
 - Side effects (must flow through Core APIs)
 
+## Naming Contracts (MUST)
+
+### Data Domain Naming
+
+- Canonical data-domain type names are singular (for key and DB table identity).
+- Admin/UI menu labels are pluralized for collection/listing navigation.
+- Example: type `project` maps to table/key identity; UI shows `Projects`.
+
+### API Route Naming
+
+- Listing/collection endpoints must use plural nouns.
+- Detail/single-resource endpoints must use singular nouns.
+- Example: `posts` = listing, `post/:id` = detail.
+- This convention applies to internal APIs and extension-facing routes.
+
 ## Plugin Contract
 
 Typed contract: `PluginContract` (`lib/extension-contracts.ts`)
@@ -48,6 +63,8 @@ Runtime guardrails:
 
 - `createThemeExtensionApi()` throws when side-effect methods are called (`setSetting`, `setPluginSetting`).
 - Plugin runtime enforces declared capability flags and throws `[plugin-guard]` on unauthorized operations.
+- Theme query surfaces are read-only and whitelisted by Core (`lib/theme-query.ts`), with validated params and strict limits.
+- `scope="network"` queries are governance-gated: only main site or permissioned site IDs can aggregate network content, and only within the same owner network.
 
 ## Loader Validation
 

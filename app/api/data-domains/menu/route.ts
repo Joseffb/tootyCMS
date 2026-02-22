@@ -1,7 +1,8 @@
 import { getAllDataDomains } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { users } from "@/lib/schema";
+import { pluralizeLabel } from "@/lib/data-domain-labels";
+import { sites } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -16,23 +17,22 @@ export async function GET(request: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ items: [] });
   }
-  const actor = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
+  const site = await db.query.sites.findFirst({
+    where: eq(sites.id, siteId),
+    columns: { userId: true },
   });
-  if (!actor || actor.role !== "admin") {
+  if (!site || site.userId !== session.user.id) {
     return NextResponse.json({ items: [] });
   }
 
   const domains = await getAllDataDomains(siteId);
   const items = domains
-    .filter((domain: any) => domain.isActive)
+    .filter((domain: any) => domain.key !== "post" && domain.assigned)
     .map((domain: any) => ({
       id: domain.id,
-      label: domain.label,
-      href: `/site/${siteId}/settings/domains?dataDomain=${domain.id}`,
+      label: pluralizeLabel(domain.label),
+      href: `/site/${siteId}/domain/${domain.key}`,
     }));
 
   return NextResponse.json({ items });
 }
-

@@ -30,13 +30,14 @@ import {
   WRITING_TAG_BASE_KEY,
 } from "@/lib/cms-config";
 import { put } from "@vercel/blob";
-import { and, asc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { withPostAuth, withSiteAuth } from "./auth";
 import db from "./db";
 import { SelectPost, SelectSite, cmsSettings, posts, sites, users } from "./schema";
 import { categories, dataDomains, domainPostMeta, domainPosts, postCategories, postMeta, postTags, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
+import { singularizeLabel } from "./data-domain-labels";
 export const getAllCategories = async () => {
   try {
     const response = await db
@@ -239,11 +240,35 @@ export const getAllDataDomains = async (siteId?: string) => {
 
   const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row.isActive]));
   return rows.map((row) => ({
-    ...row,
-    assigned: row.key === "post" ? true : assignmentMap.has(row.id),
-    isActive: row.key === "post" ? true : assignmentMap.get(row.id) ?? false,
-    usageCount: row.key === "post" ? corePostUsageCount : usageMap.get(row.id) ?? 0,
+      ...row,
+      assigned: row.key === "post" ? true : assignmentMap.has(row.id),
+      isActive: row.key === "post" ? true : assignmentMap.get(row.id) ?? false,
+      usageCount: row.key === "post" ? corePostUsageCount : usageMap.get(row.id) ?? 0,
   }));
+};
+
+export const getSiteDataDomainByKey = async (siteId: string, domainKey: string) => {
+  await ensureDefaultPostType();
+  const [row] = await db
+    .select({
+      id: dataDomains.id,
+      key: dataDomains.key,
+      label: dataDomains.label,
+      isActive: siteDataDomains.isActive,
+    })
+    .from(dataDomains)
+    .leftJoin(
+      siteDataDomains,
+      and(eq(siteDataDomains.dataDomainId, dataDomains.id), eq(siteDataDomains.siteId, siteId)),
+    )
+    .where(eq(dataDomains.key, domainKey))
+    .limit(1);
+
+  if (!row) return null;
+  if (row.key === "post") return { ...row, isActive: true };
+  // Allow any domain assigned to the site, even if currently inactive.
+  if (row.isActive === null || row.isActive === undefined) return null;
+  return row;
 };
 
 type DataDomainFieldSpec = {
@@ -290,10 +315,11 @@ export const createDataDomain = async (input: {
 }) => {
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
-  const existingByLabel = await db.select().from(dataDomains).where(eq(dataDomains.label, trimmed)).limit(1);
+  const canonicalLabel = singularizeLabel(trimmed);
+  const existingByLabel = await db.select().from(dataDomains).where(eq(dataDomains.label, canonicalLabel)).limit(1);
   if (existingByLabel[0]) return existingByLabel[0];
 
-  const key = toDomainKey(trimmed);
+  const key = toDomainKey(canonicalLabel);
   const existingByKey = await db.select().from(dataDomains).where(eq(dataDomains.key, key)).limit(1);
   if (existingByKey[0]) return existingByKey[0];
 
@@ -345,7 +371,7 @@ export const createDataDomain = async (input: {
 
   const [created] = await db.insert(dataDomains).values({
     key,
-    label: trimmed,
+    label: canonicalLabel,
     contentTable,
     metaTable,
     description: "",
@@ -380,10 +406,11 @@ export const updateDataDomain = async (input: {
 }) => {
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
+  const canonicalLabel = singularizeLabel(trimmed);
   const existingByLabel = await db
     .select({ id: dataDomains.id })
     .from(dataDomains)
-    .where(and(eq(dataDomains.label, trimmed), sql`${dataDomains.id} <> ${input.id}`))
+    .where(and(eq(dataDomains.label, canonicalLabel), sql`${dataDomains.id} <> ${input.id}`))
     .limit(1);
   if (existingByLabel[0]) {
     return { error: "A Post Type with this label already exists" };
@@ -392,7 +419,7 @@ export const updateDataDomain = async (input: {
   const [updated] = await db
     .update(dataDomains)
     .set({
-      label: trimmed,
+      label: canonicalLabel,
       description: input.description ?? "",
     })
     .where(eq(dataDomains.id, input.id))
@@ -1136,6 +1163,317 @@ export const getSiteFromPostId = async (postId: string) => {
   });
 
   return post?.siteId;
+};
+
+export const getSiteFromDomainPostId = async (postId: string) => {
+  const post = await db.query.domainPosts.findFirst({
+    where: eq(domainPosts.id, postId),
+    columns: {
+      siteId: true,
+    },
+  });
+
+  return post?.siteId;
+};
+
+export const createDomainPost = withSiteAuth(
+  async (_: FormData, site: SelectSite, domainKey: string | null) => {
+    const session = await getSession();
+    if (!session?.user.id) {
+      return {
+        error: "Not authenticated",
+      };
+    }
+    if (!domainKey) {
+      return {
+        error: "Data domain key is required",
+      };
+    }
+
+    const domain = await getSiteDataDomainByKey(site.id, domainKey);
+    if (!domain || domain.key === "post") {
+      return {
+        error: "Data domain not found for site",
+      };
+    }
+
+    const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
+    const [response] = await db
+      .insert(domainPosts)
+      .values({
+        siteId: site.id,
+        userId: session.user.id,
+        dataDomainId: domain.id,
+        slug: toSeoSlug(`${domain.key}-${nanoid()}`),
+        ...(useRandomDefaultImages ? { image: pickRandomTootyImage() } : {}),
+      })
+      .returning();
+
+    revalidateTag(
+      `${site.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`,
+      "max",
+    );
+    site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
+
+    return response;
+  },
+);
+
+export const updateDomainPost = async (
+  data: {
+    id: string;
+    title?: string | null;
+    description?: string | null;
+    content?: string | null;
+    layout?: string | null;
+    categoryIds?: number[];
+    tagIds?: number[];
+    metaEntries?: Array<{ key: string; value: string }>;
+  },
+) => {
+  const session = await getSession();
+  if (!session?.user.id) {
+    return { error: "Not authenticated" };
+  }
+
+  const existing = await db.query.domainPosts.findFirst({
+    where: eq(domainPosts.id, data.id),
+    columns: { userId: true, siteId: true, slug: true, dataDomainId: true },
+  });
+  if (!existing || existing.userId !== session.user.id) {
+    return { error: "Post not found or not authorized" };
+  }
+
+  try {
+    const postRecord = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(domainPosts)
+        .set({
+          title: data.title,
+          description: data.description,
+          content: data.content,
+          layout: data.layout ?? null,
+        })
+        .where(eq(domainPosts.id, data.id))
+        .returning();
+
+      await tx.delete(termRelationships).where(eq(termRelationships.objectId, data.id));
+      const taxonomyIds = Array.from(new Set([...(data.categoryIds ?? []), ...(data.tagIds ?? [])]));
+      if (taxonomyIds.length > 0) {
+        await tx.insert(termRelationships).values(
+          taxonomyIds.map((termTaxonomyId) => ({
+            objectId: data.id,
+            termTaxonomyId,
+          })),
+        );
+      }
+
+      await tx.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, data.id));
+      if (Array.isArray(data.metaEntries) && data.metaEntries.length > 0) {
+        const normalizedMeta = data.metaEntries
+          .map((entry) => ({
+            key: entry.key.trim(),
+            value: entry.value.trim(),
+          }))
+          .filter((entry) => entry.key.length > 0);
+
+        if (normalizedMeta.length > 0) {
+          await tx.insert(domainPostMeta).values(
+            normalizedMeta.map((entry) => ({
+              domainPostId: data.id,
+              key: entry.key,
+              value: entry.value,
+            })),
+          );
+        }
+      }
+
+      return updated;
+    });
+
+    const taxonomyRows = await db
+      .select({
+        id: termTaxonomies.id,
+        taxonomy: termTaxonomies.taxonomy,
+      })
+      .from(termRelationships)
+      .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
+      .where(eq(termRelationships.objectId, data.id));
+
+    const cats = taxonomyRows
+      .filter((row) => row.taxonomy === "category")
+      .map((row) => ({ categoryId: row.id }));
+    const tagRows = taxonomyRows
+      .filter((row) => row.taxonomy === "tag")
+      .map((row) => ({ tagId: row.id }));
+
+    const metaRows = await db
+      .select({
+        key: domainPostMeta.key,
+        value: domainPostMeta.value,
+      })
+      .from(domainPostMeta)
+      .where(eq(domainPostMeta.domainPostId, data.id));
+
+    const { siteId, slug } = existing;
+    if (siteId) {
+      const siteRow = await db.query.sites.findFirst({
+        where: eq(sites.id, siteId),
+        columns: { subdomain: true, customDomain: true },
+      });
+      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
+      if (siteRow?.subdomain) {
+        const domain = `${siteRow.subdomain}.${rootDomain}`;
+        revalidateTag(`${domain}-posts`, "max");
+        revalidateTag(`${domain}-${slug}`, "max");
+      }
+      if (siteRow?.customDomain) {
+        revalidateTag(`${siteRow.customDomain}-posts`, "max");
+        revalidateTag(`${siteRow.customDomain}-${slug}`, "max");
+      }
+    }
+
+    return {
+      ...postRecord,
+      categories: cats,
+      tags: tagRows,
+      meta: metaRows,
+    };
+  } catch (error: any) {
+    console.error("updateDomainPost error:", error);
+    return { error: error.message };
+  }
+};
+
+export const updateDomainPostMetadata = async (
+  formData: FormData,
+  postId: string,
+  key: string,
+) => {
+  const session = await getSession();
+  if (!session?.user.id) {
+    return { error: "Not authenticated" };
+  }
+
+  const post = await db.query.domainPosts.findFirst({
+    where: eq(domainPosts.id, postId),
+    with: {
+      site: true,
+    },
+  });
+  if (!post || post.userId !== session.user.id) {
+    return { error: "Post not found" };
+  }
+
+  try {
+    let response;
+    const maybeFile = formData.get("image") as File | null;
+    const maybeUrl = formData.get("imageUrl") as string | null;
+    const maybeFinal = formData.get("imageFinalName") as string | null;
+    const finalUrl =
+      maybeFinal?.length ? maybeFinal :
+        maybeUrl?.length ? maybeUrl :
+          undefined;
+
+    if (key === "image") {
+      if (maybeFile && maybeFile.size > 0 && process.env.BLOB_READ_WRITE_TOKEN) {
+        const filename = `${nanoid()}.${maybeFile.type.split("/")[1]}`;
+        const { url } = await put(filename, maybeFile, { access: "public" });
+        const blurhash = await getBlurDataURL(url);
+
+        response = await db
+          .update(domainPosts)
+          .set({
+            image: url,
+            imageBlurhash: blurhash,
+          })
+          .where(eq(domainPosts.id, post.id))
+          .returning()
+          .then((res) => res[0]);
+      } else if (finalUrl) {
+        const blurhash = await getBlurDataURL(`${process.cwd()}/public${finalUrl}`);
+
+        response = await db
+          .update(domainPosts)
+          .set({
+            image: finalUrl,
+            imageBlurhash: blurhash,
+          })
+          .where(eq(domainPosts.id, post.id))
+          .returning()
+          .then((res) => res[0]);
+      } else {
+        return { error: "No valid image upload or URL provided" };
+      }
+    } else {
+      const value = formData.get(key) as string;
+      const nextValue =
+        key === "published"
+          ? value === "true"
+          : key === "slug"
+            ? toSeoSlug(value)
+            : value;
+
+      response = await db
+        .update(domainPosts)
+        .set({
+          [key]: nextValue,
+        })
+        .where(eq(domainPosts.id, post.id))
+        .returning()
+        .then((res) => res[0]);
+    }
+
+    const domain = post.site?.customDomain;
+    const subdomain = post.site?.subdomain;
+    const currentSlug = post.slug;
+    const updatedSlug = response?.slug ?? currentSlug;
+
+    revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`, "max");
+    revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${currentSlug}`, "max");
+    if (updatedSlug !== currentSlug) {
+      revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${updatedSlug}`, "max");
+    }
+    if (domain) {
+      revalidateTag(`${domain}-posts`, "max");
+      revalidateTag(`${domain}-${currentSlug}`, "max");
+      if (updatedSlug !== currentSlug) {
+        revalidateTag(`${domain}-${updatedSlug}`, "max");
+      }
+    }
+
+    return response;
+  } catch (error: any) {
+    return {
+      error: error.code === "P2002" ? "This slug is already in use" : error.message,
+    };
+  }
+};
+
+export const deleteDomainPost = async (postId: string) => {
+  const session = await getSession();
+  if (!session?.user.id) {
+    return { error: "Not authenticated" };
+  }
+
+  const post = await db.query.domainPosts.findFirst({
+    where: eq(domainPosts.id, postId),
+    columns: { id: true, userId: true, siteId: true },
+  });
+  if (!post || post.userId !== session.user.id) {
+    return { error: "Post not found" };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, post.id));
+      await tx.delete(termRelationships).where(eq(termRelationships.objectId, post.id));
+      await tx.delete(domainPosts).where(eq(domainPosts.id, post.id));
+    });
+    return { siteId: post.siteId };
+  } catch (error: any) {
+    return { error: error.message };
+  }
 };
 
 export const createPost = withSiteAuth(

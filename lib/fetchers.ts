@@ -1,7 +1,7 @@
 import { unstable_cache } from "next/cache";
 import db from "./db";
-import { and, desc, eq, not } from "drizzle-orm";
-import { dataDomains, domainPosts, posts, sites, termRelationships, termTaxonomies, terms, users } from "./schema";
+import { and, desc, eq, inArray, not } from "drizzle-orm";
+import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationships, termTaxonomies, terms, users } from "./schema";
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
 import { serialize } from "next-mdx-remote/serialize";
 
@@ -204,6 +204,166 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
     {
       revalidate: 900,
       tags: [`${domain}-${slug}`],
+    },
+  )();
+}
+
+export async function getDomainPostsForSite(domain: string, dataDomainKey: string) {
+  const subdomain = parseSubdomainFromDomain(domain);
+  return unstable_cache(
+    async () =>
+      db
+        .select({
+          id: domainPosts.id,
+          title: domainPosts.title,
+          description: domainPosts.description,
+          slug: domainPosts.slug,
+          createdAt: domainPosts.createdAt,
+        })
+        .from(domainPosts)
+        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
+        .innerJoin(sites, eq(sites.id, domainPosts.siteId))
+        .where(
+          and(
+            eq(domainPosts.published, true),
+            eq(dataDomains.key, dataDomainKey),
+            subdomain ? eq(sites.subdomain, subdomain) : eq(sites.customDomain, domain),
+          ),
+        )
+        .orderBy(desc(domainPosts.createdAt)),
+    [`${domain}-${dataDomainKey}-archive-v1`],
+    {
+      tags: [`${domain}-posts`],
+      revalidate: 3600,
+    },
+  )();
+}
+
+function extractFirstImageFromContent(rawContent: unknown): string {
+  if (typeof rawContent !== "string" || !rawContent.trim()) return "";
+  try {
+    const doc = JSON.parse(rawContent);
+    const visit = (node: any): string => {
+      if (!node || typeof node !== "object") return "";
+      if (node.type === "image" && typeof node?.attrs?.src === "string") {
+        return node.attrs.src;
+      }
+      if (Array.isArray(node.content)) {
+        for (const child of node.content) {
+          const found = visit(child);
+          if (found) return found;
+        }
+      }
+      return "";
+    };
+    return visit(doc);
+  } catch {
+    return "";
+  }
+}
+
+export async function getFeaturedProjectsForSite(domain: string) {
+  const subdomain = parseSubdomainFromDomain(domain);
+  return await unstable_cache(
+    async () => {
+      const rows = await db
+        .select({
+          id: domainPosts.id,
+          title: domainPosts.title,
+          description: domainPosts.description,
+          slug: domainPosts.slug,
+          content: domainPosts.content,
+          createdAt: domainPosts.createdAt,
+          domainKey: dataDomains.key,
+        })
+        .from(domainPosts)
+        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
+        .innerJoin(sites, eq(sites.id, domainPosts.siteId))
+        .where(
+          and(
+            eq(domainPosts.published, true),
+            eq(dataDomains.key, "project"),
+            subdomain ? eq(sites.subdomain, subdomain) : eq(sites.customDomain, domain),
+          ),
+        )
+        .orderBy(desc(domainPosts.createdAt))
+        .limit(20);
+
+      if (!rows.length) return [];
+
+      const ids = rows.map((row) => row.id);
+      const relRows = await db
+        .select({
+          objectId: termRelationships.objectId,
+          taxonomy: termTaxonomies.taxonomy,
+          slug: terms.slug,
+          name: terms.name,
+        })
+        .from(termRelationships)
+        .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
+        .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
+        .where(and(eq(termTaxonomies.taxonomy, "category"), inArray(termRelationships.objectId, ids as string[])));
+
+      const metaRows = await db
+        .select({
+          domainPostId: domainPostMeta.domainPostId,
+          key: domainPostMeta.key,
+          value: domainPostMeta.value,
+        })
+        .from(domainPostMeta)
+        .where(inArray(domainPostMeta.domainPostId, ids as string[]));
+
+      const termsByObject = new Map<string, Array<{ slug: string | null; name: string | null }>>();
+      for (const row of relRows) {
+        const list = termsByObject.get(row.objectId) || [];
+        list.push({ slug: row.slug, name: row.name });
+        termsByObject.set(row.objectId, list);
+      }
+
+      const metaByObject = new Map<string, Record<string, string>>();
+      for (const row of metaRows) {
+        const bag = metaByObject.get(row.domainPostId) || {};
+        bag[row.key.trim().toLowerCase()] = row.value;
+        metaByObject.set(row.domainPostId, bag);
+      }
+
+      const featured = rows
+        .filter((row) => {
+          const terms = termsByObject.get(row.id) || [];
+          return terms.some((term) => (term.slug || "").toLowerCase() === "featured");
+        })
+        .slice(0, 4)
+        .map((row) => {
+          const terms = termsByObject.get(row.id) || [];
+          const meta = metaByObject.get(row.id) || {};
+          const technologyTerms = terms
+            .filter((term) => (term.slug || "").toLowerCase() !== "featured")
+            .map((term) => term.name || term.slug || "")
+            .filter(Boolean);
+          const thumbnail =
+            meta.thumbnail ||
+            meta.thumbnail_image ||
+            meta.image ||
+            meta.cover ||
+            extractFirstImageFromContent(row.content || "");
+          const link = meta.link || meta.url || meta.external_url || "";
+
+          return {
+            title: row.title || "Untitled Project",
+            description: row.description || "Project entry",
+            href: link || `/${domain}/${row.domainKey}/${row.slug}`,
+            thumbnail,
+            technologies: technologyTerms,
+            createdAt: row.createdAt,
+          };
+        });
+
+      return featured;
+    },
+    [`${domain}-featured-projects-v1`],
+    {
+      revalidate: 900,
+      tags: [`${domain}-posts`],
     },
   )();
 }
