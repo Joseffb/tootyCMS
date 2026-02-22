@@ -3,13 +3,12 @@ import { cmsSettings, dataDomains, siteDataDomains, sites } from "@/lib/schema";
 import { eq, inArray } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import type {
-  KernelFilterName,
-  FilterCallback,
-  KernelActionName,
   PluginAuthAdapterRegistration,
   PluginContentTypeRegistration,
+  PluginScheduleHandlerRegistration,
   PluginServerHandlerRegistration,
 } from "@/lib/kernel";
+import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateScheduleEntry } from "@/lib/scheduler";
 
 type BaseExtensionApi = {
   pluginId?: string;
@@ -31,12 +30,14 @@ export type PluginCapabilities = {
   contentTypes: boolean;
   serverHandlers: boolean;
   authExtensions: boolean;
+  scheduleJobs: boolean;
 };
 
 type PluginCoreRegistry = {
   registerContentType: (registration: PluginContentTypeRegistration) => void;
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
+  registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
 };
 
 type PluginExtensionApiOptions = {
@@ -50,11 +51,58 @@ export type PluginExtensionApi = BaseExtensionApi & {
   registerContentType: (registration: PluginContentTypeRegistration) => void;
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
+  registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
+  createSchedule: (input: {
+    siteId?: string | null;
+    name: string;
+    actionKey: string;
+    payload?: Record<string, unknown>;
+    enabled?: boolean;
+    runEveryMinutes?: number;
+    nextRunAt?: Date;
+  }) => Promise<any>;
+  listSchedules: () => Promise<any[]>;
+  updateSchedule: (
+    scheduleId: string,
+    input: {
+      siteId?: string | null;
+      name?: string;
+      actionKey?: string;
+      payload?: Record<string, unknown>;
+      enabled?: boolean;
+      runEveryMinutes?: number;
+      nextRunAt?: Date;
+    },
+  ) => Promise<any>;
+  deleteSchedule: (scheduleId: string) => Promise<void>;
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
   setSetting: (key: string, value: string) => Promise<never>;
   setPluginSetting: (key: string, value: string) => Promise<never>;
+  createSchedule: (input: {
+    siteId?: string | null;
+    name: string;
+    actionKey: string;
+    payload?: Record<string, unknown>;
+    enabled?: boolean;
+    runEveryMinutes?: number;
+    nextRunAt?: Date;
+  }) => Promise<any>;
+  listSchedules: () => Promise<any[]>;
+  updateSchedule: (
+    scheduleId: string,
+    input: {
+      siteId?: string | null;
+      name?: string;
+      actionKey?: string;
+      payload?: Record<string, unknown>;
+      enabled?: boolean;
+      runEveryMinutes?: number;
+      nextRunAt?: Date;
+    },
+  ) => Promise<any>;
+  deleteSchedule: (scheduleId: string) => Promise<void>;
 };
 
 const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
@@ -63,6 +111,7 @@ const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
   contentTypes: false,
   serverHandlers: false,
   authExtensions: false,
+  scheduleJobs: false,
 };
 
 function pluginSettingKey(pluginId: string | undefined, key: string) {
@@ -186,6 +235,56 @@ export function createPluginExtensionApi(
       }
       options.coreRegistry.registerAuthAdapter(registration);
     },
+    registerScheduleHandler(registration: PluginScheduleHandlerRegistration) {
+      requireCapability("scheduleJobs", "registerScheduleHandler()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerScheduleHandler() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerScheduleHandler(registration);
+    },
+    async createSchedule(input) {
+      requireCapability("scheduleJobs", "createSchedule()");
+      return createScheduleEntry("plugin", pluginName, {
+        siteId: input.siteId || null,
+        name: input.name,
+        actionKey: input.actionKey,
+        payload: input.payload || {},
+        enabled: input.enabled ?? true,
+        runEveryMinutes: input.runEveryMinutes ?? 60,
+        nextRunAt: input.nextRunAt,
+      } as any);
+    },
+    async listSchedules() {
+      requireCapability("scheduleJobs", "listSchedules()");
+      return listScheduleEntries({ ownerType: "plugin", ownerId: pluginName, includeDisabled: true });
+    },
+    async updateSchedule(scheduleId, input) {
+      requireCapability("scheduleJobs", "updateSchedule()");
+      await updateScheduleEntry(scheduleId, {
+        siteId: input.siteId === undefined ? undefined : input.siteId || null,
+        name: input.name,
+        actionKey: input.actionKey,
+        payload: input.payload,
+        enabled: input.enabled,
+        runEveryMinutes: input.runEveryMinutes,
+        nextRunAt: input.nextRunAt,
+      } as any, {
+        isAdmin: false,
+        ownerType: "plugin",
+        ownerId: pluginName,
+      });
+      return listScheduleEntries({ ownerType: "plugin", ownerId: pluginName, includeDisabled: true });
+    },
+    async deleteSchedule(scheduleId) {
+      requireCapability("scheduleJobs", "deleteSchedule()");
+      await deleteScheduleEntry(scheduleId, {
+        isAdmin: false,
+        ownerType: "plugin",
+        ownerId: pluginName,
+      });
+    },
   };
 }
 
@@ -193,8 +292,14 @@ function throwThemeSideEffectError(action: string): never {
   throw new Error(`[theme-guard] Themes cannot call side-effect API: ${action}. Use Core contracts instead.`);
 }
 
-export function createThemeExtensionApi(): ThemeExtensionApi {
+export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
   const base = createReadBaseApi(undefined);
+  const boundThemeId = String(themeId || "").trim();
+  const requireThemeOwner = () => {
+    if (!boundThemeId) {
+      throw new Error("[theme-guard] Theme scheduler API requires a bound theme id.");
+    }
+  };
   return {
     ...base,
     async setSetting() {
@@ -202,6 +307,46 @@ export function createThemeExtensionApi(): ThemeExtensionApi {
     },
     async setPluginSetting() {
       return throwThemeSideEffectError("setPluginSetting");
+    },
+    async createSchedule(input) {
+      requireThemeOwner();
+      return createScheduleEntry("theme", boundThemeId, {
+        siteId: input.siteId || null,
+        name: input.name,
+        actionKey: input.actionKey,
+        payload: input.payload || {},
+        enabled: input.enabled ?? true,
+        runEveryMinutes: input.runEveryMinutes ?? 60,
+        nextRunAt: input.nextRunAt,
+      } as any);
+    },
+    async listSchedules() {
+      requireThemeOwner();
+      return listScheduleEntries({ ownerType: "theme", ownerId: boundThemeId, includeDisabled: true });
+    },
+    async updateSchedule(scheduleId, input) {
+      requireThemeOwner();
+      return updateScheduleEntry(scheduleId, {
+        siteId: input.siteId === undefined ? undefined : input.siteId || null,
+        name: input.name,
+        actionKey: input.actionKey,
+        payload: input.payload,
+        enabled: input.enabled,
+        runEveryMinutes: input.runEveryMinutes,
+        nextRunAt: input.nextRunAt,
+      } as any, {
+        isAdmin: false,
+        ownerType: "theme",
+        ownerId: boundThemeId,
+      });
+    },
+    async deleteSchedule(scheduleId) {
+      requireThemeOwner();
+      await deleteScheduleEntry(scheduleId, {
+        isAdmin: false,
+        ownerType: "theme",
+        ownerId: boundThemeId,
+      });
     },
   };
 }

@@ -48,7 +48,7 @@ function renderParagraph(content: any[] = []): string {
 
 function renderList(node: any, tag: "ul" | "ol") {
   const items = Array.isArray(node?.content) ? node.content : [];
-  return `<${tag}>${items.map((item) => renderNode(item)).join("")}</${tag}>`;
+  return `<${tag}>${items.map((item: any) => renderNode(item)).join("")}</${tag}>`;
 }
 
 function renderNode(node: any): string {

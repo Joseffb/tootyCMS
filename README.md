@@ -170,6 +170,7 @@ npm run test:all
 - `docs/THEMES.md`
 - `docs/EXTENSION_CONTRACTS.md`
 - `docs/SETUP_AND_RUNTIME_UPDATES.md`
+- `docs/SCHEDULER.md`
 - `docs/THEME_SANDBOX_CONTRACT.md`
 - `docs/MENUS.md`
 - `docs/MEDIA_MANAGER.md`

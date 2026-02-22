@@ -33,6 +33,7 @@ export type PluginContract = {
     contentTypes?: boolean;
     serverHandlers?: boolean;
     authExtensions?: boolean;
+    scheduleJobs?: boolean;
   };
   menu?: {
     label?: string;
@@ -141,6 +142,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
         : false,
       authExtensions: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).authExtensions ?? false)
+        : false,
+      scheduleJobs: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).scheduleJobs ?? false)
         : false,
     },
     menu: menu

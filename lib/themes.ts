@@ -131,6 +131,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
   if (themes.length === 0) {
     return [
       {
+        kind: "theme",
         id: "tooty-default",
         name: "Tooty Light",
         description: "Built-in fallback theme",

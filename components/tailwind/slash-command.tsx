@@ -18,12 +18,15 @@ import {
 } from "lucide-react";
 import { Command, createSuggestionItems, renderItems } from "novel";
 import { createUploadFn } from "./image-upload";
-import type { SelectPost } from "@/lib/schema";
 
-let currentPost: SelectPost | null = null;
+type SlashCommandPostContext = {
+  siteId: string | null;
+};
+
+let currentPost: SlashCommandPostContext | null = null;
 let slashCommandApplied = false;
 
-export function setCurrentPost(post: SelectPost) {
+export function setCurrentPost(post: SlashCommandPostContext) {
   currentPost = post;
 }
 

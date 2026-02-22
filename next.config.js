@@ -2,6 +2,9 @@
  * @type {import("next").NextConfig}
  */
 module.exports = {
+  turbopack: {
+    root: __dirname,
+  },
   experimental: {
     serverActions: {
       allowedOrigins: ["app.localhost:3000"],

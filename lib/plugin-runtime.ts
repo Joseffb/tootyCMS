@@ -72,6 +72,7 @@ function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
     contentTypes: Boolean(caps.contentTypes ?? false),
     serverHandlers: Boolean(caps.serverHandlers ?? false),
     authExtensions: Boolean(caps.authExtensions ?? false),
+    scheduleJobs: Boolean(caps.scheduleJobs ?? false),
   };
 }
 
@@ -132,6 +133,9 @@ async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnT
           },
           registerAuthAdapter(registration) {
             kernel.registerPluginAuthAdapter(pluginId, registration);
+          },
+          registerScheduleHandler(registration) {
+            kernel.registerPluginScheduleHandler(pluginId, registration);
           },
         },
       });

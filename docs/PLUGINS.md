@@ -41,7 +41,8 @@ Optional:
     "hooks": true,
     "adminExtensions": true,
     "contentTypes": false,
-    "serverHandlers": false
+    "serverHandlers": false,
+    "scheduleJobs": false
   },
   "menu": { "label": "Dev Tools", "path": "/app/plugins/dev-tools" },
   "settingsFields": [
@@ -72,6 +73,11 @@ If `index.mjs` exports `register(kernel, api)`, it is invoked during kernel boot
 - `getPluginSetting(key, fallback?)`
 - `setPluginSetting(key, value)`
 - `listDataDomains(siteId?)`
+- `createSchedule(input)`
+- `listSchedules()`
+- `updateSchedule(scheduleId, input)`
+- `deleteSchedule(scheduleId)`
+- `registerScheduleHandler({ id, run })` (requires `capabilities.scheduleJobs=true`)
 
 Example:
 
@@ -116,6 +122,7 @@ Plugin capabilities are enforced at runtime:
 - `contentTypes`: required for `api.registerContentType(...)`
 - `serverHandlers`: required for `api.registerServerHandler(...)`
 - `authExtensions`: required for experimental auth extension surfaces
+- `scheduleJobs`: required for scheduler APIs and `registerScheduleHandler(...)`
 
 If a plugin attempts a gated operation without declaring the capability, Core throws a `[plugin-guard]` error.
 

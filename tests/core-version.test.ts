@@ -3,7 +3,7 @@ import { CORE_VERSION, CORE_VERSION_SERIES, isCoreVersionCompatible } from "@/li
 
 describe("core version compatibility", () => {
   it("keeps declared version line stable", () => {
-    expect(CORE_VERSION).toBe("0.1.2");
+    expect(CORE_VERSION).toBe("0.1.3");
     expect(CORE_VERSION_SERIES).toBe("0.1.x");
   });
 

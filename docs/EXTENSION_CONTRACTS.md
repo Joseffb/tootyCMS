@@ -55,7 +55,7 @@ Plugins may:
 - Register content-type and server behavior only through Core contract surfaces
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
-- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`)
+- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`)
 
 Plugins may not:
 

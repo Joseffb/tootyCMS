@@ -49,6 +49,11 @@ export type PluginAuthAdapterRegistration = {
   create: () => unknown | Promise<unknown>;
 };
 
+export type PluginScheduleHandlerRegistration = {
+  id: string;
+  run: (input: { siteId?: string | null; payload?: Record<string, unknown> }) => unknown | Promise<unknown>;
+};
+
 type ActionCallback = (payload?: unknown) => void | Promise<void>;
 type FilterCallback<T = unknown> = (value: T, context?: unknown) => T | Promise<T>;
 
@@ -63,6 +68,7 @@ export class Kernel {
   private pluginContentTypes = new Map<string, PluginContentTypeRegistration[]>();
   private pluginServerHandlers = new Map<string, PluginServerHandlerRegistration[]>();
   private pluginAuthAdapters = new Map<string, PluginAuthAdapterRegistration[]>();
+  private pluginScheduleHandlers = new Map<string, PluginScheduleHandlerRegistration[]>();
 
   addAction(name: KernelActionName, callback: ActionCallback, priority = 10) {
     const existing = this.actions.get(name) ?? [];
@@ -166,6 +172,17 @@ export class Kernel {
       for (const reg of regs) rows.push({ pluginId, ...reg });
     }
     return rows;
+  }
+
+  registerPluginScheduleHandler(pluginId: string, registration: PluginScheduleHandlerRegistration) {
+    const list = this.pluginScheduleHandlers.get(pluginId) ?? [];
+    list.push(registration);
+    this.pluginScheduleHandlers.set(pluginId, list);
+    trace("kernel", "plugin schedule handler registered", { pluginId, id: registration.id });
+  }
+
+  getPluginScheduleHandlers(pluginId: string) {
+    return [...(this.pluginScheduleHandlers.get(pluginId) ?? [])];
   }
 }
 

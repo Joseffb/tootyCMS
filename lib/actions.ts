@@ -49,6 +49,14 @@ import { SelectPost, SelectSite, cmsSettings, posts, sites, users } from "./sche
 import { categories, dataDomains, domainPostMeta, domainPosts, postCategories, postMeta, postTags, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
 import { USER_ROLES, type UserRole, isAdministrator } from "./rbac";
+import {
+  createScheduleEntry,
+  deleteScheduleEntry,
+  listScheduleEntries,
+  updateScheduleEntry,
+  type ScheduleEntry,
+  type SchedulerOwnerType,
+} from "./scheduler";
 export const getAllCategories = async () => {
   try {
     const response = await db
@@ -1435,8 +1443,14 @@ export const updateDomainPostMetadata = async (
         .then((res) => res[0]);
     }
 
-    const domain = post.site?.customDomain;
-    const subdomain = post.site?.subdomain;
+    const siteRow = post.siteId
+      ? await db.query.sites.findFirst({
+          where: eq(sites.id, post.siteId),
+          columns: { subdomain: true, customDomain: true },
+        })
+      : null;
+    const domain = siteRow?.customDomain;
+    const subdomain = siteRow?.subdomain;
     const currentSlug = post.slug;
     const updatedSlug = response?.slug ?? currentSlug;
 
@@ -2343,7 +2357,29 @@ export const updateSiteEditorSettings = async (formData: FormData) => {
 
 export const getScheduleSettingsAdmin = async () => {
   await requireAdminSession();
-  return getScheduleSettings();
+  const [settings, schedules, allSites] = await Promise.all([
+    getScheduleSettings(),
+    listScheduleEntries({ includeDisabled: true }),
+    db.query.sites.findMany({
+      columns: { id: true, name: true, subdomain: true, customDomain: true, isPrimary: true },
+      orderBy: (table, { asc }) => [asc(table.name)],
+    }),
+  ]);
+
+  const siteById = new Map(allSites.map((site) => [site.id, site]));
+  const rows = schedules.map((entry: ScheduleEntry) => ({
+    ...entry,
+    site:
+      entry.siteId && siteById.has(entry.siteId)
+        ? siteById.get(entry.siteId)
+        : null,
+  }));
+
+  return {
+    ...settings,
+    schedules: rows,
+    sites: allSites,
+  };
 };
 
 export const updateScheduleSettings = async (formData: FormData) => {
@@ -2356,5 +2392,89 @@ export const updateScheduleSettings = async (formData: FormData) => {
     setBooleanSetting(SCHEDULES_PING_SITEMAP_KEY, pingSitemap),
   ]);
 
+  revalidateSettingsPath("/settings/schedules");
+};
+
+function normalizeOwnerType(value: FormDataEntryValue | null): SchedulerOwnerType {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "plugin" || raw === "theme" || raw === "core") return raw;
+  return "core";
+}
+
+export const createScheduledActionAdmin = async (formData: FormData) => {
+  await requireAdminSession();
+  const ownerType = normalizeOwnerType(formData.get("ownerType"));
+  const ownerId = String(formData.get("ownerId") || "core").trim() || "core";
+  const siteIdRaw = String(formData.get("siteId") || "").trim();
+  const name = String(formData.get("name") || "").trim();
+  const actionKey = String(formData.get("actionKey") || "").trim();
+  const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const enabled = formData.get("enabled") === "on";
+  const payloadRaw = String(formData.get("payload") || "").trim();
+
+  const payload = payloadRaw
+    ? (() => {
+        try {
+          const parsed = JSON.parse(payloadRaw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          throw new Error("Payload must be valid JSON");
+        }
+      })()
+    : {};
+
+  await createScheduleEntry(ownerType, ownerId, {
+    siteId: siteIdRaw || null,
+    name,
+    actionKey,
+    payload,
+    enabled,
+    runEveryMinutes,
+  });
+
+  revalidateSettingsPath("/settings/schedules");
+};
+
+export const updateScheduledActionAdmin = async (formData: FormData) => {
+  await requireAdminSession();
+  const id = String(formData.get("id") || "").trim();
+  if (!id) throw new Error("Missing schedule id");
+  const siteIdRaw = String(formData.get("siteId") || "").trim();
+  const name = String(formData.get("name") || "").trim();
+  const actionKey = String(formData.get("actionKey") || "").trim();
+  const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const enabled = formData.get("enabled") === "on";
+  const payloadRaw = String(formData.get("payload") || "").trim();
+  const payload = payloadRaw
+    ? (() => {
+        try {
+          const parsed = JSON.parse(payloadRaw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          throw new Error("Payload must be valid JSON");
+        }
+      })()
+    : {};
+
+  await updateScheduleEntry(
+    id,
+    {
+      siteId: siteIdRaw || null,
+      name,
+      actionKey,
+      payload,
+      enabled,
+      runEveryMinutes,
+    },
+    { isAdmin: true },
+  );
+  revalidateSettingsPath("/settings/schedules");
+};
+
+export const deleteScheduledActionAdmin = async (formData: FormData) => {
+  await requireAdminSession();
+  const id = String(formData.get("id") || "").trim();
+  if (!id) return;
+  await deleteScheduleEntry(id, { isAdmin: true });
   revalidateSettingsPath("/settings/schedules");
 };
