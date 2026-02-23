@@ -1171,7 +1171,7 @@ export default function Editor({
 
         {sidebarTab === "plugins" && (
           <div className="mt-4 space-y-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Data Domains</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Organize</div>
             {taxonomyOverviewRows.map((taxonomyRow) => {
               const taxonomy = taxonomyRow.taxonomy;
               const sectionTerms = getTermsForTaxonomy(taxonomy);
