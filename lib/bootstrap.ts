@@ -298,11 +298,8 @@ export async function ensureMainSiteForUser(userId: string) {
     if (existingPrimary.subdomain !== PRIMARY_SUBDOMAIN) {
       await ensurePrimarySiteUsesMainSubdomain(existingPrimary.id);
     }
-    const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
     await ensureSeedSiteThumbnail(existingPrimary.id);
     await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingPrimary.id), isNull(posts.layout)));
-    await ensureDefaultStarterPosts(existingPrimary.id, userId, useRandomDefaultImages);
-    await removeLegacyDocumentationPost(existingPrimary.id);
     return;
   }
 
@@ -319,11 +316,8 @@ export async function ensureMainSiteForUser(userId: string) {
     if (existingAny.subdomain !== PRIMARY_SUBDOMAIN) {
       await ensurePrimarySiteUsesMainSubdomain(existingAny.id);
     }
-    const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
     await ensureSeedSiteThumbnail(existingAny.id);
     await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingAny.id), isNull(posts.layout)));
-    await ensureDefaultStarterPosts(existingAny.id, userId, useRandomDefaultImages);
-    await removeLegacyDocumentationPost(existingAny.id);
     return;
   }
 
