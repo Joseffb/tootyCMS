@@ -12,7 +12,7 @@ export default defineConfig({
   webServer: {
     command: "TRACE_PROFILE=Test npm run dev -- --port 3000",
     url: "http://localhost:3000",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

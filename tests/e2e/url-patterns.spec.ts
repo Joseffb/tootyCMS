@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
 import { and, eq, inArray, like, or } from "drizzle-orm";
@@ -37,6 +37,22 @@ const PERMALINK_KEYS = [
   "writing_no_domain_prefix",
   "writing_no_domain_data_domain",
 ];
+
+async function getWithRetry(
+  request: APIRequestContext,
+  url: string,
+  expectedStatus: number,
+  timeoutMs = 4000,
+  intervalMs = 200,
+) {
+  const started = Date.now();
+  let response = await request.get(url);
+  while (response.status() !== expectedStatus && Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    response = await request.get(url);
+  }
+  return response;
+}
 
 async function setSiteSetting(siteId: string, key: string, value: string) {
   const scopedKey = settingKey(siteId, key);
@@ -83,7 +99,11 @@ test.beforeAll(async () => {
   }
   mainSiteId = siteRows[0].id;
   mainUserId = siteRows[0].userId || `${runId}-user`;
-  const rawSiteHost = siteRows[0].customDomain || `${siteRows[0].subdomain || "main"}.localhost`;
+  const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "").trim();
+  const isLocalRoot = rootDomain.includes("localhost") || rootDomain.includes(".test");
+  const rawSiteHost = isLocalRoot
+    ? `${siteRows[0].subdomain || "main"}.localhost`
+    : siteRows[0].customDomain || `${siteRows[0].subdomain || "main"}.localhost`;
   siteHost = rawSiteHost.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
 
   if (!siteRows[0].userId) {
@@ -192,7 +212,7 @@ test.afterAll(async () => {
 
 test("default mode: canonical post/domain routes resolve and taxonomy shortcuts are blocked", async ({ page, request }) => {
   const origin = `http://${siteHost}:3000`;
-  const postDetail = await request.get(`${origin}/post/${postSlug}`);
+  const postDetail = await getWithRetry(request, `${origin}/post/${postSlug}`, 200);
   expect(postDetail.status()).toBe(200);
   expect(await postDetail.text()).toContain(`URL Pattern Post ${runId}`);
 
