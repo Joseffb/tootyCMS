@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
 function isTruthy(value: string) {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
@@ -112,6 +111,7 @@ export default async function middleware(req: NextRequest) {
       traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
       return rewriteWithTrace("/setup");
     }
+    const { getToken } = await import("next-auth/jwt");
     const session = await getToken({ req });
     if (!session && appPath !== "/login") {
       traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });
