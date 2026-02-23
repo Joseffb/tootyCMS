@@ -2,9 +2,8 @@ import { notFound } from "next/navigation";
 import { getSiteData } from "@/lib/fetchers";
 import { Metadata } from "next";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
-import { getSiteThemeTokens } from "@/lib/themes";
 import { getSiteMenu } from "@/lib/menu-system";
-import { getThemeAssetsForSite } from "@/lib/theme-runtime";
+import { getActiveThemeForSite, getThemeAssetsForSite } from "@/lib/theme-runtime";
 import Script from "next/script";
 
 export async function generateMetadata({
@@ -17,8 +16,12 @@ export async function generateMetadata({
   const data = await getSiteData(decoded);
 
   if (!data) return null;
+  const activeTheme = data.id ? await getActiveThemeForSite(String(data.id)) : null;
+  const themeConfig = (activeTheme?.config || {}) as Record<string, unknown>;
+  const configuredTitle = String(themeConfig.site_title || "").trim();
+  const configuredFavicon = String(themeConfig.site_favicon_url || "").trim();
   const {
-    name: title,
+    name,
     description,
     image,
     logo,
@@ -28,6 +31,8 @@ export async function generateMetadata({
     image: string;
     logo: string;
   };
+  const title = configuredTitle || name;
+  const favicon = configuredFavicon || logo || "/icon.png";
 
   return {
     title,
@@ -44,7 +49,11 @@ export async function generateMetadata({
       images: [image],
       creator: "@vercel",
     },
-    // icons: [logo],
+    icons: {
+      icon: [favicon],
+      shortcut: [favicon],
+      apple: [favicon],
+    },
     metadataBase: new URL(`https://${decoded}`),
     // Optional: Set canonical URL to custom domain if it exists
     // ...(params.domain.endsWith(`.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`) &&
@@ -71,8 +80,7 @@ export default async function SiteLayout({
     notFound();
   }
   const siteId = data.id as string;
-  const [_themeTokens, themeAssets, baseHeaderMenu, kernel] = await Promise.all([
-    getSiteThemeTokens(siteId),
+  const [themeAssets, baseHeaderMenu, kernel] = await Promise.all([
     getThemeAssetsForSite(siteId),
     getSiteMenu(siteId, "header"),
     createKernelForRequest(),

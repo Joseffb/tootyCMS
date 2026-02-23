@@ -42,6 +42,20 @@
       "defaultValue": "A CMS for teams that prefer releases over rituals."
     },
     {
+      "key": "site_title",
+      "label": "Site Title Override",
+      "type": "text",
+      "placeholder": "Optional title shown in browser tab and header",
+      "helpText": "Leave blank to use the site name from Settings."
+    },
+    {
+      "key": "site_favicon_url",
+      "label": "Favicon URL",
+      "type": "text",
+      "placeholder": "/tooty/sprites/tooty-reading-cropped.png",
+      "helpText": "Supports absolute URLs or site-relative paths."
+    },
+    {
       "key": "post_mascot_mode",
       "label": "Post Mascot Mode",
       "type": "text",
