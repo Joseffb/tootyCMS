@@ -35,9 +35,7 @@ describe("analytics-tinybird plugin", () => {
   it("handles analytics query for matching provider and forwards to tinybird", async () => {
     const { kernel, filters } = createKernel();
     getPluginSetting.mockImplementation(async (key: string) => {
-      if (key === "providerKey") return "tinybird";
       if (key === "dashboardToken") return "dash-token";
-      if (key === "host") return "https://tinybird.example";
       return "";
     });
     await register(kernel as any, { getPluginSetting });
@@ -47,7 +45,7 @@ describe("analytics-tinybird plugin", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0];
-    expect(String(url)).toContain("https://tinybird.example/v0/pipes/top_pages.json");
+    expect(String(url)).toContain("/v0/pipes/top_pages.json");
     expect(String(url)).toContain("token=dash-token");
     expect(response.status).toBe(200);
   });
@@ -65,4 +63,3 @@ describe("analytics-tinybird plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
-

@@ -20,10 +20,33 @@ function apiUrl(path: string) {
   return `${base}${path}`;
 }
 
-/** Call our analytics query endpoint to fetch the domain's traffic share. */
-async function getDomainShare(domain: string): Promise<number | null> {
+function collapseDuplicatePort(input: string) {
+  return input.replace(/:(\d+):\1(?=\/|$)/g, ":$1");
+}
+
+function normalizePublicUrl(raw: string) {
+  const trimmed = collapseDuplicatePort(String(raw || "").trim());
+  if (!trimmed) return trimmed;
+  const hasProtocol = /^https?:\/\//i.test(trimmed);
+  const withProtocol = hasProtocol ? trimmed : `http://${trimmed}`;
   try {
-    const qs  = new URLSearchParams({ name: "domain_share", domain }).toString();
+    const parsed = new URL(withProtocol);
+    const safeHost = collapseDuplicatePort(parsed.host);
+    return `${parsed.protocol}//${safeHost}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+type TrendMetric = {
+  deltaPct: number;
+  trend: "up" | "down" | "flat";
+};
+
+/** Call analytics query endpoint and derive day-over-day trend for a site/domain. */
+async function getDomainTrend(domain: string, siteId: string): Promise<TrendMetric | null> {
+  try {
+    const qs = new URLSearchParams({ name: "visitors_per_day", domain, siteId }).toString();
     const res = await fetch(apiUrl(`/api/analytics/query?${qs}`), {
       // cache for 60 s on the server to avoid hammering provider backends
       next: { revalidate: 60 },
@@ -31,16 +54,43 @@ async function getDomainShare(domain: string): Promise<number | null> {
 
     if (!res.ok) {
       if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
-        console.warn("[analytics domain_share]", domain, await res.text());
+        console.warn("[analytics trend]", domain, await res.text());
       }
       return null;
     }
 
     const json = await res.json();
-    return json.data?.[0]?.pct_hits ?? null;
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    if (rows.length === 0) return { deltaPct: 0, trend: "flat" };
+
+    const normalized = rows
+      .map((row: any) => ({
+        date: String(row?.date || ""),
+        value: Number(row?.total_pageviews ?? row?.unique_visitors ?? row?.visitors ?? 0),
+      }))
+      .filter((row: any) => row.date && Number.isFinite(row.value))
+      .sort((a: any, b: any) => Date.parse(a.date) - Date.parse(b.date));
+
+    if (normalized.length === 0) return { deltaPct: 0, trend: "flat" };
+    const latest = Number(normalized[normalized.length - 1]?.value || 0);
+    const previous = Number(normalized[normalized.length - 2]?.value || 0);
+
+    let deltaPct = 0;
+    if (previous > 0) {
+      deltaPct = Math.round((((latest - previous) / previous) * 100) * 10) / 10;
+    } else if (latest > 0) {
+      deltaPct = 100;
+    }
+
+    const flatThresholdPct = 4;
+    if (Math.abs(deltaPct) <= flatThresholdPct) {
+      return { deltaPct: Math.abs(deltaPct), trend: "flat" };
+    }
+    if (deltaPct > 0) return { deltaPct, trend: "up" };
+    return { deltaPct: Math.abs(deltaPct), trend: "down" };
   } catch (err) {
     if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
-      console.warn("[analytics domain_share] fetch failed", err);
+      console.warn("[analytics trend] fetch failed", err);
     }
     return null;
   }
@@ -53,16 +103,18 @@ async function getDomainShare(domain: string): Promise<number | null> {
 export default async function SiteCard({
   data,
   rootUrl,
+  hasAnalytics = false,
 }: {
   data: SelectSite;
   rootUrl?: string;
+  hasAnalytics?: boolean;
 }) {
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
   const rootDomainHost = rootDomain.replace(/:\d+$/, "");
   const isMainSite = data.subdomain === "main";
   const domain = isMainSite ? rootDomain : `${data.subdomain}.${rootDomain}`;
   const analyticsDomain = isMainSite ? rootDomainHost : `${data.subdomain}.${rootDomainHost}`;
-  const share = await getDomainShare(analyticsDomain); // e.g. 32.5 → 32.5 %
+  const trend = hasAnalytics ? await getDomainTrend(analyticsDomain, data.id) : null;
 
   let publicUrl = getSitePublicUrl({
     subdomain: data.subdomain,
@@ -74,11 +126,13 @@ export default async function SiteCard({
   if (rootUrl && isMainSite) {
     publicUrl = rootUrl;
     try {
-      publicLabel = new URL(rootUrl).host;
+      publicLabel = new URL(normalizePublicUrl(rootUrl)).host;
     } catch {
-      publicLabel = rootUrl.replace(/^https?:\/\//, "");
+      publicLabel = collapseDuplicatePort(rootUrl.replace(/^https?:\/\//, ""));
     }
   }
+  publicUrl = normalizePublicUrl(publicUrl);
+  publicLabel = collapseDuplicatePort(publicLabel);
 
   return (
     <div className="relative rounded-lg border border-stone-200 pb-10 shadow-md transition-all hover:shadow-xl dark:border-stone-700 dark:hover:border-white">
@@ -104,7 +158,7 @@ export default async function SiteCard({
       </Link>
 
       {/* Footer actions ------------------------------------------------------ */}
-      <div className="absolute bottom-4 flex w-full justify-between space-x-4 px-4">
+      <div className={`absolute bottom-4 flex w-full px-4 ${hasAnalytics ? "justify-between space-x-4" : "justify-start"}`}>
         {/* Public link */}
         <a
           href={publicUrl}
@@ -116,13 +170,29 @@ export default async function SiteCard({
         </a>
 
         {/* Analytics link with live share % */}
-        <Link
-          href={`/site/${data.id}/analytics`}
-          className="flex items-center rounded-md bg-green-100 px-2 py-1 text-sm font-medium text-green-600 transition-colors hover:bg-green-200 dark:bg-green-900 dark:bg-opacity-50 dark:text-green-400 dark:hover:bg-green-800 dark:hover:bg-opacity-50"
-        >
-          <BarChart height={16} className="mr-1" />
-          {share !== null ? `${share}%` : "–"}
-        </Link>
+        {hasAnalytics ? (
+          <Link
+            href={`/site/${data.id}/analytics`}
+            className={`flex items-center rounded-md px-2 py-1 text-sm font-medium transition-colors ${
+              trend
+                ? trend.trend === "up"
+                  ? "bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300 dark:hover:bg-green-800/50"
+                  : trend.trend === "down"
+                    ? "bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-800/50"
+                    : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:hover:bg-yellow-800/50"
+                : "bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"
+            }`}
+          >
+            <BarChart height={16} className="mr-1" />
+            {trend
+              ? trend.trend === "up"
+                ? `${trend.deltaPct}% ↗`
+                : trend.trend === "down"
+                  ? `${trend.deltaPct}% ↘`
+                  : `${trend.deltaPct}% →`
+              : "–"}
+          </Link>
+        ) : null}
       </div>
     </div>
   );

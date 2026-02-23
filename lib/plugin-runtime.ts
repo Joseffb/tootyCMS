@@ -157,7 +157,20 @@ async function maybeRegisterPluginHooks(
   const capabilities = toRuntimeCapabilities(plugin);
   const absEntry = path.join(getPluginsDir(), pluginId, "index.mjs");
   try {
-    const mod = await import(pathToFileURL(absEntry).href);
+    // Bypass bundler module resolution so external plugin paths (PLUGINS_PATH) load reliably.
+    const nativeImport = new Function("specifier", "return import(specifier);") as (specifier: string) => Promise<any>;
+    const entryCandidates = [pathToFileURL(absEntry).href, absEntry];
+    let mod: any = null;
+    let lastImportError: unknown = null;
+    for (const entry of entryCandidates) {
+      try {
+        mod = await nativeImport(entry);
+        break;
+      } catch (error: any) {
+        lastImportError = error;
+      }
+    }
+    if (!mod) throw lastImportError ?? new Error("Plugin runtime import failed");
     if (typeof mod?.register === "function") {
       const guardedKernel = createGuardedKernelView(plugin, kernel, capabilities);
       const guardedApi = createPluginExtensionApi(pluginId, {

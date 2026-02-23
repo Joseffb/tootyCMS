@@ -9,16 +9,28 @@ import {
 import { resolveAnalyticsSiteId } from "@/lib/analytics-site";
 import { normalizeAnalyticsEvent } from "@/lib/analytics-events";
 import { emitAnalyticsEvent } from "@/lib/analytics-dispatch";
+import { isLocalHostLike } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 
+function firstHeaderValue(raw: string | null) {
+  if (!raw) return "";
+  return raw.split(",")[0]?.trim() || "";
+}
+
+function isLocalRequest(req: NextRequest) {
+  const host = firstHeaderValue(req.headers.get("x-forwarded-host")) || firstHeaderValue(req.headers.get("host"));
+  return isLocalHostLike(host);
+}
+
 export async function POST(req: NextRequest) {
+  const localRequest = isLocalRequest(req);
   const gpcEnabled = isGpcEnabled(req.headers.get("sec-gpc"));
   const consent = parseAnalyticsConsent(
     req.cookies.get(ANALYTICS_CONSENT_COOKIE)?.value ??
       req.cookies.get(LEGACY_ANALYTICS_CONSENT_COOKIE)?.value,
   );
-  if (!shouldCollectAnalytics({ consent, gpcEnabled })) {
+  if (!localRequest && !shouldCollectAnalytics({ consent, gpcEnabled })) {
     return new NextResponse("Analytics disabled by privacy preference", { status: 202 });
   }
 

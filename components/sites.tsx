@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import SiteCard from "./site-card";
 import { getSiteUrlSetting } from "@/lib/cms-config";
 import { getRootSiteUrl } from "@/lib/site-url";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
 
 export default async function Sites({ limit }: { limit?: number }) {
   const session = await getSession();
@@ -20,11 +21,18 @@ export default async function Sites({ limit }: { limit?: number }) {
 
   const siteUrlSetting = await getSiteUrlSetting();
   const rootUrl = siteUrlSetting.value.trim() || getRootSiteUrl();
+  const siteCards = await Promise.all(
+    sites.map(async (site) => {
+      const kernel = await createKernelForRequest(site.id);
+      const hasAnalytics = kernel.hasFilter("analytics:query");
+      return { site, hasAnalytics };
+    }),
+  );
 
-  return sites.length > 0 ? (
+  return siteCards.length > 0 ? (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {sites.map((site) => (
-        <SiteCard key={site.id} data={site} rootUrl={rootUrl} />
+      {siteCards.map(({ site, hasAnalytics }) => (
+        <SiteCard key={site.id} data={site} rootUrl={rootUrl} hasAnalytics={hasAnalytics} />
       ))}
     </div>
   ) : (

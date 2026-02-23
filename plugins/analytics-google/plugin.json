@@ -17,13 +17,6 @@
   },
   "settingsFields": [
     {
-      "key": "providerKey",
-      "label": "Provider Key",
-      "type": "text",
-      "placeholder": "google",
-      "defaultValue": "google"
-    },
-    {
       "key": "measurementId",
       "label": "Measurement ID",
       "type": "text",

@@ -1,0 +1,41 @@
+{
+  "id": "hello-teety",
+  "name": "Hello Teety",
+  "description": "A Teety quote plugin that surfaces broody rockstar energy in admin.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
+  "scope": "core",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Hello Teety",
+    "path": "/app/plugins/hello-teety"
+  },
+  "settingsFields": [
+    {
+      "key": "showWidget",
+      "label": "Show Floating Widget",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "showInDebug",
+      "label": "Show quote in debug traces",
+      "type": "checkbox"
+    }
+  ],
+  "editor": {
+    "snippets": [
+      {
+        "id": "teety-quote",
+        "title": "Insert Teety Quote",
+        "description": "Add default Teety quote callout.",
+        "content": "> \"Already done.\"\n\n— Teety"
+      }
+    ]
+  }
+}

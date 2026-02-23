@@ -1,5 +1,3 @@
-import { NextResponse } from "next/server";
-
 const DATASOURCE = "website_visitors";
 const DEFAULT_HOST = "https://api.us-east.aws.tinybird.co";
 const ALLOWED_PIPES = new Set([
@@ -15,19 +13,42 @@ function providerKey() {
   return String(process.env.ANALYTICS_TINYBIRD_KEY || "tinybird").trim().toLowerCase();
 }
 
+function runtimeStage() {
+  const explicit = String(process.env.ANALYTICS_RUNTIME_ENV || "").trim().toLowerCase();
+  if (["local", "development", "preview", "production"].includes(explicit)) return explicit;
+  const vercelEnv = String(process.env.VERCEL_ENV || "").trim().toLowerCase();
+  if (["development", "preview", "production"].includes(vercelEnv)) return vercelEnv;
+  return process.env.NODE_ENV === "production" ? "production" : "development";
+}
+
+function envByStage(base) {
+  const stage = runtimeStage();
+  const map = {
+    local: [`${base}_LOCAL`, `${base}_DEVELOPMENT`, base],
+    development: [`${base}_DEVELOPMENT`, `${base}_LOCAL`, base],
+    preview: [`${base}_PREVIEW`, `${base}_DEVELOPMENT`, base],
+    production: [`${base}_PRODUCTION`, base],
+  };
+  for (const key of map[stage] || [base]) {
+    const value = String(process.env[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
 function host() {
-  return String(process.env.ANALYTICS_TINYBIRD_HOST || process.env.NEXT_PUBLIC_TB_HOST || DEFAULT_HOST).trim();
+  return envByStage("ANALYTICS_TINYBIRD_HOST") || String(process.env.NEXT_PUBLIC_TB_HOST || DEFAULT_HOST).trim();
 }
 
 function dashboardToken() {
-  return String(process.env.ANALYTICS_TINYBIRD_DASH_TOKEN || process.env.TB_DASH_TOKEN || "").trim();
+  return envByStage("ANALYTICS_TINYBIRD_DASH_TOKEN") || String(process.env.TB_DASH_TOKEN || "").trim();
 }
 
 function ingestToken() {
-  return String(process.env.ANALYTICS_TINYBIRD_INGEST_TOKEN || process.env.TB_INGEST_TOKEN || "").trim();
+  return envByStage("ANALYTICS_TINYBIRD_INGEST_TOKEN") || String(process.env.TB_INGEST_TOKEN || "").trim();
 }
 
-function shouldHandleProvider(context = {}, key = providerKey()) {
+function shouldHandleProvider(context = {}, key = "tinybird") {
   const requested = String(context?.params?.provider || "").trim().toLowerCase();
   return !requested || requested === key;
 }
@@ -41,7 +62,7 @@ function shouldForwardEvent(event = {}) {
 }
 
 function withJsonContentType(res) {
-  return new NextResponse(res.body, {
+  return new Response(res.body, {
     status: res.status,
     headers: { "Content-Type": "application/json" },
   });
@@ -50,17 +71,14 @@ function withJsonContentType(res) {
 export async function register(kernel, api) {
   kernel.addFilter("analytics:query", async (current, context = {}) => {
     if (current) return current;
-    const providerKeyValue = String((await api?.getPluginSetting?.("providerKey", providerKey())) || providerKey())
-      .trim()
-      .toLowerCase();
-    if (!shouldHandleProvider(context, providerKeyValue)) return current;
+    if (!shouldHandleProvider(context, providerKey())) return current;
 
     const name = String(context?.name || "").trim();
-    if (!name) return new NextResponse("Missing query name", { status: 400 });
-    if (!ALLOWED_PIPES.has(name)) return new NextResponse("Pipe not allowed", { status: 403 });
+    if (!name) return new Response("Missing query name", { status: 400 });
+    if (!ALLOWED_PIPES.has(name)) return new Response("Pipe not allowed", { status: 403 });
 
     const token = String((await api?.getPluginSetting?.("dashboardToken", dashboardToken())) || "").trim();
-    if (!token) return new NextResponse("Tinybird dashboard token missing", { status: 202 });
+    if (!token) return new Response("Tinybird dashboard token missing", { status: 202 });
 
     const params = new URLSearchParams(context?.params || {});
     const rawDomain = params.get("domain");
@@ -73,13 +91,12 @@ export async function register(kernel, api) {
     params.delete("provider");
 
     const qs = params.toString();
-    const apiHost = String((await api?.getPluginSetting?.("host", host())) || "").trim() || host();
-    const url = `${apiHost}/v0/pipes/${name}.json?token=${token}${qs ? `&${qs}` : ""}`;
+    const url = `${host()}/v0/pipes/${name}.json?token=${token}${qs ? `&${qs}` : ""}`;
     try {
       const res = await fetch(url, { cache: "no-store" });
       return withJsonContentType(res);
     } catch {
-      return new NextResponse("Tinybird query error", { status: 202 });
+      return new Response("Tinybird query error", { status: 202 });
     }
   });
 
@@ -88,8 +105,6 @@ export async function register(kernel, api) {
 
     const token = String((await api?.getPluginSetting?.("ingestToken", ingestToken())) || "").trim();
     if (!token) return;
-
-    const apiHost = String((await api?.getPluginSetting?.("host", host())) || "").trim() || host();
 
     const payload = {
       event_name: String(event.name || "custom_event"),
@@ -103,7 +118,7 @@ export async function register(kernel, api) {
     };
 
     try {
-      await fetch(`${apiHost}/v0/events?name=${DATASOURCE}`, {
+      await fetch(`${host()}/v0/events?name=${DATASOURCE}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

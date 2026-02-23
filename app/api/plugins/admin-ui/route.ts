@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
-import { listPluginsWithSiteState } from "@/lib/plugins";
 
 type EnvironmentBadge = {
   show?: boolean;
@@ -26,14 +25,7 @@ export async function GET(request: Request) {
   const siteId = url.searchParams.get("siteId")?.trim() || "";
   const environment = process.env.NODE_ENV === "development" ? "development" : "production";
   const kernel = await createKernelForRequest(siteId || undefined);
-  const plugins = siteId ? await listPluginsWithSiteState(siteId) : [];
-  const hasAnalyticsProviders = plugins.some(
-    (plugin) =>
-      (plugin.scope || "site") === "site" &&
-      plugin.id.startsWith("analytics-") &&
-      plugin.enabled &&
-      plugin.siteEnabled,
-  );
+  const hasAnalyticsProviders = kernel.hasFilter("analytics:query");
 
   const badge = await kernel.applyFilters<EnvironmentBadge | null>("admin:environment-badge", null, {
     siteId: siteId || null,

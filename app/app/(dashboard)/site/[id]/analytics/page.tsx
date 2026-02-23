@@ -41,7 +41,7 @@ export default async function Page({ params }: PageProps) {
   });
   const configuredSiteUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
   const publicUrl = configuredSiteUrl || derivedUrl;
-  const domain = configuredSiteUrl
+  const configuredHost = configuredSiteUrl
     ? (() => {
         try {
           return new URL(configuredSiteUrl).host;
@@ -49,7 +49,8 @@ export default async function Page({ params }: PageProps) {
           return configuredSiteUrl.replace(/^https?:\/\//, "");
         }
       })()
-    : derivedHost;
+    : "";
+  const domain = process.env.NODE_ENV === "development" ? derivedHost : configuredHost || derivedHost;
 
   return (
     <>
@@ -69,7 +70,7 @@ export default async function Page({ params }: PageProps) {
         </div>
       </div>
 
-      <SiteAnalyticsCharts domain={domain} />
+      <SiteAnalyticsCharts domain={domain} siteId={site.id} />
     </>
   );
 }

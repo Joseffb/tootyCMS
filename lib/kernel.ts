@@ -111,6 +111,10 @@ export class Kernel {
     return current as T;
   }
 
+  hasFilter(name: KernelFilterName) {
+    return (this.filters.get(name)?.length ?? 0) > 0;
+  }
+
   registerMenuLocation(location: MenuLocation) {
     this.menuLocations.add(location);
     if (!this.menuItems.has(location)) {

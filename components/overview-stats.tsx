@@ -91,8 +91,8 @@ export default function OverviewStats() {
     : 0;
 
   return (
-    <div className="grid gap-6 sm:grid-cols-2">
-      <Card className="dark:!bg-stone-900">
+    <div className="w-full">
+      <Card className="w-full dark:!bg-stone-900">
         <Text>Total Visitors (YTD)</Text>
         <Flex
           className="space-x-3"

@@ -15,13 +15,5 @@
     "label": "Vercel Analytics",
     "path": "/app/plugins/analytics-vercel"
   },
-  "settingsFields": [
-    {
-      "key": "providerKey",
-      "label": "Provider Key",
-      "type": "text",
-      "placeholder": "vercel",
-      "defaultValue": "vercel"
-    }
-  ]
+  "settingsFields": []
 }

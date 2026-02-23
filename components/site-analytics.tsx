@@ -26,20 +26,26 @@ function stripPort(host: string) {
   return host.replace(/:\d+$/, '');
 }
 
-async function fetchPipe<T>(pipe: string, domain: string): Promise<T | null> {
+async function fetchPipe<T>(pipe: string, domain: string, siteId?: string): Promise<T | null> {
   const qs = new URLSearchParams({
     name:   pipe,
     domain: stripPort(domain),
+    ...(siteId ? { siteId } : {}),
   }).toString();
 
   const res = await fetch(`/api/analytics/query?${qs}`);
-  if (!res.ok) {
+  const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+  if (!res.ok || !contentType.includes("application/json")) {
     if (process.env.NEXT_PUBLIC_DEBUG_MODE === "1" || process.env.NEXT_PUBLIC_DEBUG_MODE === "true") {
       console.warn('[analytics query]', pipe, await res.text());
     }
     return null;
   }
-  return (await res.json()).data as T;
+  try {
+    return (await res.json()).data as T;
+  } catch {
+    return null;
+  }
 }
 
 function toBar(rows: any[], key: 'page' | 'source' | 'country' | 'device'): ListRow[] {
@@ -51,9 +57,9 @@ function toBar(rows: any[], key: 'page' | 'source' | 'country' | 'device'): List
 }
 
 /* ---------- component ---------- */
-interface Props { domain: string }        // e.g. "lexia.example.com"
+interface Props { domain: string; siteId?: string }        // e.g. "lexia.example.com"
 
-export default function SiteAnalyticsCharts({ domain }: Props) {
+export default function SiteAnalyticsCharts({ domain, siteId }: Props) {
   const d = stripPort(domain);            // normalised once
 
   const [spark, setSpark] = useState<SparkRow[]>([]);
@@ -64,22 +70,22 @@ export default function SiteAnalyticsCharts({ domain }: Props) {
 
   useEffect(() => {
     (async () => {
-      const s = await fetchPipe<SparkRow[]>('visitors_per_day', d);
+      const s = await fetchPipe<SparkRow[]>('visitors_per_day', d, siteId);
       if (s) setSpark(s);
 
-      const p = await fetchPipe<PageRow[]> ('top_pages',      d);
+      const p = await fetchPipe<PageRow[]> ('top_pages',      d, siteId);
       if (p) setPages(toBar(p, 'page'));
 
-      const r = await fetchPipe<RefRow[]>  ('top_sources',  d);
+      const r = await fetchPipe<RefRow[]>  ('top_sources',  d, siteId);
       if (r) setRefs(toBar(r, 'source'));
 
-      const c = await fetchPipe<CtryRow[]> ('top_locations',      d);
+      const c = await fetchPipe<CtryRow[]> ('top_locations',      d, siteId);
       if (c) setCtrs(toBar(c, 'country'));
 
-      const de = await fetchPipe<DvcRow[]> ('top_devices',      d);
+      const de = await fetchPipe<DvcRow[]> ('top_devices',      d, siteId);
       if (de) setDvc(toBar(de, 'device'));
     })();
-  }, [d]);
+  }, [d, siteId]);
 
   const sortedSpark = [...spark].sort(
     (a, b) => Date.parse(a.date) - Date.parse(b.date),

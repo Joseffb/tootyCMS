@@ -22,31 +22,43 @@ function createKernel() {
   };
 }
 
-describe("hello-hamilton plugin", () => {
+describe("hello-teety plugin", () => {
   const getPluginSetting = vi.fn(async () => "");
+  const getSetting = vi.fn(async () => "");
 
   beforeEach(() => {
     getPluginSetting.mockReset();
+    getSetting.mockReset();
   });
 
-  it("adds floating widget for site contexts by default", async () => {
+  it("adds floating widget by default", async () => {
     const { kernel, filters } = createKernel();
-    await register(kernel as any, { getPluginSetting });
+    await register(kernel as any, { getPluginSetting, getSetting });
 
     const widgetFilter = filters.get("admin:floating-widgets")?.[0];
     const widgets = await widgetFilter!([], { siteId: "site_123" });
     expect(widgets).toHaveLength(1);
-    expect(widgets[0].id).toBe("hello-hamilton-quote");
-    expect(widgets[0].title).toBe("Hello Hamilton");
+    expect(widgets[0].id).toBe("hello-teety-quote");
+    expect(widgets[0].title).toBe("Hello Teety");
     expect(typeof widgets[0].content).toBe("string");
     expect(widgets[0].content.length).toBeGreaterThan(0);
+  });
+
+  it("adds floating widget on global admin pages without site context", async () => {
+    const { kernel, filters } = createKernel();
+    await register(kernel as any, { getPluginSetting, getSetting });
+
+    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
+    const widgets = await widgetFilter!([], {});
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].id).toBe("hello-teety-quote");
   });
 
   it("skips floating widget when showWidget is disabled", async () => {
     const { kernel, filters } = createKernel();
     getPluginSetting.mockImplementation(async (key: string) => (key === "showWidget" ? "false" : ""));
 
-    await register(kernel as any, { getPluginSetting });
+    await register(kernel as any, { getPluginSetting, getSetting });
     const widgetFilter = filters.get("admin:floating-widgets")?.[0];
     const widgets = await widgetFilter!([], { siteId: "site_123" });
     expect(widgets).toEqual([]);
@@ -55,13 +67,24 @@ describe("hello-hamilton plugin", () => {
   it("appends debug trace when showInDebug is enabled", async () => {
     const { kernel, actions } = createKernel();
     getPluginSetting.mockImplementation(async (key: string) => (key === "showInDebug" ? "true" : ""));
-    await register(kernel as any, { getPluginSetting });
+    await register(kernel as any, { getPluginSetting, getSetting });
 
     const requestBegin = actions.get("request:begin")?.[0];
     const context: Record<string, unknown> = { debug: true };
     await requestBegin!(context);
     expect(Array.isArray(context.trace)).toBe(true);
-    expect(String((context.trace as string[])[0])).toContain("hello-hamilton:");
+    expect(String((context.trace as string[])[0])).toContain("hello-teety:");
+  });
+
+  it("uses tooty-dark specific quote pool when site theme is tooty-dark", async () => {
+    const { kernel, filters } = createKernel();
+    getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "tooty-dark" : ""));
+    await register(kernel as any, { getPluginSetting, getSetting });
+
+    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
+    const widgets = await widgetFilter!([], { siteId: "site_123" });
+    expect(widgets).toHaveLength(1);
+    const quote = String(widgets[0].content);
+    expect(quote.length).toBeGreaterThan(0);
   });
 });
-
