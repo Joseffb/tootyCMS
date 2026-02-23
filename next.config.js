@@ -1,6 +1,8 @@
 /**
  * @type {import("next").NextConfig}
  */
+const { withBotId } = require("botid/next/config");
+
 function normalizeHost(input) {
   return (input || "")
     .trim()
@@ -52,7 +54,7 @@ function collectAllowedOrigins() {
   return [...origins].filter(Boolean);
 }
 
-module.exports = {
+const nextConfig = {
   turbopack: {
     root: __dirname,
   },
@@ -80,3 +82,5 @@ module.exports = {
     ],
   },
 };
+
+module.exports = withBotId(nextConfig);

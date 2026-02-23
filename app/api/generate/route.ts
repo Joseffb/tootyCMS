@@ -2,6 +2,7 @@ import { Configuration, OpenAIApi } from "openai-edge";
 import { OpenAIStream, StreamingTextResponse } from "ai";
 import { kv } from "@vercel/kv";
 import { Ratelimit } from "@upstash/ratelimit";
+import { evaluateBotIdRoute } from "@/lib/botid";
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
 const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
@@ -15,6 +16,11 @@ export const runtime = "edge";
 export async function POST(req: Request): Promise<Response> {
   if (!openaiApiKey) {
     return new Response("OPENAI_API_KEY is not configured.", { status: 503 });
+  }
+
+  const botId = await evaluateBotIdRoute("api_generate");
+  if (!botId.allowed) {
+    return new Response("Request blocked by BotID policy.", { status: 403 });
   }
 
   if (
@@ -79,5 +85,10 @@ export async function POST(req: Request): Promise<Response> {
   const stream = OpenAIStream(response);
 
   // Respond with the stream
-  return new StreamingTextResponse(stream);
+  return new StreamingTextResponse(stream, {
+    headers: {
+      "x-tooty-botid-mode": botId.mode,
+      "x-tooty-botid-result": botId.reason,
+    },
+  });
 }

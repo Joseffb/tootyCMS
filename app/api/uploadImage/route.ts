@@ -6,6 +6,7 @@ import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
 import { and, eq, inArray } from "drizzle-orm";
 import { buildMediaVariants } from "@/lib/media-variants";
+import { evaluateBotIdRoute } from "@/lib/botid";
 
 const MAX_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 
@@ -20,6 +21,17 @@ function safeSegment(value: string) {
 
 export async function POST(req: Request) {
   try {
+    const botId = await evaluateBotIdRoute("api_upload_image");
+    if (!botId.allowed) {
+      return NextResponse.json(
+        {
+          error: "Request blocked by BotID policy.",
+          code: "BOTID_BLOCKED",
+        },
+        { status: 403 },
+      );
+    }
+
     const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
     trace("upload.api.blob", "request start", { traceId });
     if (process.env.NO_IMAGE_MODE === "true") {

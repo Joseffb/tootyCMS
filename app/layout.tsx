@@ -7,6 +7,7 @@ import type { Metadata } from "next";
 import { cn } from "@/lib/utils";
 import AnalyticsConditional from "@/components/analytics-conditional";
 import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
+import { BotIdClient } from "botid/client";
 
 const title = "Tooty CMS";
 const description =
@@ -62,6 +63,12 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={cn(cal.variable, inter.variable)}>
+        <BotIdClient
+          protect={[
+            { path: "/api/generate", method: "POST" },
+            { path: "/api/uploadImage", method: "POST" },
+          ]}
+        />
         <AnalyticsConditional />
         <Providers>{children}</Providers>
       </body>
