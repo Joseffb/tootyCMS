@@ -74,6 +74,11 @@ export default async function middleware(req: NextRequest) {
     hostname = hostname.replace(".localhost", `.${normalizedRootDomain}`);
   }
 
+  // In local dev/e2e we route *.test through localhost semantics.
+  if (normalizedRootDomain === "localhost" && hostname.endsWith(".test")) {
+    hostname = hostname.replace(/\.test$/, ".localhost");
+  }
+
   // Normalize Vercel preview deployment URLs
   if (
     hostname.includes("---") &&

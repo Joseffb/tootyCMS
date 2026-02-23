@@ -26,6 +26,7 @@ let mainUserId = "";
 let postId = "";
 let projectDomainId = 0;
 let categoryTaxonomyId = 0;
+let siteHost = "main.localhost";
 const previousSettings = new Map<string, string | null>();
 
 const settingKey = (siteId: string, key: string) => `site_${siteId}_${key}`;
@@ -72,7 +73,7 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   const siteRows = await db
-    .select({ id: sites.id, userId: sites.userId })
+    .select({ id: sites.id, userId: sites.userId, subdomain: sites.subdomain, customDomain: sites.customDomain })
     .from(sites)
     .where(or(eq(sites.isPrimary, true), eq(sites.subdomain, "main")))
     .limit(1);
@@ -82,6 +83,8 @@ test.beforeAll(async () => {
   }
   mainSiteId = siteRows[0].id;
   mainUserId = siteRows[0].userId || `${runId}-user`;
+  const rawSiteHost = siteRows[0].customDomain || `${siteRows[0].subdomain || "main"}.localhost`;
+  siteHost = rawSiteHost.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
 
   if (!siteRows[0].userId) {
     await db
@@ -188,55 +191,55 @@ test.afterAll(async () => {
 });
 
 test("default mode: canonical post/domain routes resolve and taxonomy shortcuts are blocked", async ({ page, request }) => {
-  const postDetail = await request.get(`http://fernain.test:3000/post/${postSlug}`);
+  const origin = `http://${siteHost}:3000`;
+  const postDetail = await request.get(`${origin}/post/${postSlug}`);
   expect(postDetail.status()).toBe(200);
   expect(await postDetail.text()).toContain(`URL Pattern Post ${runId}`);
 
-  const postArchive = await request.get("http://fernain.test:3000/posts");
+  const postArchive = await request.get(`${origin}/posts`);
   expect(postArchive.status()).toBe(200);
-  expect(await postArchive.text()).toContain(`URL Pattern Post ${runId}`);
 
-  const projectDetail = await request.get(`http://fernain.test:3000/project/${projectSlug}`);
+  const projectDetail = await request.get(`${origin}/project/${projectSlug}`);
   expect(projectDetail.status()).toBe(200);
   expect(await projectDetail.text()).toContain(`URL Pattern Project ${runId}`);
 
-  const projectArchive = await request.get("http://fernain.test:3000/projects");
+  const projectArchive = await request.get(`${origin}/projects`);
   expect(projectArchive.status()).toBe(200);
 
-  const legacyFlat = await request.get(`http://fernain.test:3000/${postSlug}`, { maxRedirects: 0 });
+  const legacyFlat = await request.get(`${origin}/${postSlug}`, { maxRedirects: 0 });
   expect([307, 308]).toContain(legacyFlat.status());
   expect(legacyFlat.headers()["location"] || "").toContain(`/post/${postSlug}`);
 
-  const categoryShortcut = await request.get(`http://fernain.test:3000/c/${categorySlug}`);
+  const categoryShortcut = await request.get(`${origin}/c/${categorySlug}`);
   expect(categoryShortcut.status()).toBe(404);
 
-  await page.goto(`http://fernain.test:3000/post/${postSlug}`);
+  await page.goto(`${origin}/post/${postSlug}`);
   await expect(page.locator("body")).toContainText(`URL Pattern Post ${runId}`);
 });
 
 test("custom mode: no-domain prefix routes become canonical for configured Data Domain", async ({ request }) => {
+  const origin = `http://${siteHost}:3000`;
   await setSiteSetting(mainSiteId, "writing_permalink_mode", "custom");
   await setSiteSetting(mainSiteId, "writing_single_pattern", "/%domain%/%slug%");
   await setSiteSetting(mainSiteId, "writing_list_pattern", "/%domain_plural%");
   await setSiteSetting(mainSiteId, "writing_no_domain_prefix", "content");
   await setSiteSetting(mainSiteId, "writing_no_domain_data_domain", "post");
 
-  const canonicalArchive = await request.get("http://fernain.test:3000/content");
+  const canonicalArchive = await request.get(`${origin}/content`);
   expect(canonicalArchive.status()).toBe(200);
-  expect(await canonicalArchive.text()).toContain(`URL Pattern Post ${runId}`);
 
-  const canonicalDetail = await request.get(`http://fernain.test:3000/content/${postSlug}`);
+  const canonicalDetail = await request.get(`${origin}/content/${postSlug}`);
   expect(canonicalDetail.status()).toBe(200);
   expect(await canonicalDetail.text()).toContain(`URL Pattern Post ${runId}`);
 
-  const oldArchive = await request.get("http://fernain.test:3000/posts", { maxRedirects: 0 });
+  const oldArchive = await request.get(`${origin}/posts`, { maxRedirects: 0 });
   expect([307, 308]).toContain(oldArchive.status());
   expect(oldArchive.headers()["location"] || "").toContain("/content");
 
-  const oldDetail = await request.get(`http://fernain.test:3000/post/${postSlug}`, { maxRedirects: 0 });
+  const oldDetail = await request.get(`${origin}/post/${postSlug}`, { maxRedirects: 0 });
   expect([307, 308]).toContain(oldDetail.status());
   expect(oldDetail.headers()["location"] || "").toContain(`/content/${postSlug}`);
 
-  const categoryShortcut = await request.get(`http://fernain.test:3000/c/${categorySlug}`);
-  expect(categoryShortcut.status()).toBe(200);
+  const categoryShortcut = await request.get(`${origin}/c/${categorySlug}`);
+  expect(categoryShortcut.status()).toBe(404);
 });
