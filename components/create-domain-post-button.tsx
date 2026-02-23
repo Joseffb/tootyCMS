@@ -5,7 +5,6 @@ import { createDomainPost } from "@/lib/actions";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import LoadingDots from "@/components/icons/loading-dots";
-import va from "@vercel/analytics";
 
 export default function CreateDomainPostButton({
   siteId,
@@ -25,7 +24,6 @@ export default function CreateDomainPostButton({
         startTransition(async () => {
           const post = await createDomainPost(null, siteId, domainKey);
           if ((post as any)?.error) return;
-          va.track("Created Domain Post", { domainKey });
           router.refresh();
           router.push(`/site/${siteId}/domain/${domainKey}/post/${post.id}`);
         })

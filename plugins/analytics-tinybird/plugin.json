@@ -1,0 +1,39 @@
+{
+  "id": "analytics-tinybird",
+  "name": "Tinybird Analytics",
+  "description": "Analytics provider plugin using Tinybird pipes/events through generic analytics hooks.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.2.x",
+  "scope": "site",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Tinybird Analytics",
+    "path": "/app/plugins/analytics-tinybird"
+  },
+  "settingsFields": [
+    {
+      "key": "enabled",
+      "label": "Enable Provider",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "providerKey",
+      "label": "Provider Key",
+      "type": "text",
+      "placeholder": "tinybird",
+      "defaultValue": "tinybird"
+    },
+    {
+      "key": "host",
+      "label": "API Host (optional)",
+      "type": "text",
+      "placeholder": "https://api.us-east.aws.tinybird.co"
+    }
+  ]
+}

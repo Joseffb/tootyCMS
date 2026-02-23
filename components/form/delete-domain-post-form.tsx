@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { deleteDomainPost } from "@/lib/actions";
-import va from "@vercel/analytics";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -39,7 +38,6 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
           toast.error((res as any).error);
           return;
         }
-        va.track("Deleted Domain Post", { domainKey });
         router.refresh();
         router.push(`/site/${siteId}/domain/${domainKey}`);
         toast.success("Successfully deleted entry.");

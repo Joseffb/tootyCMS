@@ -6,7 +6,6 @@ import { useParams, useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { deleteSite } from "@/lib/actions";
-import va from "@vercel/analytics";
 import { useEffect, useState } from "react";
 
 type Props = {
@@ -35,7 +34,6 @@ export default function DeleteSiteForm({ siteName }: Props) {
             if (res.error) {
               toast.error(res.error);
             } else {
-              va.track("Deleted Site");
               router.refresh();
               router.push("/sites");
               toast.success(`Successfully deleted site!`);

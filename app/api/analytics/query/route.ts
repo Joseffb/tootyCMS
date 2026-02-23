@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { resolveAnalyticsSiteId } from "@/lib/analytics-site";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const kernel = await createKernelForRequest();
   const incoming = new URL(req.url);
   const name = incoming.searchParams.get("name");
   if (!name) return new NextResponse("Missing ?name=", { status: 400 });
+  const siteId = await resolveAnalyticsSiteId({
+    headers: req.headers,
+    domainHint: incoming.searchParams.get("domain"),
+  });
+  const kernel = await createKernelForRequest(siteId);
 
   const response = await kernel.applyFilters<Response | NextResponse | null>(
     "analytics:query",

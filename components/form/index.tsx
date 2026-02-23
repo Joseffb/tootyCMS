@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import DomainStatus from "./domain-status";
 import DomainConfiguration from "./domain-configuration";
 import Uploader from "./uploader";
-import va from "@vercel/analytics";
 
 interface FormProps {
   title: string;
@@ -66,7 +65,6 @@ export default function Form({
           if (res.error) {
             toast.error(res.error);
           } else {
-            va.track(`Updated ${inputAttrs.name}`, id ? { id } : {});
             if (id) {
               router.refresh();
             } else {

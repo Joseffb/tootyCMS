@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { deletePost } from "@/lib/actions";
-import va from "@vercel/analytics";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -72,7 +71,6 @@ export default function DeletePostForm({ postName }: Props) {
                   toast.error(res.error);
                 } else {
                   setIsModalOpen(false);
-                  va.track("Deleted Post");
                   router.refresh();
                   router.push(`/site/${res.siteId}`);
                   toast.success(`Successfully deleted post!`);

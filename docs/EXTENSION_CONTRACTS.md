@@ -56,6 +56,60 @@ Plugins may:
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
 - Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`)
+- Declare plugin scope explicitly:
+  - `scope: "core"` = MU-style plugin. When globally enabled, it runs across all sites.
+  - `scope: "site"` = site plugin. It must be globally enabled and explicitly enabled per site.
+
+Scope governance:
+
+- Core (MU-style) plugins are for network-wide behavior and platform operations.
+- Site plugins are for tenant/site-owned behavior, integrations, and content features.
+- Analytics providers and consent/GDPR behavior should be implemented as `scope: "site"` plugins.
+
+### Analytics Contract (MUST)
+
+Core owns analytics event semantics and dispatch:
+
+- Canonical event names (example: `page_view`, `content_published`, `content_deleted`, `custom_event`)
+- Canonical payload envelope and timing
+- Consent gate before dispatch
+- Canonical envelope versioning (`version: 1` current)
+
+Analytics plugins are transport adapters only:
+
+- Subscribe to `analytics:event` to forward events to a provider.
+- Optionally expose query adapters via `analytics:query`.
+- Optionally expose script adapters via `analytics:scripts`.
+- Must not redefine core event names or schema semantics.
+
+Canonical analytics envelope (`analytics:event` payload):
+
+- `version: 1` (required)
+- `name: "page_view" | "content_published" | "content_deleted" | "custom_event"` (required)
+- `timestamp: ISO-8601` (required)
+- `payload: Record<string, unknown>` (required)
+- `siteId?: string`
+- `domain?: string`
+- `path?: string`
+- `actorType?: "anonymous" | "user" | "admin" | "system"`
+- `actorId?: string`
+- `meta?: Record<string, unknown>` (reserved extensibility bag)
+
+Analytics query contract (`analytics:query`):
+
+- Input context includes `name` and `params`.
+- Plugin returns an HTTP `Response`/`NextResponse` or `null` (no-op).
+- Core keeps provider-neutral fallback when no plugin handles a query.
+
+Analytics scripts contract (`analytics:scripts`):
+
+- Plugin returns script descriptors only (transport layer), not event semantics.
+- Descriptor shape:
+  - `id: string` (required)
+  - `src?: string`
+  - `inline?: string`
+  - `strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive"`
+  - `attrs?: Record<string, string>`
 
 Plugins may not:
 

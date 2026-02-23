@@ -1,0 +1,39 @@
+{
+  "id": "analytics-google",
+  "name": "Google Analytics",
+  "description": "Site-level provider plugin slot for Google Analytics integration.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.2.x",
+  "scope": "site",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Google Analytics",
+    "path": "/app/plugins/analytics-google"
+  },
+  "settingsFields": [
+    {
+      "key": "enabled",
+      "label": "Enable Provider",
+      "type": "checkbox",
+      "defaultValue": false
+    },
+    {
+      "key": "providerKey",
+      "label": "Provider Key",
+      "type": "text",
+      "placeholder": "google",
+      "defaultValue": "google"
+    },
+    {
+      "key": "measurementId",
+      "label": "Measurement ID",
+      "type": "text",
+      "placeholder": "G-XXXXXXXXXX"
+    }
+  ]
+}

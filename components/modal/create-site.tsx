@@ -7,7 +7,6 @@ import { useFormStatus } from "react-dom";
 import { cn } from "@/lib/utils";
 import LoadingDots from "@/components/icons/loading-dots";
 import { useModal } from "./provider";
-import va from "@vercel/analytics";
 import { useEffect, useState } from "react";
 
 export default function CreateSiteModal() {
@@ -37,7 +36,6 @@ export default function CreateSiteModal() {
           if (res.error) {
             toast.error(res.error);
           } else {
-            va.track("Created Site");
             const { id } = res;
             router.refresh();
             router.push(`/site/${id}`);

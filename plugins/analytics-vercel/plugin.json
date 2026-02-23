@@ -1,0 +1,33 @@
+{
+  "id": "analytics-vercel",
+  "name": "Vercel Analytics",
+  "description": "Site-level provider plugin slot for Vercel analytics integration.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.2.x",
+  "scope": "site",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Vercel Analytics",
+    "path": "/app/plugins/analytics-vercel"
+  },
+  "settingsFields": [
+    {
+      "key": "enabled",
+      "label": "Enable Provider",
+      "type": "checkbox",
+      "defaultValue": false
+    },
+    {
+      "key": "providerKey",
+      "label": "Provider Key",
+      "type": "text",
+      "placeholder": "vercel",
+      "defaultValue": "vercel"
+    }
+  ]
+}

@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import CookieConsent from 'react-cookie-consent';
-import { Analytics } from '@vercel/analytics/react';
 import { track } from '@/components/track';
 import Cookies from 'js-cookie';
 import { usePathname } from "next/navigation";
+import Script from "next/script";
 import {
   ANALYTICS_CONSENT_COOKIE,
   LEGACY_ANALYTICS_CONSENT_COOKIE,
@@ -24,6 +24,13 @@ export default function AnalyticsConditional() {
     );
     return shouldCollectAnalytics({ consent, gpcEnabled: false });
   });
+  const [scripts, setScripts] = useState<Array<{
+    id: string;
+    src?: string;
+    inline?: string;
+    strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive";
+    attrs?: Record<string, string>;
+  }>>([]);
 
   const persistConsent = (value: "true" | "false", expires: Date | number) => {
     Cookies.set(ANALYTICS_CONSENT_COOKIE, value, { expires, path: "/" });
@@ -48,6 +55,19 @@ export default function AnalyticsConditional() {
       track(window.location.pathname);
     }
   }, [allowed]);
+
+  useEffect(() => {
+    if (!allowed || isAdminArea) {
+      setScripts([]);
+      return;
+    }
+    fetch("/api/analytics/scripts", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : { scripts: [] }))
+      .then((json) => {
+        setScripts(Array.isArray(json?.scripts) ? json.scripts : []);
+      })
+      .catch(() => setScripts([]));
+  }, [allowed, isAdminArea]);
 
   return (
     <>
@@ -88,7 +108,26 @@ export default function AnalyticsConditional() {
         We use anonymous analytics to improve this site.
       </CookieConsent>}
 
-      {!isAdminArea && allowed && <Analytics />}
+      {scripts.map((script) =>
+        script.src ? (
+          <Script
+            key={script.id}
+            id={script.id}
+            src={script.src}
+            strategy={script.strategy || "afterInteractive"}
+            {...(script.attrs || {})}
+          />
+        ) : (
+          <Script
+            key={script.id}
+            id={script.id}
+            strategy={script.strategy || "afterInteractive"}
+            {...(script.attrs || {})}
+          >
+            {script.inline || ""}
+          </Script>
+        ),
+      )}
     </>
   );
 }

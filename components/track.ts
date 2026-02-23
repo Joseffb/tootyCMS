@@ -65,7 +65,18 @@ export async function track(path: string) {
     const res = await fetch('/api/analytics/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(row) + '\n', // NDJSON newline
+      body: JSON.stringify({
+        version: 1,
+        name: "page_view",
+        timestamp: row.timestamp,
+        domain: row.domain,
+        path: row.page_url,
+        actorType: "anonymous",
+        payload: row,
+        meta: {
+          source: "client_track",
+        },
+      }),
       keepalive: true,
     });
 

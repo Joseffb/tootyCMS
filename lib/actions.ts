@@ -60,6 +60,26 @@ import {
   type ScheduleEntry,
   type SchedulerOwnerType,
 } from "./scheduler";
+import { emitAnalyticsEvent } from "@/lib/analytics-dispatch";
+
+function emitCmsLifecycleEvent(input: {
+  name: "content_published" | "content_deleted" | "custom_event";
+  siteId?: string | null;
+  payload?: Record<string, unknown>;
+}) {
+  const siteId = typeof input.siteId === "string" && input.siteId.trim() ? input.siteId : undefined;
+  return emitAnalyticsEvent({
+    version: 1,
+    name: input.name,
+    timestamp: new Date().toISOString(),
+    siteId,
+    actorType: "admin",
+    payload: input.payload || {},
+    meta: {
+      source: "server_action",
+    },
+  }).catch(() => undefined);
+}
 export const getAllCategories = async () => {
   try {
     const response = await db
@@ -1258,6 +1278,16 @@ export const createDomainPost = withSiteAuth(
     );
     site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
 
+    await emitCmsLifecycleEvent({
+      name: "custom_event",
+      siteId: site.id,
+      payload: {
+        event: "content_created",
+        contentType: domain.key,
+        contentId: response.id,
+      },
+    });
+
     return response;
   },
 );
@@ -1472,6 +1502,17 @@ export const updateDomainPostMetadata = async (
         .where(eq(domainPosts.id, post.id))
         .returning()
         .then((res) => res[0]);
+
+      if (key === "published" && nextValue === true && !post.published) {
+        await emitCmsLifecycleEvent({
+          name: "content_published",
+          siteId: post.siteId,
+          payload: {
+            contentType: "domain",
+            contentId: post.id,
+          },
+        });
+      }
     }
 
     const siteRow = post.siteId
@@ -1526,6 +1567,14 @@ export const deleteDomainPost = async (postId: string) => {
       await tx.delete(termRelationships).where(eq(termRelationships.objectId, post.id));
       await tx.delete(domainPosts).where(eq(domainPosts.id, post.id));
     });
+    await emitCmsLifecycleEvent({
+      name: "content_deleted",
+      siteId: post.siteId,
+      payload: {
+        contentType: "domain",
+        contentId: post.id,
+      },
+    });
     return { siteId: post.siteId };
   } catch (error: any) {
     return { error: error.message };
@@ -1557,6 +1606,16 @@ export const createPost = withSiteAuth(
       "max",
     );
     site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
+
+    await emitCmsLifecycleEvent({
+      name: "custom_event",
+      siteId: site.id,
+      payload: {
+        event: "content_created",
+        contentType: "post",
+        contentId: response.id,
+      },
+    });
 
     return response;
   },
@@ -1826,6 +1885,17 @@ export const updatePostMetadata = withPostAuth(
           .where(eq(posts.id, post.id))
           .returning()
           .then((res) => res[0]);
+
+        if (key === "published" && nextValue === true && !post.published) {
+          await emitCmsLifecycleEvent({
+            name: "content_published",
+            siteId: post.siteId,
+            payload: {
+              contentType: "post",
+              contentId: post.id,
+            },
+          });
+        }
       }
 
       // ♻️ Revalidate all relevant cache tags
@@ -1873,6 +1943,15 @@ export const deletePost = withPostAuth(
         .returning({
           siteId: posts.siteId,
         });
+
+      await emitCmsLifecycleEvent({
+        name: "content_deleted",
+        siteId: response?.siteId,
+        payload: {
+          contentType: "post",
+          contentId: post.id,
+        },
+      });
 
       return response;
     } catch (error: any) {
