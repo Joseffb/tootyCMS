@@ -123,6 +123,16 @@ npm run dev
 App runs at:
 - `http://localhost:3000`
 
+## Versioning Policy
+
+Tooty is currently in pre-`1.0.0` unstable development.
+
+- Version format in this phase is `0.MINOR.PATCH`.
+- In this phase, `MINOR` is treated as the unstable major line (`0.2.x`, `0.3.x`, etc.).
+- Breaking changes may occur in any `0.x` release.
+- We explicitly reserve the right to make breaking changes until the project reaches `1.x.x`.
+- After `1.x.x`, standard SemVer expectations apply (breaking changes only on major bumps).
+
 ## Setup Wizard
 
 First-run setup is available at `/setup` until setup is completed.
