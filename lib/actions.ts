@@ -2010,7 +2010,18 @@ async function requireOwnedSite(siteIdRaw: string) {
   const siteId = decodeURIComponent(siteIdRaw);
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
-    columns: { id: true, userId: true, subdomain: true, customDomain: true, isPrimary: true },
+    columns: {
+      id: true,
+      userId: true,
+      subdomain: true,
+      customDomain: true,
+      isPrimary: true,
+      name: true,
+      description: true,
+      heroSubtitle: true,
+      image: true,
+      logo: true,
+    },
   });
   if (!site || site.userId !== session.user.id) {
     return { error: "Not authorized" as const };
