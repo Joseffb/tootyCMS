@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { dbMock, getSessionMock } = vi.hoisted(() => {
   const selectQueue: any[] = [];
   const insertQueue: any[] = [];
+  const deleteQueue: any[] = [];
 
   const dbMock = {
     __pushSelectResult: (value: any) => selectQueue.push(value),
     __pushInsertResult: (value: any) => insertQueue.push(value),
+    __pushDeleteResult: (value: any) => deleteQueue.push(value),
     select: vi.fn(() => {
       const value = selectQueue.shift() ?? [];
       const chain: any = {
@@ -21,6 +23,11 @@ const { dbMock, getSessionMock } = vi.hoisted(() => {
     insert: vi.fn(() => ({
       values: vi.fn(() => ({
         returning: vi.fn(async () => insertQueue.shift() ?? []),
+      })),
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn(() => ({
+        returning: vi.fn(async () => deleteQueue.shift() ?? []),
       })),
     })),
     transaction: vi.fn(async (cb: any) =>
@@ -59,6 +66,7 @@ import {
   createCategoryByName,
   createDataDomain,
   createTagByName,
+  deletePost,
   getAllCategories,
   getAllTags,
 } from "@/lib/actions";
@@ -67,6 +75,7 @@ describe("taxonomy actions", () => {
   beforeEach(() => {
     dbMock.select.mockClear();
     dbMock.insert.mockClear();
+    dbMock.delete.mockClear();
     dbMock.transaction.mockClear();
   });
 
@@ -136,5 +145,37 @@ describe("taxonomy actions", () => {
     });
 
     process.env.CMS_DB_PREFIX = previous;
+  });
+
+  it("blocks post delete when confirmation keyword is missing", async () => {
+    const formData = new FormData();
+    formData.set("confirm", "nope");
+
+    const result = await deletePost(formData, { id: "post-1", siteId: "site-1" } as any);
+
+    expect(result).toEqual({ error: "Type delete to confirm post deletion." });
+    expect(dbMock.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes post when confirmation keyword is valid", async () => {
+    dbMock.__pushDeleteResult([{ siteId: "site-1" }]);
+    const formData = new FormData();
+    formData.set("confirm", "Delete");
+
+    const result = await deletePost(formData, { id: "post-1", siteId: "site-1" } as any);
+
+    expect(result).toEqual({ siteId: "site-1" });
+    expect(dbMock.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts lowercase delete keyword", async () => {
+    dbMock.__pushDeleteResult([{ siteId: "site-1" }]);
+    const formData = new FormData();
+    formData.set("confirm", "delete");
+
+    const result = await deletePost(formData, { id: "post-1", siteId: "site-1" } as any);
+
+    expect(result).toEqual({ siteId: "site-1" });
+    expect(dbMock.delete).toHaveBeenCalledTimes(1);
   });
 });

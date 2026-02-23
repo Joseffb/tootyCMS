@@ -1814,7 +1814,14 @@ export const updatePostMetadata = withPostAuth(
   }
 );
 export const deletePost = withPostAuth(
-  async (_: FormData, post: SelectPost) => {
+  async (formData: FormData, post: SelectPost) => {
+    const confirmation = String(formData.get("confirm") ?? "").trim().toLowerCase();
+    if (confirmation !== "delete") {
+      return {
+        error: "Type delete to confirm post deletion.",
+      };
+    }
+
     try {
       const [response] = await db
         .delete(posts)
