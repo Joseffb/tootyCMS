@@ -17,8 +17,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:integration": "set -a; source .env; set +a; playwright test",
-    "test:all": "npm run test && npm run test:integration"
+    "test:integration": "bash ./scripts/test-integration.sh",
+    "test:all": "npm run test && npm run test:integration",
+    "hooks:install": "bash ./scripts/install-git-hooks.sh"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.1.0",

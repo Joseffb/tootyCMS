@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running pre-push test gate..."
+npm run test
+npm run test:integration

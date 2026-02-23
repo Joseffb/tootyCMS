@@ -1,6 +1,6 @@
 // lib/uploadSmart.ts
 
-import { trace } from "@/lib/debug";
+import { traceClient } from "@/lib/debug-client";
 
 export async function uploadSmart({
                                     file,
@@ -12,7 +12,7 @@ export async function uploadSmart({
   siteId: string;
 }): Promise<{ url: string; filename: string }> {
   const traceId = (typeof crypto !== "undefined" && "randomUUID" in crypto) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-  trace("upload.client", "upload start", {
+  traceClient("upload.client", "upload start", {
     traceId,
     siteId,
     name,
@@ -35,10 +35,10 @@ export async function uploadSmart({
 
   if (blobRes.ok) {
     const { url, filename } = await blobRes.json();
-    trace("upload.client", "upload success via blob", { traceId, siteId, name, filename });
+    traceClient("upload.client", "upload success via blob", { traceId, siteId, name, filename });
     return { url, filename: filename ?? `${siteId}/${name}-${file.name}` };
   }
-  trace("upload.client", "blob upload failed, trying local", {
+  traceClient("upload.client", "blob upload failed, trying local", {
     traceId,
     status: blobRes.status,
   });
@@ -53,10 +53,10 @@ export async function uploadSmart({
   });
 
   if (!localRes.ok) {
-    trace("upload.client", "local upload failed", { traceId, status: localRes.status });
+    traceClient("upload.client", "local upload failed", { traceId, status: localRes.status });
     throw new Error("Local image upload failed");
   }
   const { url, filename } = await localRes.json();
-  trace("upload.client", "upload success via local", { traceId, siteId, name, filename });
+  traceClient("upload.client", "upload success via local", { traceId, siteId, name, filename });
   return { url, filename: filename ?? `${siteId}/${name}-${file.name}` };
 }

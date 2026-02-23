@@ -1566,6 +1566,7 @@ export const updatePost = async (
         .set({
           title: data.title,
           description: data.description,
+          slug: typeof data.slug === "string" ? toSeoSlug(data.slug) : undefined,
           content: data.content,
           layout: data.layout ?? null,
         })
@@ -1678,6 +1679,7 @@ export const updatePost = async (
 
     // 4. Revalidate cache tags (domain-based, matching fetchers.ts)
     const { siteId, slug } = existing;
+    const updatedSlug = postRecord?.slug ?? slug;
     if (siteId) {
       const siteRow = await db.query.sites.findFirst({
         where: eq(sites.id, siteId),
@@ -1688,10 +1690,16 @@ export const updatePost = async (
         const domain = `${siteRow.subdomain}.${rootDomain}`;
         revalidateTag(`${domain}-posts`, "max");
         revalidateTag(`${domain}-${slug}`, "max");
+        if (updatedSlug !== slug) {
+          revalidateTag(`${domain}-${updatedSlug}`, "max");
+        }
       }
       if (siteRow?.customDomain) {
         revalidateTag(`${siteRow.customDomain}-posts`, "max");
         revalidateTag(`${siteRow.customDomain}-${slug}`, "max");
+        if (updatedSlug !== slug) {
+          revalidateTag(`${siteRow.customDomain}-${updatedSlug}`, "max");
+        }
       }
     }
 

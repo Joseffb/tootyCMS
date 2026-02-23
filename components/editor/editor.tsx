@@ -100,6 +100,7 @@ type SavePostAction = (data: {
   id: string;
   title?: string | null;
   description?: string | null;
+  slug?: string;
   content?: string | null;
   layout?: string | null;
   categoryIds?: number[];
@@ -172,6 +173,15 @@ function fileNameFromUrl(url: string) {
   const segments = withoutQuery.split("/");
   const last = segments[segments.length - 1] || withoutQuery;
   return decodeURIComponent(last || "file");
+}
+
+function normalizeSlugInput(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 export default function Editor({
@@ -358,6 +368,7 @@ export default function Editor({
         id: string;
         title: string;
         description: string;
+        slug: string;
         content: string;
         layout: string | null;
         categoryIds: number[];
@@ -426,6 +437,7 @@ export default function Editor({
       id: latest.id,
       title: latest.title ?? "",
       description: latest.description ?? "",
+      slug: latest.slug ?? "",
       content,
       layout: latest.layout ?? null,
       categoryIds: selectedCategoriesRef.current,
@@ -442,6 +454,7 @@ export default function Editor({
         id: latest.id,
         title: latest.title ?? "",
         description: latest.description ?? "",
+        slug: latest.slug ?? "",
         content,
         layout: latest.layout ?? null,
         categoryIds: selectedCategoriesRef.current,
@@ -461,6 +474,7 @@ export default function Editor({
       id: latest.id,
       title: latest.title ?? "",
       description: latest.description ?? "",
+      slug: latest.slug ?? "",
       content,
       layout: latest.layout ?? null,
       categoryIds: selectedCategoriesRef.current,
@@ -475,6 +489,7 @@ export default function Editor({
         id: latest.id,
         title: latest.title ?? "",
         description: latest.description ?? "",
+        slug: latest.slug ?? "",
         content,
         layout: latest.layout ?? null,
         categoryIds: selectedCategoriesRef.current,
@@ -562,7 +577,7 @@ export default function Editor({
     if (!data?.id) return;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.title, data.description, data.layout, selectedCategories, selectedTags, metaEntries]);
+  }, [data.title, data.description, data.slug, data.layout, selectedCategories, selectedTags, metaEntries]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -736,6 +751,22 @@ export default function Editor({
             onChange={(e) => setData({ ...data, description: e.target.value })}
             className="w-full resize-none border-none bg-background px-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
+          <div className="max-w-xl">
+            <label htmlFor="post-slug" className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">
+              Slug
+            </label>
+            <div className="flex items-center rounded-md border border-stone-300 bg-white px-2">
+              <span className="text-sm text-stone-500">/</span>
+              <input
+                id="post-slug"
+                type="text"
+                value={data.slug ?? ""}
+                onChange={(e) => setData({ ...data, slug: normalizeSlugInput(e.target.value) })}
+                placeholder="post-slug"
+                className="w-full border-none bg-transparent px-2 py-1.5 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
+              />
+            </div>
+          </div>
         </div>
 
         <EditorRoot>
