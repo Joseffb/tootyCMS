@@ -1,12 +1,14 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getReadingSettingsAdmin, resetCmsCache, updateReadingSettings } from "@/lib/actions";
+import { getRootSiteUrl } from "@/lib/site-url";
 
 export default async function ReadingSettingsPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
   const settings = await getReadingSettingsAdmin();
+  const canonicalPlaceholder = getRootSiteUrl();
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,7 +64,7 @@ export default async function ReadingSettingsPage() {
               type="text"
               name={settings.siteUrl.key}
               defaultValue={settings.siteUrl.value}
-              placeholder="http://localhost:3000"
+              placeholder={canonicalPlaceholder}
               className="max-w-xl rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900 dark:border-stone-600 dark:bg-black dark:text-white"
             />
           </label>

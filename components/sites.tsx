@@ -4,6 +4,7 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 import SiteCard from "./site-card";
 import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getRootSiteUrl } from "@/lib/site-url";
 
 export default async function Sites({ limit }: { limit?: number }) {
   const session = await getSession();
@@ -18,12 +19,7 @@ export default async function Sites({ limit }: { limit?: number }) {
   });
 
   const siteUrlSetting = await getSiteUrlSetting();
-  const envRootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN?.trim();
-  const envNextAuthUrl = process.env.NEXTAUTH_URL?.trim();
-  const fallbackRoot = envRootDomain
-    ? `${process.env.NEXT_PUBLIC_VERCEL_ENV ? "https" : "http"}://${envRootDomain}`
-    : envNextAuthUrl || `http://localhost:${process.env.PORT ?? 3000}`;
-  const rootUrl = siteUrlSetting.value.trim() || fallbackRoot;
+  const rootUrl = siteUrlSetting.value.trim() || getRootSiteUrl();
 
   return sites.length > 0 ? (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

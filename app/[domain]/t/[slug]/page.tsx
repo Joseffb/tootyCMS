@@ -34,9 +34,9 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   const isPrimary = Boolean(site?.isPrimary) || site?.subdomain === "main";
   const configuredRootUrl = (await getSiteUrlSettingForSite(site.id, "")).value.trim();
   const derivedSiteUrl = getSitePublicUrl({
-    subdomain: decodedDomain.split(".")[0] || "main",
-    customDomain: decodedDomain.includes(".") ? null : decodedDomain,
-    isPrimary: decodedDomain.startsWith("main.") || decodedDomain === "localhost:3000",
+    subdomain: site.subdomain || decodedDomain.split(".")[0] || "main",
+    customDomain: site.customDomain,
+    isPrimary,
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
 

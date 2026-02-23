@@ -1,5 +1,6 @@
 import { getAllPosts } from "@/lib/fetchers";
 import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 import { NextResponse } from "next/server";
 
 function escapeXml(input: string) {
@@ -12,15 +13,11 @@ function escapeXml(input: string) {
 }
 
 function resolveBaseUrl(configuredSiteUrl: string) {
-  if (configuredSiteUrl) return configuredSiteUrl;
-  if (process.env.NEXT_PUBLIC_VERCEL_ENV && process.env.NEXT_PUBLIC_ROOT_DOMAIN) {
-    return `https://${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`;
-  }
-  return "http://localhost:3000";
+  return configuredSiteUrl || getRootSiteUrl();
 }
 
 function buildPostUrl(domain: string, slug: string) {
-  const protocol = domain.includes("localhost") ? "http" : "https";
+  const protocol = isLocalHostLike(domain) ? "http" : "https";
   const cleanSlug = slug.replace(/^\/+/, "");
   return `${protocol}://${domain}/${cleanSlug}`;
 }

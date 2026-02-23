@@ -5,26 +5,35 @@ import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationshi
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
 import { serialize } from "next-mdx-remote/serialize";
 
+function normalizeDomainForLookup(domain: string) {
+  return domain.trim().toLowerCase().replace(/:\d+$/, "");
+}
+
 function parseSubdomainFromDomain(domain: string) {
+  const normalizedDomain = normalizeDomainForLookup(domain);
   const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-  const normalizedRootDomain = rootDomainRaw.replace(/:\d+$/, "");
-  if (domain === normalizedRootDomain || domain === `${normalizedRootDomain}:3000`) {
+  const normalizedRootDomain = rootDomainRaw
+    .replace(/^https?:\/\//, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
+  if (normalizedDomain === normalizedRootDomain) {
     return "main";
   }
-  return domain.endsWith(`.${normalizedRootDomain}`)
-    ? domain.replace(`.${normalizedRootDomain}`, "")
+  return normalizedDomain.endsWith(`.${normalizedRootDomain}`)
+    ? normalizedDomain.replace(`.${normalizedRootDomain}`, "")
     : null;
 }
 
 export async function getSiteData(domain: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
 
   return unstable_cache(
     async () => {
       return db.query.sites.findFirst({
         where: subdomain
           ? eq(sites.subdomain, subdomain)
-          : eq(sites.customDomain, domain),
+          : eq(sites.customDomain, normalizedDomain),
         with: {
           user: true,
         },
@@ -39,7 +48,8 @@ export async function getSiteData(domain: string) {
 }
 
 export async function getPostsForSite(domain: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
 
   return await unstable_cache(
     async () => {
@@ -57,7 +67,7 @@ export async function getPostsForSite(domain: string) {
         .where(
           subdomain
             ? eq(sites.subdomain, subdomain)
-            : eq(sites.customDomain, domain)
+            : eq(sites.customDomain, normalizedDomain)
         )
         .orderBy(desc(posts.createdAt));
     },
@@ -69,7 +79,8 @@ export async function getPostsForSite(domain: string) {
   )();
 }
 export async function getPostData(domain: string, slug: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
 
   return await unstable_cache(
     async () => {
@@ -88,7 +99,7 @@ export async function getPostData(domain: string, slug: string) {
             eq(posts.published, true),
             subdomain
               ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, domain),
+              : eq(sites.customDomain, normalizedDomain),
           ),
         )
         .then((res) => {
@@ -129,7 +140,7 @@ export async function getPostData(domain: string, slug: string) {
               not(eq(posts.id, typedData.id)),
               subdomain
                 ? eq(sites.subdomain, subdomain)
-                : eq(sites.customDomain, domain),
+                : eq(sites.customDomain, normalizedDomain),
             ),
           ),
       ]);
@@ -149,7 +160,8 @@ export async function getPostData(domain: string, slug: string) {
 }
 
 export async function getDomainPostData(domain: string, dataDomainKey: string, slug: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
 
   return await unstable_cache(
     async () => {
@@ -171,7 +183,7 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
             eq(dataDomains.key, dataDomainKey),
             subdomain
               ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, domain),
+              : eq(sites.customDomain, normalizedDomain),
           ),
         )
         .then((res) => {
@@ -209,7 +221,8 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
 }
 
 export async function getDomainPostsForSite(domain: string, dataDomainKey: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
   return unstable_cache(
     async () =>
       db
@@ -227,7 +240,9 @@ export async function getDomainPostsForSite(domain: string, dataDomainKey: strin
           and(
             eq(domainPosts.published, true),
             eq(dataDomains.key, dataDomainKey),
-            subdomain ? eq(sites.subdomain, subdomain) : eq(sites.customDomain, domain),
+            subdomain
+              ? eq(sites.subdomain, subdomain)
+              : eq(sites.customDomain, normalizedDomain),
           ),
         )
         .orderBy(desc(domainPosts.createdAt)),
@@ -263,7 +278,8 @@ function extractFirstImageFromContent(rawContent: unknown): string {
 }
 
 export async function getFeaturedProjectsForSite(domain: string) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
   return await unstable_cache(
     async () => {
       const rows = await db
@@ -283,7 +299,9 @@ export async function getFeaturedProjectsForSite(domain: string) {
           and(
             eq(domainPosts.published, true),
             eq(dataDomains.key, "project"),
-            subdomain ? eq(sites.subdomain, subdomain) : eq(sites.customDomain, domain),
+            subdomain
+              ? eq(sites.subdomain, subdomain)
+              : eq(sites.customDomain, normalizedDomain),
           ),
         )
         .orderBy(desc(domainPosts.createdAt))
@@ -373,7 +391,8 @@ export async function getTaxonomyArchiveData(
   taxonomy: "category" | "tag",
   termSlug: string,
 ) {
-  const subdomain = parseSubdomainFromDomain(domain);
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const subdomain = parseSubdomainFromDomain(normalizedDomain);
   const rows = await unstable_cache(
     async () =>
       db
@@ -397,7 +416,7 @@ export async function getTaxonomyArchiveData(
             eq(posts.published, true),
             subdomain
               ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, domain),
+              : eq(sites.customDomain, normalizedDomain),
           ),
         ),
     [`${domain}-${taxonomy}-${termSlug}-v1`],

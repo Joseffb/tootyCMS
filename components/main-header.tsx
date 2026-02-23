@@ -14,7 +14,6 @@ interface MainProps {
     subdomain: string;
     font: string;
   };
-  domain?: string;
   menuItems?: MenuItem[];
   themeTokens?: ThemeTokens;
   showNetworkSites?: boolean;
@@ -55,7 +54,6 @@ const defaultThemeTokens: ThemeTokens = {
 export default function Main({
   children,
   data,
-  domain,
   menuItems = [],
   themeTokens,
   showNetworkSites = false,
@@ -89,10 +87,6 @@ export default function Main({
     };
   }, []);
 
-  const isLocal = domain?.includes("localhost") ?? false;
-  const protocol = isLocal ? "http://" : "https://";
-  const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-
   const dynamicUrl = getSitePublicUrl({ isPrimary: true, subdomain: "main" });
   const subDomainUrl = getSitePublicUrl({
     subdomain: data.subdomain,
@@ -106,20 +100,12 @@ export default function Main({
   const tokens = themeTokens || defaultThemeTokens;
 
   function getSiteUrl(site: { subdomain: string | null; customDomain: string | null; isPrimary: boolean }) {
-    if (site.isPrimary) {
-      return isLocal ? "http://localhost:3000" : `${protocol}${rootDomain}`;
-    }
-    if (site.customDomain) {
-      return `${protocol}${site.customDomain}`;
-    }
-    if (site.subdomain) {
-      return getSitePublicUrl({
-        subdomain: site.subdomain,
-        customDomain: site.customDomain,
-        isPrimary: site.isPrimary || site.subdomain === "main",
-      });
-    }
-    return dynamicUrl;
+    if (!site.customDomain && !site.subdomain && !site.isPrimary) return dynamicUrl;
+    return getSitePublicUrl({
+      subdomain: site.subdomain,
+      customDomain: site.customDomain,
+      isPrimary: site.isPrimary || site.subdomain === "main",
+    });
   }
 
   return (

@@ -1,6 +1,7 @@
 // app/api/tb-pipe/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { trace } from '@/lib/debug';
+import { isLocalHostLike } from "@/lib/site-url";
 
 export const runtime = 'nodejs';
 
@@ -21,7 +22,7 @@ const ALLOWED = new Set([
 function isDebugFallbackMode(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const debug = process.env.DEBUG_MODE === "true" || process.env.NEXT_PUBLIC_DEBUG_MODE === "true";
-  return debug && host.includes("localhost");
+  return debug && isLocalHostLike(host);
 }
 
 function emptyDataResponse(name: string, reason: string) {

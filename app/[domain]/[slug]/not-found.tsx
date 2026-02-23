@@ -4,10 +4,9 @@ import Image from "next/image";
 
 export default async function NotFound() {
   const headersList = await headers();
-  const domain = headersList
-    .get("host")
-    ?.replace(".localhost:3000", `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`);
-  const data = await getSiteData(domain as string);
+  const forwardedHost = headersList.get("x-forwarded-host");
+  const host = (forwardedHost || headersList.get("host") || "").split(",")[0]?.trim() || "";
+  const data = host ? await getSiteData(host) : null;
 
   return (
     <main className="tooty-archive-shell flex min-h-screen items-center justify-center px-5 py-12">

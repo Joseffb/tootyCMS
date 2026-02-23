@@ -11,7 +11,7 @@ export type SetupEnvField = {
 };
 
 export const SETUP_ENV_FIELDS: SetupEnvField[] = [
-  { key: "NEXTAUTH_URL", label: "NextAuth URL", required: true, placeholder: "http://app.localhost:3000", type: "url" },
+  { key: "NEXTAUTH_URL", label: "NextAuth URL", required: true, placeholder: "https://app.example.com", type: "url" },
   { key: "NEXT_PUBLIC_ROOT_DOMAIN", label: "Root Domain", required: true, placeholder: "fernain.com" },
   { key: "CMS_DB_PREFIX", label: "Database Table Prefix", required: true, placeholder: "fernain_" },
   { key: "THEMES_PATH", label: "Themes Path", placeholder: "themes" },

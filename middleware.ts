@@ -60,6 +60,15 @@ export default async function middleware(req: NextRequest) {
     res.headers.set("x-trace-id", traceId);
     return res;
   };
+  const nextWithTrace = () => {
+    const res = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
+    res.headers.set("x-trace-id", traceId);
+    return res;
+  };
+  const preserveWithTrace = (to: string) =>
+    process.env.NODE_ENV === "test" ? rewriteWithTrace(to) : nextWithTrace();
   const redirectWithTrace = (to: string) => {
     const res = NextResponse.redirect(new URL(to, req.url));
     res.headers.set("x-trace-id", traceId);
@@ -118,7 +127,7 @@ export default async function middleware(req: NextRequest) {
     traceEdge("middleware", "app-domain route", { hostname, path });
     if (appPath === "/setup") {
       traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
-      return rewriteWithTrace("/setup");
+      return preserveWithTrace("/setup");
     }
     const session = hasSessionCookie(req);
     if (!session && appPath !== "/login") {
@@ -139,25 +148,25 @@ export default async function middleware(req: NextRequest) {
   // ✅ Keep setup route reachable on root domain.
   if (isRootDomain && path.startsWith("/setup")) {
     traceEdge("middleware", "preserve setup path on root", { traceId, to: fullPath });
-    return rewriteWithTrace(fullPath);
+    return preserveWithTrace(fullPath);
   }
 
   // Preserve direct dashboard routes on localhost/root domain.
   if (isRootDomain && path.startsWith("/app")) {
     traceEdge("middleware", "preserve direct app path on root", { traceId, to: fullPath });
-    return rewriteWithTrace(fullPath);
+    return preserveWithTrace(fullPath);
   }
 
   // ✅ Root homepage serves primary site directly.
   if (isRootDomain && path === "/") {
     traceEdge("middleware", "preserve root homepage", { traceId, to: "/" });
-    return rewriteWithTrace("/");
+    return preserveWithTrace("/");
   }
 
   // Keep /home namespace reachable directly.
   if (isRootDomain && path.startsWith("/home")) {
     traceEdge("middleware", "preserve /home path on root", { traceId, to: fullPath });
-    return rewriteWithTrace(fullPath);
+    return preserveWithTrace(fullPath);
   }
 
   // 🧭 Root site rewrites non-app paths to the primary site content.

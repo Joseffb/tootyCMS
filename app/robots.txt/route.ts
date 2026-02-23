@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server";
 import { getBooleanSetting, getSiteUrlSetting, SEO_INDEXING_ENABLED_KEY } from "@/lib/cms-config";
+import { getRootSiteUrl } from "@/lib/site-url";
 
 function resolveBaseUrl(configuredSiteUrl: string) {
-  if (configuredSiteUrl) return configuredSiteUrl;
-  if (process.env.NEXT_PUBLIC_VERCEL_ENV && process.env.NEXT_PUBLIC_ROOT_DOMAIN) {
-    return `https://${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`;
-  }
-  return "http://localhost:3000";
+  return configuredSiteUrl || getRootSiteUrl();
 }
 
 export async function GET() {

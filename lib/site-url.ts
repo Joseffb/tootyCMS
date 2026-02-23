@@ -1,4 +1,33 @@
+function normalizeHostInput(value: string | null | undefined) {
+  return (value || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+}
+
+function splitHostAndPort(host: string) {
+  const normalized = normalizeHostInput(host);
+  const match = normalized.match(/^(.*?)(?::(\d+))?$/);
+  return {
+    host: (match?.[1] || normalized).toLowerCase(),
+    port: match?.[2] || "",
+  };
+}
+
+export function isLocalHostLike(host: string) {
+  const { host: bareHost } = splitHostAndPort(host);
+  return (
+    bareHost === "localhost" ||
+    bareHost.endsWith(".localhost") ||
+    bareHost.endsWith(".test")
+  );
+}
+
 function resolveLocalPort() {
+  if (typeof window !== "undefined" && window.location.port) {
+    return window.location.port;
+  }
+
   let port = process.env.PORT || "3000";
   const nextAuthUrl = (process.env.NEXTAUTH_URL || "").trim();
   if (nextAuthUrl) {
@@ -12,17 +41,37 @@ function resolveLocalPort() {
   return port;
 }
 
+function withLocalPortIfNeeded(host: string, protocol: "http" | "https") {
+  const normalized = normalizeHostInput(host);
+  if (!normalized) return normalized;
+  const { port } = splitHostAndPort(normalized);
+  if (port) return normalized;
+  if (protocol === "http" && isLocalHostLike(normalized)) {
+    return `${normalized}:${resolveLocalPort()}`;
+  }
+  return normalized;
+}
+
+function rootDomainFromEnv() {
+  return normalizeHostInput(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "");
+}
+
 export function getRootSiteUrl() {
-  if (process.env.NEXT_PUBLIC_VERCEL_ENV && process.env.NEXT_PUBLIC_ROOT_DOMAIN) {
-    return `https://${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`;
+  const rootDomain = rootDomainFromEnv();
+  if (process.env.NEXT_PUBLIC_VERCEL_ENV && rootDomain) {
+    return `https://${splitHostAndPort(rootDomain).host}`;
   }
 
-  const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
   if (rootDomain) {
-    if (/:\d+$/.test(rootDomain)) {
-      return `http://${rootDomain}`;
-    }
-    return `http://${rootDomain}:${resolveLocalPort()}`;
+    const protocol: "http" | "https" = isLocalHostLike(rootDomain)
+      ? "http"
+      : "https";
+    const host = withLocalPortIfNeeded(rootDomain, protocol);
+    return `${protocol}://${host}`;
+  }
+
+  if (typeof window !== "undefined") {
+    return window.location.origin;
   }
 
   return `http://localhost:${resolveLocalPort()}`;
@@ -34,7 +83,7 @@ export function withLocalDevPort(url: string) {
   try {
     const parsed = new URL(trimmed);
     if (parsed.port) return `${parsed.protocol}//${parsed.host}`;
-    const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "").trim().replace(/:\d+$/, "").toLowerCase();
+    const rootDomain = rootDomainFromEnv().replace(/:\d+$/, "").toLowerCase();
     if (!rootDomain || parsed.hostname.toLowerCase() !== rootDomain) {
       return `${parsed.protocol}//${parsed.host}`;
     }
@@ -52,7 +101,12 @@ export function getSitePublicUrl(input: {
   isPrimary?: boolean;
 }) {
   if (input.customDomain) {
-    return `https://${input.customDomain}`;
+    const customHost = normalizeHostInput(input.customDomain);
+    const protocol: "http" | "https" = isLocalHostLike(customHost)
+      ? "http"
+      : "https";
+    const host = withLocalPortIfNeeded(customHost, protocol);
+    return `${protocol}://${host}`;
   }
 
   const root = getRootSiteUrl();
@@ -62,12 +116,16 @@ export function getSitePublicUrl(input: {
   }
 
   if (process.env.NEXT_PUBLIC_VERCEL_ENV && process.env.NEXT_PUBLIC_ROOT_DOMAIN) {
-    return `https://${sub}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`;
+    return `https://${sub}.${splitHostAndPort(process.env.NEXT_PUBLIC_ROOT_DOMAIN).host}`;
   }
 
-  const rootDomainRaw = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost").trim().replace(/^https?:\/\//, "");
-  const rootDomainHost = rootDomainRaw.replace(/:\d+$/, "");
-  return `http://${sub}.${rootDomainHost}:${resolveLocalPort()}`;
+  const rootDomainRaw = rootDomainFromEnv() || "localhost";
+  const rootDomainHost = splitHostAndPort(rootDomainRaw).host;
+  const protocol: "http" | "https" = isLocalHostLike(rootDomainRaw)
+    ? "http"
+    : "https";
+  const host = withLocalPortIfNeeded(`${sub}.${rootDomainHost}`, protocol);
+  return `${protocol}://${host}`;
 }
 
 export function getSitePublicHost(input: {

@@ -6,27 +6,38 @@ import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { cn } from "@/lib/utils";
 import AnalyticsConditional from "@/components/analytics-conditional";
+import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 
 const title = "Tooty CMS";
 const description =
   "A multi-tenant vanilla CMS starter for blogs, docs, and content sites.";
-const image = "https://your-domain.com/placeholder.png";
+
+function firstHeaderValue(raw: string | null) {
+  if (!raw) return "";
+  return raw.split(",")[0]?.trim() || "";
+}
 
 export async function generateMetadata(): Promise<Metadata> {
   const headerList = await headers();
-  const host = headerList.get("host") || "your-domain.com";
+  const fallbackOrigin = getRootSiteUrl().replace(/\/$/, "");
+  const forwardedHost = firstHeaderValue(headerList.get("x-forwarded-host"));
+  const host = forwardedHost || firstHeaderValue(headerList.get("host"));
+  const forwardedProto = firstHeaderValue(headerList.get("x-forwarded-proto"));
+  const protocol = forwardedProto || (isLocalHostLike(host) ? "http" : "https");
+  const origin = host ? `${protocol}://${host}` : fallbackOrigin;
+  const image = `${origin}/placeholder.png`;
 
   return {
     title,
     description,
     alternates: {
-      canonical: `https://${host}`,
+      canonical: origin,
     },
     icons: ["/icon.png"],
     openGraph: {
       title,
       description,
-      url: `https://${host}`,
+      url: origin,
       siteName: "Tooty CMS",
       images: [image],
       locale: "en_US",
@@ -39,7 +50,7 @@ export async function generateMetadata(): Promise<Metadata> {
       images: [image],
       creator: "@tootycms",
     },
-    metadataBase: new URL(`https://${host}`),
+    metadataBase: new URL(origin),
   };
 }
 

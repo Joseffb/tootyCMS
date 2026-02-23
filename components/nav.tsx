@@ -15,10 +15,12 @@ import { useParams, usePathname, useSelectedLayoutSegments } from "next/navigati
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { getSiteFromPostId } from "@/lib/actions";
 import Image from "next/image";
+import { getSitePublicUrl } from "@/lib/site-url";
 
 const externalLinks: any[] = [];
 
 export default function Nav({ children }: { children: ReactNode }) {
+  const tootyHomeHref = getSitePublicUrl({ isPrimary: true, subdomain: "main" });
   const segments = useSelectedLayoutSegments();
   const { id } = useParams() as { id?: string };
   const pathname = usePathname();
@@ -213,11 +215,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         <div className="grid gap-2">
           <div className="flex items-center space-x-2 rounded-lg px-2 py-1.5">
             <a
-              href={
-                process.env.NODE_ENV === "development"
-                  ? "http://localhost:3000"
-                  : "https://your-domain.com"
-              }
+              href={tootyHomeHref}
               className="rounded-lg p-1 hover:bg-stone-200 dark:hover:bg-stone-700"
             >
               <Image

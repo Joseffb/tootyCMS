@@ -3,7 +3,7 @@ import type { SelectSite } from "@/lib/schema";
 import { placeholderBlurhash } from "@/lib/utils";
 import { BarChart } from "lucide-react";
 import Link from "next/link";
-import { getSitePublicUrl } from "@/lib/site-url";
+import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { DEFAULT_TOOTY_IMAGE } from "@/lib/tooty-images";
 
 /* -------------------------------------------------------------------------- */
@@ -16,7 +16,7 @@ function apiUrl(path: string) {
   const base =
     process.env.NEXT_PUBLIC_VERCEL_URL
       ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
-      : `http://localhost:${process.env.PORT ?? 3000}`;
+      : getRootSiteUrl();
   return `${base}${path}`;
 }
 

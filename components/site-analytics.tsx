@@ -51,7 +51,7 @@ function toBar(rows: any[], key: 'page' | 'source' | 'country' | 'device'): List
 }
 
 /* ---------- component ---------- */
-interface Props { domain: string }        // e.g. "lexia.localhost:3000"
+interface Props { domain: string }        // e.g. "lexia.example.com"
 
 export default function SiteAnalyticsCharts({ domain }: Props) {
   const d = stripPort(domain);            // normalised once
