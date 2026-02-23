@@ -57,3 +57,4 @@ pnpm-lock.yaml
 next-env.d.ts
 # generated local artifacts/test-results/.last-run.json
 /next-env.d.ts
+/logs/
