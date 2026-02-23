@@ -51,7 +51,7 @@ export default async function SitePostsPage({ params }: { params: Params }) {
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
   const siteId = site.id as string;
-  const kernel = await createKernelForRequest();
+  const kernel = await createKernelForRequest(site.id as string);
   const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
   const menuItems = siteId
     ? await kernel.applyFilters("nav:items", baseHeaderMenu, {

@@ -9,8 +9,10 @@ import {
   getEnabledPluginMenuItems,
   getPluginById,
   listPluginsWithState,
+  listPluginsWithSiteState,
   pluginConfigKey,
   pluginEnabledKey,
+  sitePluginEnabledKey,
 } from "@/lib/plugins";
 import { pathToFileURL } from "url";
 import path from "path";
@@ -40,6 +42,16 @@ export async function setPluginEnabled(pluginId: string, enabled: boolean) {
   await db
     .insert(cmsSettings)
     .values({ key: pluginEnabledKey(pluginId), value: enabled ? "true" : "false" })
+    .onConflictDoUpdate({
+      target: cmsSettings.key,
+      set: { value: enabled ? "true" : "false" },
+    });
+}
+
+export async function setSitePluginEnabled(siteId: string, pluginId: string, enabled: boolean) {
+  await db
+    .insert(cmsSettings)
+    .values({ key: sitePluginEnabledKey(siteId, pluginId), value: enabled ? "true" : "false" })
     .onConflictDoUpdate({
       target: cmsSettings.key,
       set: { value: enabled ? "true" : "false" },
@@ -154,7 +166,7 @@ async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnT
   }
 }
 
-export async function createKernelForRequest() {
+export async function createKernelForRequest(siteId?: string) {
   const kernel = createKernel();
 
   kernel.registerMenuLocation("header");
@@ -164,9 +176,11 @@ export async function createKernelForRequest() {
   await kernel.doAction("kernel:init");
   await kernel.doAction("plugins:register");
 
-  const plugins = await listPluginsWithState();
+  const plugins = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
   for (const plugin of plugins) {
     if (!plugin.enabled) continue;
+    const scope = plugin.scope || "site";
+    if (siteId && scope !== "core" && "siteEnabled" in plugin && !plugin.siteEnabled) continue;
     const capabilities = toRuntimeCapabilities(plugin);
 
     if (plugin.menu) {
@@ -200,4 +214,4 @@ export async function getDashboardPluginMenuItems(): Promise<MenuItem[]> {
   }));
 }
 
-export { getAvailablePlugins, getPluginById, listPluginsWithState };
+export { getAvailablePlugins, getPluginById, listPluginsWithState, listPluginsWithSiteState };

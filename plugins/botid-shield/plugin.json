@@ -4,6 +4,7 @@
   "description": "Vercel BotID protection for sensitive API routes with monitor or enforce mode.",
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
+  "scope": "core",
   "capabilities": {
     "hooks": false,
     "adminExtensions": true,

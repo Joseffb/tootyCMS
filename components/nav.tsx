@@ -28,6 +28,18 @@ export default function Nav({ children }: { children: ReactNode }) {
   const [siteId, setSiteId] = useState<string | null>();
   const [pluginTabs, setPluginTabs] = useState<Array<{ name: string; href: string }>>([]);
   const [dataDomainTabs, setDataDomainTabs] = useState<Array<{ name: string; href: string }>>([]);
+  const [environmentBadge, setEnvironmentBadge] = useState<{
+    show: boolean;
+    label: string;
+    environment: "development" | "production";
+  }>({
+    show: false,
+    label: "",
+    environment: "production",
+  });
+  const [floatingWidgets, setFloatingWidgets] = useState<
+    Array<{ id: string; title: string; content: string; position: "bottom-right" }>
+  >([]);
   const currentSiteId = segments[0] === "site" && id ? id : segments[0] === "post" ? siteId ?? null : null;
 
   useEffect(() => {
@@ -74,6 +86,40 @@ export default function Nav({ children }: { children: ReactNode }) {
         );
       })
       .catch(() => setDataDomainTabs([]));
+  }, [currentSiteId]);
+
+  useEffect(() => {
+    const query = currentSiteId ? `?siteId=${encodeURIComponent(currentSiteId)}` : "";
+    fetch(`/api/plugins/admin-ui${query}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!json) return;
+        setEnvironmentBadge({
+          show: Boolean(json.environmentBadge?.show),
+          label: String(json.environmentBadge?.label || ""),
+          environment: json.environmentBadge?.environment === "development" ? "development" : "production",
+        });
+        setFloatingWidgets(
+          Array.isArray(json.floatingWidgets)
+            ? json.floatingWidgets
+                .map((widget: any) => ({
+                  id: String(widget?.id || ""),
+                  title: String(widget?.title || ""),
+                  content: String(widget?.content || ""),
+                  position: "bottom-right" as const,
+                }))
+                .filter((widget: any) => widget.id && widget.content)
+            : [],
+        );
+      })
+      .catch(() => {
+        setEnvironmentBadge({
+          show: false,
+          label: "",
+          environment: "production",
+        });
+        setFloatingWidgets([]);
+      });
   }, [currentSiteId]);
 
   const tabs = useMemo(() => {
@@ -213,65 +259,78 @@ export default function Nav({ children }: { children: ReactNode }) {
         } fixed z-10 flex h-full flex-col justify-between border-r border-stone-200 bg-stone-100 p-4 transition-all sm:w-60 sm:translate-x-0 dark:border-stone-700 dark:bg-stone-900`}
       >
         <div className="grid gap-2">
-          <div className="flex items-center space-x-2 rounded-lg px-2 py-1.5">
-            <a
-              href={tootyHomeHref}
-              className="rounded-lg p-1 hover:bg-stone-200 dark:hover:bg-stone-700"
-            >
-              <Image
-                src="/tooty/sprites/tooty-thumbs-up-cropped.png"
-                width={60}
-                height={60}
-                alt="Tooty CMS"
-                unoptimized
-                className="h-[3.75rem] w-[3.75rem] object-contain"
-              />
-            </a>
-            <div className="h-6 rotate-[30deg] border-l border-stone-400 dark:border-stone-500" />
-            <Link
-              href="/"
-              className="rounded-lg p-2 hover:bg-stone-200 dark:hover:bg-stone-700"
-              title={
-                process.env.NODE_ENV === "development"
-                  ? "Development environment (D)"
-                  : "Production environment (P)"
-              }
-              aria-label={
-                process.env.NODE_ENV === "development"
-                  ? "Development environment icon"
-                  : "Production environment icon"
-              }
-            >
-              <svg
-                width="26"
-                viewBox="0 0 76 65"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                className={`${
+          <div className="rounded-lg px-2 py-1.5">
+            <div className="flex items-center space-x-2">
+              <a
+                href={tootyHomeHref}
+                className="rounded-lg p-1 hover:bg-stone-200 dark:hover:bg-stone-700"
+              >
+                <Image
+                  src="/tooty/sprites/tooty-thumbs-up-cropped.png"
+                  width={60}
+                  height={60}
+                  alt="Tooty CMS"
+                  unoptimized
+                  className="h-[3.75rem] w-[3.75rem] object-contain"
+                />
+              </a>
+              <div className="h-6 rotate-[30deg] border-l border-stone-400 dark:border-stone-500" />
+              <Link
+                href="/"
+                className="rounded-lg p-2 hover:bg-stone-200 dark:hover:bg-stone-700"
+                title={
                   process.env.NODE_ENV === "development"
-                    ? "text-red-500"
-                    : "text-black dark:text-white"
+                    ? "Development environment (D)"
+                    : "Production environment (P)"
+                }
+                aria-label={
+                  process.env.NODE_ENV === "development"
+                    ? "Development environment icon"
+                    : "Production environment icon"
+                }
+              >
+                <svg
+                  width="26"
+                  viewBox="0 0 76 65"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className={`${
+                    process.env.NODE_ENV === "development"
+                      ? "text-red-500"
+                      : "text-black dark:text-white"
+                  }`}
+                >
+                  <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" fill="currentColor" />
+                  <text
+                    x="50%"
+                    y="58%"
+                    dominantBaseline="middle"
+                    textAnchor="middle"
+                    fontSize="20"
+                    fontWeight="bold"
+                    fill="black"
+                  >
+                    {process.env.NODE_ENV === "development" ? "D" : "P"}
+                  </text>
+                </svg>
+                <span className="sr-only">
+                  {process.env.NODE_ENV === "development"
+                    ? "Development environment"
+                    : "Production environment"}
+                </span>
+              </Link>
+            </div>
+            {environmentBadge.show && environmentBadge.label ? (
+              <div
+                className={`mt-2 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-[0.08em] ${
+                  environmentBadge.environment === "development"
+                    ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+                    : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                 }`}
               >
-                <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" fill="currentColor" />
-                <text
-                  x="50%"
-                  y="58%"
-                  dominantBaseline="middle"
-                  textAnchor="middle"
-                  fontSize="20"
-                  fontWeight="bold"
-                  fill="black"
-                >
-                  {process.env.NODE_ENV === "development" ? "D" : "P"}
-                </text>
-              </svg>
-              <span className="sr-only">
-                {process.env.NODE_ENV === "development"
-                  ? "Development environment"
-                  : "Production environment"}
-              </span>
-            </Link>
+                {environmentBadge.label}
+              </div>
+            ) : null}
           </div>
           <div className="grid gap-1">
             {tabs.map(({ name, href, isActive, icon }) => (
@@ -310,6 +369,18 @@ export default function Nav({ children }: { children: ReactNode }) {
           {children}
         </div>
       </div>
+      {floatingWidgets
+        .filter((widget) => widget.position === "bottom-right")
+        .map((widget, idx) => (
+          <div
+            key={widget.id}
+            className="pointer-events-none fixed right-4 z-20 max-w-xs rounded-lg border border-stone-300 bg-white/95 px-3 py-2 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200"
+            style={{ bottom: `${1 + idx * 5.5}rem` }}
+          >
+            <p className="font-semibold">{widget.title || "Plugin Widget"}</p>
+            <p className="mt-1 italic">"{widget.content}"</p>
+          </div>
+        ))}
     </>
   );
 }

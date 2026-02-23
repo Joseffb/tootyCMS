@@ -46,6 +46,7 @@ export default async function PluginSettingsPage() {
           <thead className="bg-stone-50 text-left text-stone-700 dark:bg-stone-900 dark:text-stone-200">
             <tr>
               <th className="px-4 py-3">Plugin</th>
+              <th className="px-4 py-3">Scope</th>
               <th className="px-4 py-3">Version</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Actions</th>
@@ -58,6 +59,11 @@ export default async function PluginSettingsPage() {
                   <div className="font-medium text-stone-900 dark:text-white">{plugin.name}</div>
                   <div className="text-xs text-stone-500">{plugin.id}</div>
                   <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">{plugin.description}</div>
+                </td>
+                <td className="px-4 py-3 align-top">
+                  <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+                    {(plugin.scope || "site") === "core" ? "Core" : "Site"}
+                  </span>
                 </td>
                 <td className="px-4 py-3 align-top text-stone-700 dark:text-stone-300">{plugin.version || "n/a"}</td>
                 <td className="px-4 py-3 align-top">

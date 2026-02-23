@@ -49,6 +49,11 @@ export default function SiteSettingsNav() {
       href: `/site/${id}/settings/themes`,
       segment: "themes",
     },
+    {
+      name: "Plugins",
+      href: `/site/${id}/settings/plugins`,
+      segment: "plugins",
+    },
   ];
 
   return (

@@ -26,12 +26,20 @@ export type PluginWithState = PluginManifest & {
   config: Record<string, unknown>;
 };
 
+export type PluginWithSiteState = PluginWithState & {
+  siteEnabled: boolean;
+};
+
 export function pluginEnabledKey(pluginId: string) {
   return `plugin_${pluginId}_enabled`;
 }
 
 export function pluginConfigKey(pluginId: string) {
   return `plugin_${pluginId}_config`;
+}
+
+export function sitePluginEnabledKey(siteId: string, pluginId: string) {
+  return `site_${siteId}_plugin_${pluginId}_enabled`;
 }
 
 function normalizePluginId(raw: string) {
@@ -133,4 +141,24 @@ export async function getEnabledPluginMenuItems() {
       label: plugin.menu?.label || plugin.name,
       href: normalizePluginPath(plugin.id, plugin.menu?.path),
     }));
+}
+
+export async function listPluginsWithSiteState(siteId: string): Promise<PluginWithSiteState[]> {
+  const plugins = await listPluginsWithState();
+  if (!plugins.length) return [];
+
+  const keys = plugins.map((plugin) => sitePluginEnabledKey(siteId, plugin.id));
+  const rows = await db
+    .select({ key: cmsSettings.key, value: cmsSettings.value })
+    .from(cmsSettings)
+    .where(inArray(cmsSettings.key, keys));
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+
+  return plugins.map((plugin) => {
+    const raw = byKey[sitePluginEnabledKey(siteId, plugin.id)];
+    return {
+      ...plugin,
+      siteEnabled: raw === undefined ? true : raw === "true",
+    };
+  });
 }

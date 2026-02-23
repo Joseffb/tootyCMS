@@ -81,7 +81,7 @@ export default async function SitePostPage({
         const siteUrl = configuredRootUrl || derivedSiteUrl;
         const rootUrl = getRootSiteUrl();
         const siteId = site.id as string;
-        const kernel = await createKernelForRequest();
+        const kernel = await createKernelForRequest(site.id as string);
         const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
         const menuItems = siteId
           ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
@@ -169,7 +169,7 @@ export default async function SitePostPage({
       }
     }
   }
-  const kernel = await createKernelForRequest();
+  const kernel = await createKernelForRequest(site.id as string);
   await kernel.doAction("content:load", { domain: decodedDomain, slug: decodedSlug });
   const data = existingPost;
   if (!data) {

@@ -17,6 +17,8 @@ export type KernelFilterName =
   | "theme:tokens"
   | "page:meta"
   | "render:layout"
+  | "admin:environment-badge"
+  | "admin:floating-widgets"
   | "auth:providers"
   | "auth:adapter"
   | "auth:callbacks:signIn"

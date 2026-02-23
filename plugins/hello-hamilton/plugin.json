@@ -4,6 +4,7 @@
   "description": "A Hello Dolly style plugin that surfaces a Hamilton quote in admin settings.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "scope": "site",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -16,11 +17,17 @@
   },
   "settingsFields": [
     {
-      "key": "quote",
-      "label": "Hamilton Quote",
+      "key": "showWidget",
+      "label": "Show Floating Widget",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "customQuotes",
+      "label": "Custom Quotes",
       "type": "textarea",
-      "placeholder": "Those who stand for nothing fall for anything.",
-      "helpText": "Set the quote shown on this plugin setup page."
+      "placeholder": "One quote per line",
+      "helpText": "Optional. Enter one quote per line to rotate your own set."
     },
     {
       "key": "showInDebug",

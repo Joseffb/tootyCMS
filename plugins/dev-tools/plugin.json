@@ -4,6 +4,7 @@
   "description": "Adds developer-focused dashboard tools and optional render hooks.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "scope": "core",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -16,15 +17,24 @@
   },
   "settingsFields": [
     {
-      "key": "bannerText",
-      "label": "Banner Text",
-      "type": "text",
-      "placeholder": "Dev mode enabled"
+      "key": "showEnvironmentBanner",
+      "label": "Show Environment Banner",
+      "type": "checkbox",
+      "defaultValue": true
     },
     {
-      "key": "showBanner",
-      "label": "Show Banner",
-      "type": "checkbox"
+      "key": "developmentLabel",
+      "label": "Development Label",
+      "type": "text",
+      "placeholder": "Development",
+      "defaultValue": "Development"
+    },
+    {
+      "key": "productionLabel",
+      "label": "Production Label",
+      "type": "text",
+      "placeholder": "Production",
+      "defaultValue": "Production"
     }
   ]
 }

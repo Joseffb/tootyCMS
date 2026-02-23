@@ -36,7 +36,7 @@ export default async function DomainPostPage({ params }: { params: Params }) {
     mappedPrefix: Boolean(mappedPrefixDomain),
   });
 
-  const kernel = await createKernelForRequest();
+  const kernel = await createKernelForRequest(site.id as string);
   await kernel.doAction("content:load", {
     domain: decodedDomain,
     dataDomain: decodedDataDomain,

@@ -111,7 +111,7 @@ export default async function SiteLayout({
   const [themeAssets, baseHeaderMenu, kernel] = await Promise.all([
     getThemeAssetsForSite(siteId),
     getSiteMenu(siteId, "header"),
-    createKernelForRequest(),
+    createKernelForRequest(siteId),
   ]);
 
   await kernel.doAction("request:begin", { domain: decoded, siteId });

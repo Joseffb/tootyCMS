@@ -27,6 +27,7 @@ export type PluginContract = {
   description?: string;
   version?: string;
   minCoreVersion?: string;
+  scope?: "core" | "site";
   capabilities?: {
     hooks?: boolean;
     adminExtensions?: boolean;
@@ -121,6 +122,8 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
   const editor = candidate.editor ? asRecord(candidate.editor) : null;
   const snippetsRaw = Array.isArray(editor?.snippets) ? editor?.snippets : [];
   const settingsRaw = Array.isArray(candidate.settingsFields) ? candidate.settingsFields : [];
+  const scopeRaw = String(candidate.scope ?? "").trim().toLowerCase();
+  const scope: "core" | "site" = scopeRaw === "core" ? "core" : "site";
 
   return {
     kind: "plugin",
@@ -129,6 +132,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
     minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
+    scope,
     capabilities: {
       hooks: candidate.capabilities ? Boolean(asRecord(candidate.capabilities).hooks ?? true) : true,
       adminExtensions: candidate.capabilities
