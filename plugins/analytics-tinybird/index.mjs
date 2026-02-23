@@ -32,9 +32,14 @@ function ingestToken() {
   return String(process.env.ANALYTICS_TINYBIRD_INGEST_TOKEN || process.env.TB_INGEST_TOKEN || "").trim();
 }
 
-function shouldHandleProvider(context = {}) {
+function isEnabledValue(raw, fallback) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return fallback;
+  return !["0", "false", "off", "no"].includes(value);
+}
+
+function shouldHandleProvider(context = {}, key = providerKey()) {
   const requested = String(context?.params?.provider || "").trim().toLowerCase();
-  const key = providerKey();
   return !requested || requested === key;
 }
 
@@ -53,17 +58,21 @@ function withJsonContentType(res) {
   });
 }
 
-export async function register(kernel) {
+export async function register(kernel, api) {
   kernel.addFilter("analytics:query", async (current, context = {}) => {
     if (current) return current;
-    if (!providerEnabled()) return current;
-    if (!shouldHandleProvider(context)) return current;
+    const enabledRaw = await api?.getPluginSetting?.("enabled", String(providerEnabled()));
+    if (!isEnabledValue(enabledRaw, providerEnabled())) return current;
+    const providerKeyValue = String((await api?.getPluginSetting?.("providerKey", providerKey())) || providerKey())
+      .trim()
+      .toLowerCase();
+    if (!shouldHandleProvider(context, providerKeyValue)) return current;
 
     const name = String(context?.name || "").trim();
     if (!name) return new NextResponse("Missing query name", { status: 400 });
     if (!ALLOWED_PIPES.has(name)) return new NextResponse("Pipe not allowed", { status: 403 });
 
-    const token = dashboardToken();
+    const token = String((await api?.getPluginSetting?.("dashboardToken", dashboardToken())) || "").trim();
     if (!token) return new NextResponse("Tinybird dashboard token missing", { status: 202 });
 
     const params = new URLSearchParams(context?.params || {});
@@ -77,7 +86,8 @@ export async function register(kernel) {
     params.delete("provider");
 
     const qs = params.toString();
-    const url = `${host()}/v0/pipes/${name}.json?token=${token}${qs ? `&${qs}` : ""}`;
+    const apiHost = String((await api?.getPluginSetting?.("host", host())) || "").trim() || host();
+    const url = `${apiHost}/v0/pipes/${name}.json?token=${token}${qs ? `&${qs}` : ""}`;
     try {
       const res = await fetch(url, { cache: "no-store" });
       return withJsonContentType(res);
@@ -87,11 +97,14 @@ export async function register(kernel) {
   });
 
   kernel.addAction("analytics:event", async (event = {}) => {
-    if (!providerEnabled()) return;
+    const enabledRaw = await api?.getPluginSetting?.("enabled", String(providerEnabled()));
+    if (!isEnabledValue(enabledRaw, providerEnabled())) return;
     if (!shouldForwardEvent(event)) return;
 
-    const token = ingestToken();
+    const token = String((await api?.getPluginSetting?.("ingestToken", ingestToken())) || "").trim();
     if (!token) return;
+
+    const apiHost = String((await api?.getPluginSetting?.("host", host())) || "").trim() || host();
 
     const payload = {
       event_name: String(event.name || "custom_event"),
@@ -105,7 +118,7 @@ export async function register(kernel) {
     };
 
     try {
-      await fetch(`${host()}/v0/events?name=${DATASOURCE}`, {
+      await fetch(`${apiHost}/v0/events?name=${DATASOURCE}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

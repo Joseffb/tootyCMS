@@ -1,21 +1,57 @@
-export async function register(kernel) {
-  kernel.addFilter("analytics:scripts", (current = []) => {
-    const measurementId = String(process.env.ANALYTICS_GOOGLE_MEASUREMENT_ID || "").trim();
-    const enabled = String(process.env.ANALYTICS_GOOGLE_ENABLED || "").trim().toLowerCase();
-    if (!measurementId || !["1", "true", "yes", "on"].includes(enabled)) return current;
+function isEnabledValue(raw, fallback = false) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return fallback;
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function envEnabled() {
+  return isEnabledValue(process.env.ANALYTICS_GOOGLE_ENABLED, false);
+}
+
+function envTagId() {
+  return String(
+    process.env.ANALYTICS_GOOGLE_TAG_ID || process.env.ANALYTICS_GOOGLE_MEASUREMENT_ID || "",
+  ).trim();
+}
+
+function envDeveloperId() {
+  return String(process.env.ANALYTICS_GOOGLE_DEVELOPER_ID || "").trim();
+}
+
+export async function register(kernel, api) {
+  kernel.addFilter("analytics:scripts", async (current = []) => {
+    const enabledRaw = await api?.getPluginSetting?.("enabled", String(envEnabled()));
+    if (!isEnabledValue(enabledRaw, envEnabled())) return current;
+
+    const configuredTagId = String(
+      (await api?.getPluginSetting?.("tagId", "")) ||
+        (await api?.getPluginSetting?.("measurementId", "")) ||
+        envTagId(),
+    ).trim();
+    if (!configuredTagId) return current;
+
+    const developerId = String(
+      (await api?.getPluginSetting?.("developerId", envDeveloperId())) || "",
+    ).trim();
+    const developerInit = developerId
+      ? `gtag('set', {'developer_id.${developerId}': true}); `
+      : "";
+
     return [
       ...current,
       {
         id: "analytics-google-sdk",
-        src: `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(measurementId)}`,
+        src: `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(configuredTagId)}`,
         strategy: "afterInteractive",
       },
       {
         id: "analytics-google-init",
         strategy: "afterInteractive",
         inline:
-          "window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', '" +
-          measurementId +
+          "window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); " +
+          developerInit +
+          "gtag('config', '" +
+          configuredTagId +
           "');",
       },
     ];

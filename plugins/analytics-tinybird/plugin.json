@@ -34,6 +34,18 @@
       "label": "API Host (optional)",
       "type": "text",
       "placeholder": "https://api.us-east.aws.tinybird.co"
+    },
+    {
+      "key": "ingestToken",
+      "label": "Ingest Token",
+      "type": "password",
+      "placeholder": "p.ey..."
+    },
+    {
+      "key": "dashboardToken",
+      "label": "Dashboard Token",
+      "type": "password",
+      "placeholder": "p.ey..."
     }
   ]
 }

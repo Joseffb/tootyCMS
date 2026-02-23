@@ -34,6 +34,18 @@
       "label": "Measurement ID",
       "type": "text",
       "placeholder": "G-XXXXXXXXXX"
+    },
+    {
+      "key": "tagId",
+      "label": "Google Tag ID (optional)",
+      "type": "text",
+      "placeholder": "GT-XXXXXXX"
+    },
+    {
+      "key": "developerId",
+      "label": "Developer ID (optional)",
+      "type": "text",
+      "placeholder": "dNjAwYj"
     }
   ]
 }
