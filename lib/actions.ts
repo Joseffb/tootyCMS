@@ -746,6 +746,27 @@ export const getTaxonomyTerms = async (taxonomy: string) => {
     .orderBy(asc(terms.name));
 };
 
+export const getTaxonomyTermsPreview = async (taxonomy: string, limit = 20) => {
+  const key = normalizeTaxonomyKey(taxonomy);
+  if (!key) return [];
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 20;
+  return db
+    .select({
+      id: termTaxonomies.id,
+      termId: terms.id,
+      taxonomy: termTaxonomies.taxonomy,
+      name: terms.name,
+      slug: terms.slug,
+      parentId: termTaxonomies.parentId,
+      usageCount: termTaxonomies.count,
+    })
+    .from(termTaxonomies)
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+    .where(eq(termTaxonomies.taxonomy, key))
+    .orderBy(asc(terms.name))
+    .limit(safeLimit);
+};
+
 export const createTaxonomy = async (input: { taxonomy: string; label?: string; description?: string }) => {
   const key = normalizeTaxonomyKey(input.taxonomy);
   if (!key) return { error: "Taxonomy key is required" };
@@ -1247,6 +1268,7 @@ export const updateDomainPost = async (
     layout?: string | null;
     categoryIds?: number[];
     tagIds?: number[];
+    taxonomyIds?: number[];
     metaEntries?: Array<{ key: string; value: string }>;
   },
 ) => {
@@ -1277,7 +1299,13 @@ export const updateDomainPost = async (
         .returning();
 
       await tx.delete(termRelationships).where(eq(termRelationships.objectId, data.id));
-      const taxonomyIds = Array.from(new Set([...(data.categoryIds ?? []), ...(data.tagIds ?? [])]));
+      const taxonomyIds = Array.from(
+        new Set(
+          Array.isArray(data.taxonomyIds)
+            ? data.taxonomyIds
+            : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
+        ),
+      );
       if (taxonomyIds.length > 0) {
         await tx.insert(termRelationships).values(
           taxonomyIds.map((termTaxonomyId) => ({
@@ -1540,6 +1568,7 @@ export const updatePost = async (
     layout?: string | null;
     categoryIds?: number[];
     tagIds?: number[];
+    taxonomyIds?: number[];
     metaEntries?: Array<{ key: string; value: string }>;
   }
 ) => {
@@ -1577,7 +1606,11 @@ export const updatePost = async (
       try {
         await tx.delete(termRelationships).where(eq(termRelationships.objectId, data.id));
         const taxonomyIds = Array.from(
-          new Set([...(data.categoryIds ?? []), ...(data.tagIds ?? [])]),
+          new Set(
+            Array.isArray(data.taxonomyIds)
+              ? data.taxonomyIds
+              : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
+          ),
         );
         if (taxonomyIds.length > 0) {
           await tx.insert(termRelationships).values(

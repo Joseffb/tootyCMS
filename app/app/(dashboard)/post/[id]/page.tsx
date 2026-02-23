@@ -4,7 +4,7 @@ import Editor from "@/components/editor/editor";
 import db from "@/lib/db";
 import { getWritingSettings } from "@/lib/cms-config";
 import { eq } from "drizzle-orm";
-import { postMeta, postTags } from "@/lib/schema";
+import { postMeta, postTags, termRelationships, termTaxonomies, terms } from "@/lib/schema";
 
 type Props = {
   params: Promise<{
@@ -46,6 +46,22 @@ export default async function PostPage({ params }: Props) {
   } catch {
     tagRows = [];
   }
+  let taxonomyAssignments: Array<{ taxonomy: string; termTaxonomyId: number; name: string }> = [];
+  try {
+    const taxonomyRows = await db
+      .select({
+        taxonomy: termTaxonomies.taxonomy,
+        termTaxonomyId: termTaxonomies.id,
+        name: terms.name,
+      })
+      .from(termRelationships)
+      .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
+      .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+      .where(eq(termRelationships.objectId, data.id));
+    taxonomyAssignments = taxonomyRows;
+  } catch {
+    taxonomyAssignments = [];
+  }
   let metaRows: Array<{ key: string; value: string }> = [];
   try {
     metaRows = await db
@@ -64,6 +80,7 @@ export default async function PostPage({ params }: Props) {
     categories: ((data as any).categories ?? []) as Array<{ categoryId: number }>,
     tags: tagRows,
     meta: metaRows,
+    taxonomyAssignments,
   };
 
   const editorMode = "rich-text";

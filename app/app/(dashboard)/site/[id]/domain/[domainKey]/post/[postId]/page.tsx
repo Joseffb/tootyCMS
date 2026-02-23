@@ -8,7 +8,7 @@ import {
   updateDomainPostMetadata,
 } from "@/lib/actions";
 import db from "@/lib/db";
-import { domainPostMeta, domainPosts, termRelationships, termTaxonomies } from "@/lib/schema";
+import { domainPostMeta, domainPosts, termRelationships, termTaxonomies, terms } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 
@@ -59,9 +59,11 @@ export default async function DomainPostPage({ params }: Props) {
     .select({
       id: termTaxonomies.id,
       taxonomy: termTaxonomies.taxonomy,
+      name: terms.name,
     })
     .from(termRelationships)
     .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
     .where(eq(termRelationships.objectId, data.id));
 
   const categoryRows = taxonomyRows
@@ -84,6 +86,11 @@ export default async function DomainPostPage({ params }: Props) {
     categories: categoryRows,
     tags: tagRows,
     meta: metaRows,
+    taxonomyAssignments: taxonomyRows.map((row) => ({
+      taxonomy: row.taxonomy,
+      termTaxonomyId: row.id,
+      name: row.name,
+    })),
   };
 
   return (

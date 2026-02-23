@@ -20,10 +20,11 @@ import { defaultExtensions } from "./extensions/editor-extensions";
 import { createUploadFn } from "@/components/tailwind/image-upload";
 import { getSuggestionItems, setCurrentPost, setPluginSuggestionItems, slashCommand } from "@/components/tailwind/slash-command";
 import {
-  createTagByName,
-  getAllCategories,
+  createTaxonomyTerm,
   getAllMetaKeys,
-  getAllTags,
+  getTaxonomyOverview,
+  getTaxonomyTerms,
+  getTaxonomyTermsPreview,
   updatePost,
   updatePostMetadata,
 } from "@/lib/actions";
@@ -93,7 +94,23 @@ type PostWithSite = {
   site?: { subdomain: string | null } | null;
   categories?: { categoryId: number }[];
   tags?: { tagId: number }[];
+  taxonomyAssignments?: Array<{
+    taxonomy: string;
+    termTaxonomyId: number;
+    name: string;
+  }>;
   meta?: PostMetaEntry[];
+};
+
+type TaxonomyOverviewRow = {
+  taxonomy: string;
+  label: string;
+  termCount: number;
+};
+
+type TaxonomyTerm = {
+  id: number;
+  name: string;
 };
 
 type SavePostAction = (data: {
@@ -105,6 +122,7 @@ type SavePostAction = (data: {
   layout?: string | null;
   categoryIds?: number[];
   tagIds?: number[];
+  taxonomyIds?: number[];
   metaEntries?: Array<{ key: string; value: string }>;
 }) => Promise<any>;
 
@@ -201,14 +219,15 @@ export default function Editor({
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [charsCount, setCharsCount] = useState<number>();
-  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
-  const [tags, setTags] = useState<{ id: number; name: string }[]>([]);
-  const [selectedTags, setSelectedTags] = useState<number[]>([]);
+  const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>([]);
+  const [taxonomyTermsByKey, setTaxonomyTermsByKey] = useState<Record<string, TaxonomyTerm[]>>({});
+  const [taxonomyExpanded, setTaxonomyExpanded] = useState<Record<string, boolean>>({});
+  const [taxonomyLoadingMore, setTaxonomyLoadingMore] = useState<Record<string, boolean>>({});
+  const [selectedTermsByTaxonomy, setSelectedTermsByTaxonomy] = useState<Record<string, number[]>>({});
+  const [termNameById, setTermNameById] = useState<Record<number, string>>({});
   const [metaEntries, setMetaEntries] = useState<PostMetaEntry[]>([]);
   const [metaKeySuggestions, setMetaKeySuggestions] = useState<string[]>([]);
-  const [categoryInput, setCategoryInput] = useState("");
-  const [tagInput, setTagInput] = useState("");
+  const [taxonomyInputByKey, setTaxonomyInputByKey] = useState<Record<string, string>>({});
   const [metaKeyInput, setMetaKeyInput] = useState("");
   const [metaValueInput, setMetaValueInput] = useState("");
   const [currentBlockMode, setCurrentBlockMode] = useState<string>("paragraph");
@@ -227,8 +246,7 @@ export default function Editor({
   const editorRef = useRef<EditorInstance | null>(null);
   const htmlDirtyRef = useRef(false);
   const htmlDraftRef = useRef("");
-  const selectedCategoriesRef = useRef<number[]>([]);
-  const selectedTagsRef = useRef<number[]>([]);
+  const selectedTermsByTaxonomyRef = useRef<Record<string, number[]>>({});
   const metaEntriesRef = useRef<PostMetaEntry[]>([]);
   const dataRef = useRef<PostWithSite>(post);
   const lastQueuedSignatureRef = useRef<string>("");
@@ -242,12 +260,25 @@ export default function Editor({
     setInitialContent(content);
     setPostImageUrls(Array.from(new Set(collectImageUrlsFromNode(content))));
 
-    const ids = post.categories?.map((c) => c.categoryId) ?? [];
-    setSelectedCategories(ids);
-    selectedCategoriesRef.current = ids;
-    const tagIds = post.tags?.map((t) => t.tagId) ?? [];
-    setSelectedTags(tagIds);
-    selectedTagsRef.current = tagIds;
+    const selected: Record<string, number[]> = {};
+    const nextTermNameById: Record<number, string> = {};
+    if (Array.isArray(post.taxonomyAssignments) && post.taxonomyAssignments.length > 0) {
+      for (const assignment of post.taxonomyAssignments) {
+        const taxonomy = assignment.taxonomy || "category";
+        const list = selected[taxonomy] ?? [];
+        if (!list.includes(assignment.termTaxonomyId)) list.push(assignment.termTaxonomyId);
+        selected[taxonomy] = list;
+        if (assignment.name) {
+          nextTermNameById[assignment.termTaxonomyId] = assignment.name;
+        }
+      }
+    } else {
+      selected.category = post.categories?.map((c) => c.categoryId) ?? [];
+      selected.tag = post.tags?.map((t) => t.tagId) ?? [];
+    }
+    setSelectedTermsByTaxonomy(selected);
+    selectedTermsByTaxonomyRef.current = selected;
+    setTermNameById((prev) => ({ ...prev, ...nextTermNameById }));
     const nextMeta = (post.meta ?? []).map((entry) => ({ key: entry.key, value: entry.value }));
     setMetaEntries(nextMeta);
     metaEntriesRef.current = nextMeta;
@@ -260,11 +291,8 @@ export default function Editor({
   }, [data]);
 
   useEffect(() => {
-    selectedCategoriesRef.current = selectedCategories;
-  }, [selectedCategories]);
-  useEffect(() => {
-    selectedTagsRef.current = selectedTags;
-  }, [selectedTags]);
+    selectedTermsByTaxonomyRef.current = selectedTermsByTaxonomy;
+  }, [selectedTermsByTaxonomy]);
   useEffect(() => {
     metaEntriesRef.current = metaEntries;
   }, [metaEntries]);
@@ -273,10 +301,48 @@ export default function Editor({
     htmlDraftRef.current = htmlDraft;
   }, [htmlDraft]);
 
+  const getAllSelectedTaxonomyIds = (selected: Record<string, number[]>) =>
+    Array.from(
+      new Set(
+        Object.values(selected)
+          .flat()
+          .filter((id): id is number => Number.isFinite(id)),
+      ),
+    );
+
   useEffect(() => {
-    getAllCategories().then((cats) => setCategories(cats));
-    getAllTags().then((rows) => setTags(rows));
+    let mounted = true;
+    getTaxonomyOverview()
+      .then(async (rows) => {
+        if (!mounted) return;
+        const sorted = [...rows].sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
+        setTaxonomyOverviewRows(sorted);
+        await Promise.all(
+          sorted.map(async (row) => {
+            const preview = await getTaxonomyTermsPreview(row.taxonomy, 20);
+            if (!mounted) return;
+            setTaxonomyTermsByKey((prev) => ({
+              ...prev,
+              [row.taxonomy]: preview.map((term) => ({ id: term.id, name: term.name })),
+            }));
+            setTermNameById((prev) => {
+              const next = { ...prev };
+              for (const term of preview) {
+                next[term.id] = term.name;
+              }
+              return next;
+            });
+          }),
+        );
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setTaxonomyOverviewRows([]);
+      });
     getAllMetaKeys().then((keys) => setMetaKeySuggestions(keys));
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -373,6 +439,7 @@ export default function Editor({
         layout: string | null;
         categoryIds: number[];
         tagIds: number[];
+        taxonomyIds: number[];
         metaEntries: PostMetaEntry[];
         signature: string;
       }>({
@@ -440,8 +507,9 @@ export default function Editor({
       slug: latest.slug ?? "",
       content,
       layout: latest.layout ?? null,
-      categoryIds: selectedCategoriesRef.current,
-      tagIds: selectedTagsRef.current,
+      categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
+      tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
+      taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
       metaEntries: metaEntriesRef.current,
     });
 
@@ -457,8 +525,9 @@ export default function Editor({
         slug: latest.slug ?? "",
         content,
         layout: latest.layout ?? null,
-        categoryIds: selectedCategoriesRef.current,
-        tagIds: selectedTagsRef.current,
+        categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
+        tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
+        taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
         metaEntries: metaEntriesRef.current,
         signature,
       },
@@ -477,8 +546,9 @@ export default function Editor({
       slug: latest.slug ?? "",
       content,
       layout: latest.layout ?? null,
-      categoryIds: selectedCategoriesRef.current,
-      tagIds: selectedTagsRef.current,
+      categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
+      tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
+      taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
       metaEntries: metaEntriesRef.current,
     });
 
@@ -492,8 +562,9 @@ export default function Editor({
         slug: latest.slug ?? "",
         content,
         layout: latest.layout ?? null,
-        categoryIds: selectedCategoriesRef.current,
-        tagIds: selectedTagsRef.current,
+        categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
+        tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
+        taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
         metaEntries: metaEntriesRef.current,
       });
       if ((result as any)?.error) {
@@ -521,36 +592,69 @@ export default function Editor({
     return editor.isActive(name as any, attrs as any);
   };
 
-  const addOrSelectCategory = async (rawName: string) => {
-    const trimmed = rawName.trim();
-    if (!trimmed) return;
-    const existing = categories.find((cat) => cat.name.toLowerCase() === trimmed.toLowerCase());
-    if (!existing) {
-      toast.error("Category must be selected from the predefined list.");
-      return;
-    }
-    setSelectedCategories((prev) => (prev.includes(existing.id) ? prev : [...prev, existing.id]));
-    setCategoryInput("");
+  const getTermsForTaxonomy = (taxonomy: string) => taxonomyTermsByKey[taxonomy] ?? [];
+
+  const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {
+    setSelectedTermsByTaxonomy((prev) => {
+      const current = prev[taxonomy] ?? [];
+      const next = current.includes(termId)
+        ? current.filter((id) => id !== termId)
+        : [...current, termId];
+      return { ...prev, [taxonomy]: next };
+    });
     enqueueSave(true);
   };
 
-  const addOrSelectTag = async (rawName: string) => {
+  const loadAllTermsForTaxonomy = async (taxonomy: string) => {
+    if (taxonomyExpanded[taxonomy]) return;
+    setTaxonomyLoadingMore((prev) => ({ ...prev, [taxonomy]: true }));
+    try {
+      const rows = await getTaxonomyTerms(taxonomy);
+      const normalized = rows.map((term) => ({ id: term.id, name: term.name }));
+      setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: normalized }));
+      setTermNameById((prev) => {
+        const next = { ...prev };
+        for (const term of normalized) next[term.id] = term.name;
+        return next;
+      });
+      setTaxonomyExpanded((prev) => ({ ...prev, [taxonomy]: true }));
+    } finally {
+      setTaxonomyLoadingMore((prev) => ({ ...prev, [taxonomy]: false }));
+    }
+  };
+
+  const addOrSelectTaxonomyTerm = async (taxonomy: string, rawName: string) => {
     const trimmed = rawName.trim();
     if (!trimmed) return;
-    const existing = tags.find((tag) => tag.name.toLowerCase() === trimmed.toLowerCase());
-    let tagId = existing?.id;
-    if (!tagId) {
-      const created = await createTagByName(trimmed);
+    const existing = getTermsForTaxonomy(taxonomy).find(
+      (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    let termId = existing?.id;
+    if (!termId) {
+      const created = await createTaxonomyTerm({ taxonomy, label: trimmed });
       if ((created as any)?.error) {
-        toast.error(String((created as any).error));
+        toast.error(String((created as any)?.error));
         return;
       }
-      tagId = (created as any).id;
-      const refreshed = await getAllTags();
-      setTags(refreshed);
+      termId = Number((created as any)?.id);
+      const termName = String((created as any)?.name ?? trimmed);
+      if (Number.isFinite(termId)) {
+        setTaxonomyTermsByKey((prev) => {
+          const current = prev[taxonomy] ?? [];
+          if (current.some((term) => term.id === termId)) return prev;
+          const next = [...current, { id: termId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
+          return { ...prev, [taxonomy]: next };
+        });
+        setTermNameById((prev) => ({ ...prev, [termId!]: termName }));
+      }
     }
-    setSelectedTags((prev) => (prev.includes(tagId!) ? prev : [...prev, tagId!]));
-    setTagInput("");
+    if (!termId) return;
+    setSelectedTermsByTaxonomy((prev) => {
+      const current = prev[taxonomy] ?? [];
+      if (current.includes(termId!)) return prev;
+      return { ...prev, [taxonomy]: [...current, termId!] };
+    });
+    setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: "" }));
     enqueueSave(true);
   };
 
@@ -577,7 +681,7 @@ export default function Editor({
     if (!data?.id) return;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.title, data.description, data.slug, data.layout, selectedCategories, selectedTags, metaEntries]);
+  }, [data.title, data.description, data.slug, data.layout, selectedTermsByTaxonomy, metaEntries]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1032,7 +1136,6 @@ export default function Editor({
         {sidebarTab === "block" && (
           <div className="mt-4 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Post Settings</div>
-            <div className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-700">/{data.slug}</div>
             <select
               value={data.layout ?? "post"}
               onChange={(e) => setData({ ...data, layout: e.target.value })}
@@ -1047,130 +1150,99 @@ export default function Editor({
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("orderedList") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleOrderedList().run())}>Numbered</button>
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("blockquote") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleBlockquote().run())}>Quote</button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {categories.map((cat) => {
-                const isSelected = selectedCategories.includes(cat.id);
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => {
-                      const updated = selectedCategories.includes(cat.id)
-                        ? selectedCategories.filter((id) => id !== cat.id)
-                        : [...selectedCategories, cat.id];
-                      setSelectedCategories(updated);
-                    }}
-                    className={cn(
-                      "rounded-full border px-2 py-1 text-xs transition-colors",
-                      isSelected ? "border-black bg-black text-white" : "border-gray-300 bg-transparent text-gray-600 hover:bg-gray-100",
-                    )}
-                  >
-                    {cat.name}
-                  </button>
-                );
-              })}
-            </div>
           </div>
         )}
 
         {sidebarTab === "plugins" && (
           <div className="mt-4 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Data Domains</div>
-            <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Categories</div>
-              <div className="flex gap-1">
-                <input
-                  list="editor-category-suggestions"
-                  value={categoryInput}
-                  onChange={(e) => setCategoryInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void addOrSelectCategory(categoryInput);
-                    }
-                  }}
-                  placeholder="Type to search or add"
-                  className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
-                />
-                <button
-                  type="button"
-                  className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
-                  onClick={() => void addOrSelectCategory(categoryInput)}
-                >
-                  Select
-                </button>
-              </div>
-              <datalist id="editor-category-suggestions">
-                {categories.map((cat) => (
-                  <option key={`cat-opt-${cat.id}`} value={cat.name} />
-                ))}
-              </datalist>
-              <div className="flex flex-wrap gap-1">
-                {selectedCategories.map((id) => {
-                  const cat = categories.find((item) => item.id === id);
-                  if (!cat) return null;
-                  return (
+            {taxonomyOverviewRows.map((taxonomyRow) => {
+              const taxonomy = taxonomyRow.taxonomy;
+              const sectionTerms = getTermsForTaxonomy(taxonomy);
+              const selectedTermIds = selectedTermsByTaxonomy[taxonomy] ?? [];
+              const hiddenCount = Math.max(0, taxonomyRow.termCount - sectionTerms.length);
+              const inputValue = taxonomyInputByKey[taxonomy] ?? "";
+              const listId = `editor-taxonomy-${taxonomy}-suggestions`;
+              return (
+                <div key={`taxonomy-${taxonomy}`} className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">
+                    {taxonomyRow.label}
+                  </div>
+                  <div className="flex gap-1">
+                    <input
+                      list={listId}
+                      value={inputValue}
+                      onChange={(e) => setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void addOrSelectTaxonomyTerm(taxonomy, inputValue);
+                        }
+                      }}
+                      placeholder="Type to search or add"
+                      className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                    />
                     <button
-                      key={`cat-pill-${id}`}
                       type="button"
-                      onClick={() => setSelectedCategories((prev) => prev.filter((entry) => entry !== id))}
-                      className="rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
-                      title="Remove category"
+                      className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
+                      onClick={() => void addOrSelectTaxonomyTerm(taxonomy, inputValue)}
                     >
-                      {cat.name} ×
+                      Select
                     </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Tags</div>
-              <div className="flex gap-1">
-                <input
-                  list="editor-tag-suggestions"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void addOrSelectTag(tagInput);
-                    }
-                  }}
-                  placeholder="Type to search or add"
-                  className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
-                />
-                <button
-                  type="button"
-                  className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
-                  onClick={() => void addOrSelectTag(tagInput)}
-                >
-                  Add
-                </button>
-              </div>
-              <datalist id="editor-tag-suggestions">
-                {tags.map((tag) => (
-                  <option key={`tag-opt-${tag.id}`} value={tag.name} />
-                ))}
-              </datalist>
-              <div className="flex flex-wrap gap-1">
-                {selectedTags.map((id) => {
-                  const tag = tags.find((item) => item.id === id);
-                  if (!tag) return null;
-                  return (
+                  </div>
+                  <datalist id={listId}>
+                    {sectionTerms.map((term) => (
+                      <option key={`term-opt-${taxonomy}-${term.id}`} value={term.name} />
+                    ))}
+                  </datalist>
+                  <div className="flex flex-wrap gap-1">
+                    {sectionTerms.map((term) => {
+                      const isSelected = selectedTermIds.includes(term.id);
+                      return (
+                        <button
+                          key={`term-${taxonomy}-${term.id}`}
+                          type="button"
+                          onClick={() => toggleTaxonomyTerm(taxonomy, term.id)}
+                          className={cn(
+                            "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                            isSelected ? "border-black bg-black text-white" : "border-stone-300 bg-white hover:bg-stone-100",
+                          )}
+                        >
+                          {term.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!taxonomyExpanded[taxonomy] && hiddenCount > 0 && (
                     <button
-                      key={`tag-pill-${id}`}
                       type="button"
-                      onClick={() => setSelectedTags((prev) => prev.filter((entry) => entry !== id))}
-                      className="rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
-                      title="Remove tag"
+                      className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
+                      onClick={() => void loadAllTermsForTaxonomy(taxonomy)}
+                      disabled={Boolean(taxonomyLoadingMore[taxonomy])}
                     >
-                      {tag.name} ×
+                      {taxonomyLoadingMore[taxonomy] ? "Loading..." : `More (${hiddenCount})`}
                     </button>
-                  );
-                })}
-              </div>
-            </div>
+                  )}
+                  <div className="flex flex-wrap gap-1">
+                    {selectedTermIds.map((id) => {
+                      const label = termNameById[id];
+                      if (!label) return null;
+                      return (
+                        <button
+                          key={`selected-${taxonomy}-${id}`}
+                          type="button"
+                          onClick={() => toggleTaxonomyTerm(taxonomy, id)}
+                          className="rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
+                          title={`Remove ${label}`}
+                        >
+                          {label} ×
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
 
             <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
               <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Meta Fields</div>
