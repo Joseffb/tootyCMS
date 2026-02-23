@@ -99,6 +99,9 @@ If a plugin uses undeclared capabilities, core throws `[plugin-guard]` errors.
 
 ## Local Development
 
+Runtime baseline:
+- Node.js `22` LTS
+
 1. Install dependencies
 
 ```bash

@@ -2,6 +2,10 @@
 
 This document summarizes the feature updates added in this cycle.
 
+## Runtime Baseline
+
+- Node.js `22` LTS is the supported runtime baseline for local/dev/CI/deploy.
+
 ## Setup Wizard
 
 First-run setup is served at `/setup` until setup is marked complete.
@@ -76,4 +80,3 @@ Plugin capability surface includes:
 Guardrails:
 - plugin runtime enforces declared capabilities for guarded operations
 - undeclared guarded operations continue to raise `[plugin-guard]` errors
-
