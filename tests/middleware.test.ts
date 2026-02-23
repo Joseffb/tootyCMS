@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 
-import middleware from "@/middleware";
+import middleware from "@/proxy";
 
 function makeRequest(url: string, host: string, cookie?: string) {
   const headers: Record<string, string> = { host };
@@ -129,6 +129,19 @@ describe("middleware routing", () => {
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "http://my-site---abc123.vercel.app/my-site.example.com/blog/my-post",
+    );
+  });
+
+  it("treats dashed vercel preview hostnames as root-domain requests", async () => {
+    const req = makeRequest(
+      "https://fernain-abc123-joseffbs-projects.vercel.app/",
+      "fernain-abc123-joseffbs-projects.vercel.app",
+    );
+
+    const response = await middleware(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe(
+      "https://fernain-abc123-joseffbs-projects.vercel.app/",
     );
   });
 

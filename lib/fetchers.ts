@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import db from "./db";
+import { isMissingRelationError } from "./db-errors";
 import { and, desc, eq, inArray, not } from "drizzle-orm";
 import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationships, termTaxonomies, terms, users } from "./schema";
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
@@ -478,16 +479,29 @@ export type SitemapPost = {
 };
 
 export async function getAllPosts(): Promise<SitemapPost[]> {
-  const results = await db
-    .select({
-      slug: posts.slug,
-      subdomain: sites.subdomain,
-      customDomain: sites.customDomain,
-      updatedAt: posts.updatedAt,
-    })
-    .from(posts)
-    .innerJoin(sites, eq(posts.siteId, sites.id))
-    .where(eq(posts.published, true));
+  let results: Array<{
+    slug: string;
+    subdomain: string | null;
+    customDomain: string | null;
+    updatedAt: Date | null;
+  }> = [];
+
+  try {
+    results = await db
+      .select({
+        slug: posts.slug,
+        subdomain: sites.subdomain,
+        customDomain: sites.customDomain,
+        updatedAt: posts.updatedAt,
+      })
+      .from(posts)
+      .innerJoin(sites, eq(posts.siteId, sites.id))
+      .where(eq(posts.published, true));
+  } catch (error) {
+    // Fresh installs can build before migrations create CMS tables.
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
 
   return results.map((row) => ({
     slug: row.slug,

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "fs/promises";
+import path from "path";
 import { getThemesDir } from "@/lib/extension-paths";
 
 const mimeByExt: Record<string, string> = {

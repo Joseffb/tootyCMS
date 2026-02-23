@@ -12,8 +12,8 @@ import {
   pluginConfigKey,
   pluginEnabledKey,
 } from "@/lib/plugins";
-import { pathToFileURL } from "node:url";
-import path from "node:path";
+import { pathToFileURL } from "url";
+import path from "path";
 import { trace } from "@/lib/debug";
 import { getPluginsDir } from "@/lib/extension-paths";
 

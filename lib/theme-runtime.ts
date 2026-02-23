@@ -1,5 +1,5 @@
-import { access, readFile } from "node:fs/promises";
-import path from "node:path";
+import { access, readFile } from "fs/promises";
+import path from "path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
 import { getThemesDir } from "@/lib/extension-paths";
 import {

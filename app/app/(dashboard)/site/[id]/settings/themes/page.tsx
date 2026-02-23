@@ -47,12 +47,12 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
       revalidateTag(`${domain}-posts`, "max");
     }
 
-    revalidatePath(`/site/${siteData.id}/settings/themes`);
+    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
     revalidatePath("/", "layout");
     revalidatePath("/[domain]", "layout");
     revalidatePath("/[domain]/[slug]", "page");
     revalidatePath("/[domain]/c/[slug]", "page");
-    redirect(`/site/${siteData.id}/settings/themes`);
+    redirect(`/app/site/${siteData.id}/settings/themes`);
   }
 
   async function saveThemeSettings(formData: FormData) {
@@ -67,13 +67,13 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
     }
 
     await saveThemeConfig(themeId, config);
-    revalidatePath(`/site/${siteData.id}/settings/themes`);
+    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
     revalidatePath("/", "layout");
     revalidatePath("/[domain]", "layout");
     revalidatePath("/[domain]/[slug]", "page");
     revalidatePath("/[domain]/c/[slug]", "page");
     revalidatePath("/[domain]/t/[slug]", "page");
-    redirect(`/site/${siteData.id}/settings/themes`);
+    redirect(`/app/site/${siteData.id}/settings/themes`);
   }
 
   return (

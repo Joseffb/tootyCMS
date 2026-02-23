@@ -1,8 +1,8 @@
 import db from "@/lib/db";
 import { cmsSettings } from "@/lib/schema";
 import { inArray } from "drizzle-orm";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
+import { readdir, readFile } from "fs/promises";
+import path from "path";
 import { getPluginsDir } from "@/lib/extension-paths";
 import {
   normalizeExtensionId,

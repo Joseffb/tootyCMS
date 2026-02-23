@@ -1,4 +1,4 @@
-import path from "node:path";
+import path from "path";
 
 function normalizeConfiguredPath(rawValue: string | undefined, fallbackDirName: string) {
   const trimmed = (rawValue || "").trim();

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBooleanSetting, getSiteUrlSetting, SEO_INDEXING_ENABLED_KEY } from "@/lib/cms-config";
+import { isMissingRelationError } from "@/lib/db-errors";
 import { getRootSiteUrl } from "@/lib/site-url";
 
 function resolveBaseUrl(configuredSiteUrl: string) {
@@ -7,12 +8,19 @@ function resolveBaseUrl(configuredSiteUrl: string) {
 }
 
 export async function GET() {
-  const [siteUrlSetting, indexingEnabled] = await Promise.all([
-    getSiteUrlSetting(),
-    getBooleanSetting(SEO_INDEXING_ENABLED_KEY, true),
-  ]);
-
-  const baseUrl = resolveBaseUrl(siteUrlSetting.value);
+  let baseUrl = getRootSiteUrl();
+  let indexingEnabled = true;
+  try {
+    const [siteUrlSetting, indexingSetting] = await Promise.all([
+      getSiteUrlSetting(),
+      getBooleanSetting(SEO_INDEXING_ENABLED_KEY, true),
+    ]);
+    baseUrl = resolveBaseUrl(siteUrlSetting.value);
+    indexingEnabled = indexingSetting;
+  } catch (error) {
+    // Fresh installs may not have cms_settings yet.
+    if (!isMissingRelationError(error)) throw error;
+  }
   const sitemapUrl = `${baseUrl.replace(/\/$/, "")}/sitemap.xml`;
 
   const body = indexingEnabled

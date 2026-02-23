@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import path from "node:path";
+import { readdirSync, readFileSync, statSync } from "fs";
+import path from "path";
 
 function walkFiles(dir: string): string[] {
   const out: string[] = [];

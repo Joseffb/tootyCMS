@@ -35,8 +35,6 @@ logs/traces/
 # vercel
 .vercel
 
-pnpm-lock.yaml
-
 # typescript
 *.tsbuildinfo
 /.cursorrules
@@ -54,7 +52,10 @@ pnpm-lock.yaml
 /.github/workflows/tinybird-cd.yml
 
 
+# generated local artifacts
+/public/sitemap.xml
+/test-results/.last-run.json
+
 next-env.d.ts
-# generated local artifacts/test-results/.last-run.json
 /next-env.d.ts
 /logs/

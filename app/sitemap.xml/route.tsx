@@ -1,5 +1,6 @@
 import { getAllPosts } from "@/lib/fetchers";
 import { getSiteUrlSetting } from "@/lib/cms-config";
+import { isMissingRelationError } from "@/lib/db-errors";
 import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 import { NextResponse } from "next/server";
 
@@ -23,8 +24,15 @@ function buildPostUrl(domain: string, slug: string) {
 }
 
 export async function GET() {
-  const [posts, siteUrl] = await Promise.all([getAllPosts(), getSiteUrlSetting()]);
-  const baseUrl = resolveBaseUrl(siteUrl.value);
+  let posts = await getAllPosts();
+  let baseUrl = getRootSiteUrl();
+  try {
+    const siteUrl = await getSiteUrlSetting();
+    baseUrl = resolveBaseUrl(siteUrl.value);
+  } catch (error) {
+    // Fresh installs may not have cms_settings yet.
+    if (!isMissingRelationError(error)) throw error;
+  }
 
   const homepage = `<url><loc>${escapeXml(baseUrl)}</loc><lastmod>${new Date().toISOString()}</lastmod></url>`;
 

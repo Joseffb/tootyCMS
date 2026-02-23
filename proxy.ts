@@ -96,12 +96,19 @@ export default async function middleware(req: NextRequest) {
     hostname = hostname.replace(/\.test$/, ".localhost");
   }
 
-  // Normalize Vercel preview deployment URLs
-  if (
-    hostname.includes("---") &&
-    hostname.endsWith(`.${process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX}`)
-  ) {
-    hostname = `${hostname.split("---")[0]}.${normalizedRootDomain}`;
+  // Normalize Vercel preview deployment URLs.
+  // Handles both "<branch>---<project>.vercel.app" and
+  // "<project>-<hash>-<scope>.vercel.app" URL shapes by treating preview hosts
+  // as root-domain requests unless they explicitly target app.<root>.
+  const vercelSuffix = process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX || "vercel.app";
+  if (hostname.endsWith(`.${vercelSuffix}`)) {
+    if (hostname.includes("---")) {
+      hostname = `${hostname.split("---")[0]}.${normalizedRootDomain}`;
+    } else if (hostname.startsWith("app-")) {
+      hostname = `app.${normalizedRootDomain}`;
+    } else {
+      hostname = normalizedRootDomain;
+    }
   }
 
   const MAIN_SUBDOMAIN = "main";

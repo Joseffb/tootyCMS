@@ -1,8 +1,8 @@
 import db from "@/lib/db";
 import { cmsSettings } from "@/lib/schema";
 import { eq, inArray } from "drizzle-orm";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
+import { readdir, readFile } from "fs/promises";
+import path from "path";
 import type { ThemeTokens } from "@/lib/theme-system";
 import { getThemesDir } from "@/lib/extension-paths";
 import {

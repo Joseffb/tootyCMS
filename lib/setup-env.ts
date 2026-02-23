@@ -1,5 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, writeFile } from "fs/promises";
+import { join } from "path";
 import { trace } from "@/lib/debug";
 
 export type SetupEnvField = {
