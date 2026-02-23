@@ -594,15 +594,29 @@ export default function Editor({
 
   const getTermsForTaxonomy = (taxonomy: string) => taxonomyTermsByKey[taxonomy] ?? [];
 
+  const updateSelectedTermsByTaxonomy = (
+    updater:
+      | Record<string, number[]>
+      | ((prev: Record<string, number[]>) => Record<string, number[]>),
+    saveImmediately = false,
+  ) => {
+    const prev = selectedTermsByTaxonomyRef.current;
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    selectedTermsByTaxonomyRef.current = next;
+    setSelectedTermsByTaxonomy(next);
+    if (saveImmediately) {
+      enqueueSave(true);
+    }
+  };
+
   const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {
-    setSelectedTermsByTaxonomy((prev) => {
+    updateSelectedTermsByTaxonomy((prev) => {
       const current = prev[taxonomy] ?? [];
       const next = current.includes(termId)
         ? current.filter((id) => id !== termId)
         : [...current, termId];
       return { ...prev, [taxonomy]: next };
-    });
-    enqueueSave(true);
+    }, true);
   };
 
   const loadAllTermsForTaxonomy = async (taxonomy: string) => {
@@ -629,33 +643,35 @@ export default function Editor({
     const existing = getTermsForTaxonomy(taxonomy).find(
       (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
     );
-    let termId = existing?.id;
-    if (!termId) {
+    let termId: number | null = existing?.id ?? null;
+    if (termId === null) {
       const created = await createTaxonomyTerm({ taxonomy, label: trimmed });
       if ((created as any)?.error) {
         toast.error(String((created as any)?.error));
         return;
       }
-      termId = Number((created as any)?.id);
+      const createdTermId = Number((created as any)?.id);
       const termName = String((created as any)?.name ?? trimmed);
-      if (Number.isFinite(termId)) {
+      if (Number.isFinite(createdTermId)) {
+        const resolvedTermId = createdTermId;
+        termId = resolvedTermId;
         setTaxonomyTermsByKey((prev) => {
           const current = prev[taxonomy] ?? [];
-          if (current.some((term) => term.id === termId)) return prev;
-          const next = [...current, { id: termId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
+          if (current.some((term) => term.id === resolvedTermId)) return prev;
+          const next = [...current, { id: resolvedTermId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
           return { ...prev, [taxonomy]: next };
         });
-        setTermNameById((prev) => ({ ...prev, [termId!]: termName }));
+        setTermNameById((prev) => ({ ...prev, [resolvedTermId]: termName }));
       }
     }
-    if (!termId) return;
-    setSelectedTermsByTaxonomy((prev) => {
+    if (termId === null) return;
+    const selectedTermId = termId;
+    updateSelectedTermsByTaxonomy((prev) => {
       const current = prev[taxonomy] ?? [];
-      if (current.includes(termId!)) return prev;
-      return { ...prev, [taxonomy]: [...current, termId!] };
-    });
+      if (current.includes(selectedTermId)) return prev;
+      return { ...prev, [taxonomy]: [...current, selectedTermId] };
+    }, true);
     setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: "" }));
-    enqueueSave(true);
   };
 
   const addMetaEntry = (key: string, value: string) => {
