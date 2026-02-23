@@ -62,7 +62,7 @@ export async function track(path: string) {
     const debug =
       (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_DEBUG_MODE === 'true') ||
       false;
-    const res = await fetch('/api/tb-events', {
+    const res = await fetch('/api/analytics/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(row) + '\n', // NDJSON newline
@@ -70,7 +70,7 @@ export async function track(path: string) {
     });
 
     if (!res.ok && debug) {
-      console.warn('[track] /api/tb-events failed:', res.status, await res.text());
+      console.warn('[track] /api/analytics/events failed:', res.status, await res.text());
     }
   } catch (err) {
     const debug =

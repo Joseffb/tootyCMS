@@ -19,6 +19,8 @@ export type KernelFilterName =
   | "render:layout"
   | "admin:environment-badge"
   | "admin:floating-widgets"
+  | "analytics:query"
+  | "analytics:ingest"
   | "auth:providers"
   | "auth:adapter"
   | "auth:callbacks:signIn"

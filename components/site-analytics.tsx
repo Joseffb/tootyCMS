@@ -13,7 +13,7 @@ import {
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
 
-/* ---------- Types that match Tinybird pipe output ---------- */
+/* ---------- Types that match analytics query output ---------- */
 type SparkRow = { date: string; total_pageviews: number };
 type PageRow  = { page: string;   visitors: number };
 type RefRow   = { source: string; visitors: number };
@@ -32,10 +32,10 @@ async function fetchPipe<T>(pipe: string, domain: string): Promise<T | null> {
     domain: stripPort(domain),
   }).toString();
 
-  const res = await fetch(`/api/tb-pipe?${qs}`);
+  const res = await fetch(`/api/analytics/query?${qs}`);
   if (!res.ok) {
     if (process.env.NEXT_PUBLIC_DEBUG_MODE === "1" || process.env.NEXT_PUBLIC_DEBUG_MODE === "true") {
-      console.warn('[tb-pipe]', pipe, await res.text());
+      console.warn('[analytics query]', pipe, await res.text());
     }
     return null;
   }

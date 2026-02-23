@@ -32,9 +32,9 @@ export default function OverviewStats() {
         domain:    'all',          // all traffic (no domain filter)
       }).toString();
 
-      const res = await fetch(`/api/tb-pipe?${qs}`, { cache: 'no-store' });
+      const res = await fetch(`/api/analytics/query?${qs}`, { cache: 'no-store' });
       if (!res.ok) {
-        // In local debug, tb-pipe can intentionally return empty fallback data.
+        // In local debug, analytics query can intentionally return empty fallback data.
         setDaily([]);
         return;
       }

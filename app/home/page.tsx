@@ -42,7 +42,7 @@ const featureGrid = [
   },
   {
     title: "Analytics-ready",
-    body: "Tinybird hooks built in, plus graceful local fallback in debug mode.",
+    body: "Provider-based analytics hooks with graceful local fallback in debug mode.",
   },
   {
     title: "Storage options",

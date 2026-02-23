@@ -6,21 +6,41 @@ import { Analytics } from '@vercel/analytics/react';
 import { track } from '@/components/track';
 import Cookies from 'js-cookie';
 import { usePathname } from "next/navigation";
+import {
+  ANALYTICS_CONSENT_COOKIE,
+  LEGACY_ANALYTICS_CONSENT_COOKIE,
+  isGpcEnabled,
+  parseAnalyticsConsent,
+  shouldCollectAnalytics,
+} from "@/lib/privacy-consent";
 
 export default function AnalyticsConditional() {
   const pathname = usePathname();
   const [isAdminArea, setIsAdminArea] = useState(false);
 
-  // default to tracking unless the cookie is explicitly "false"
   const [allowed, setAllowed] = useState(() => {
-    const consent = Cookies.get('rb_analytics_consent');
-    return consent !== 'false';
+    const consent = parseAnalyticsConsent(
+      Cookies.get(ANALYTICS_CONSENT_COOKIE) || Cookies.get(LEGACY_ANALYTICS_CONSENT_COOKIE),
+    );
+    return shouldCollectAnalytics({ consent, gpcEnabled: false });
   });
+
+  const persistConsent = (value: "true" | "false", expires: Date | number) => {
+    Cookies.set(ANALYTICS_CONSENT_COOKIE, value, { expires, path: "/" });
+    Cookies.set(LEGACY_ANALYTICS_CONSENT_COOKIE, value, { expires, path: "/" });
+  };
 
   useEffect(() => {
     const host = window.location.host || "";
     setIsAdminArea(pathname.startsWith("/app") || host.startsWith("app."));
   }, [pathname]);
+
+  useEffect(() => {
+    const gpcEnabled = isGpcEnabled(String((navigator as any)?.globalPrivacyControl ?? ""));
+    if (!gpcEnabled) return;
+    persistConsent("false", 365);
+    setAllowed(false);
+  }, []);
 
   // fire a page-view on mount or whenever we flip from denied→allowed
   useEffect(() => {
@@ -39,20 +59,20 @@ export default function AnalyticsConditional() {
         enableDeclineButton
 
         onAccept={() => {
+          const gpcEnabled = isGpcEnabled(String((navigator as any)?.globalPrivacyControl ?? ""));
+          if (gpcEnabled) {
+            persistConsent("false", 365);
+            setAllowed(false);
+            return;
+          }
           // consent = 'true' until Jan 1 2026
-          Cookies.set("rb_analytics_consent", "true", {
-            expires: new Date("2026-01-01T00:00:00Z"),
-            path: "/",
-          });
+          persistConsent("true", new Date("2026-01-01T00:00:00Z"));
           setAllowed(true);
         }}
 
         onDecline={() => {
           // consent = 'false' until tomorrow
-          Cookies.set("rb_analytics_consent", "false", {
-            expires: 1,   // 1 day
-            path: "/",
-          });
+          persistConsent("false", 1); // 1 day
           setAllowed(false);
 
           // remove other tracking cookies (not the consent cookie)

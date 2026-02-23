@@ -20,18 +20,18 @@ function apiUrl(path: string) {
   return `${base}${path}`;
 }
 
-/** Call our `/api/tb-pipe` proxy to fetch the domain's traffic share. */
+/** Call our analytics query endpoint to fetch the domain's traffic share. */
 async function getDomainShare(domain: string): Promise<number | null> {
   try {
     const qs  = new URLSearchParams({ name: "domain_share", domain }).toString();
-    const res = await fetch(apiUrl(`/api/tb-pipe?${qs}`), {
-      // cache for 60 s on the server to avoid hammering Tinybird
+    const res = await fetch(apiUrl(`/api/analytics/query?${qs}`), {
+      // cache for 60 s on the server to avoid hammering provider backends
       next: { revalidate: 60 },
     });
 
     if (!res.ok) {
       if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
-        console.warn("[tb-pipe domain_share]", domain, await res.text());
+        console.warn("[analytics domain_share]", domain, await res.text());
       }
       return null;
     }
@@ -40,7 +40,7 @@ async function getDomainShare(domain: string): Promise<number | null> {
     return json.data?.[0]?.pct_hits ?? null;
   } catch (err) {
     if (process.env.DEBUG_MODE === "1" || process.env.DEBUG_MODE === "true") {
-      console.warn("[tb-pipe domain_share] fetch failed", err);
+      console.warn("[analytics domain_share] fetch failed", err);
     }
     return null;
   }
