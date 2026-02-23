@@ -52,3 +52,8 @@ pnpm-lock.yaml
 /tinybird/0
 /tinybird/.tinyb
 /.github/workflows/tinybird-cd.yml
+
+
+next-env.d.ts
+# generated local artifacts/test-results/.last-run.json
+/next-env.d.ts
