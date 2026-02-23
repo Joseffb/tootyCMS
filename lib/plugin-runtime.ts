@@ -12,6 +12,8 @@ import {
   listPluginsWithSiteState,
   pluginConfigKey,
   pluginEnabledKey,
+  pluginMustUseKey,
+  sitePluginConfigKey,
   sitePluginEnabledKey,
 } from "@/lib/plugins";
 import { pathToFileURL } from "url";
@@ -48,6 +50,16 @@ export async function setPluginEnabled(pluginId: string, enabled: boolean) {
     });
 }
 
+export async function setPluginMustUse(pluginId: string, mustUse: boolean) {
+  await db
+    .insert(cmsSettings)
+    .values({ key: pluginMustUseKey(pluginId), value: mustUse ? "true" : "false" })
+    .onConflictDoUpdate({
+      target: cmsSettings.key,
+      set: { value: mustUse ? "true" : "false" },
+    });
+}
+
 export async function setSitePluginEnabled(siteId: string, pluginId: string, enabled: boolean) {
   await db
     .insert(cmsSettings)
@@ -55,6 +67,16 @@ export async function setSitePluginEnabled(siteId: string, pluginId: string, ena
     .onConflictDoUpdate({
       target: cmsSettings.key,
       set: { value: enabled ? "true" : "false" },
+    });
+}
+
+export async function saveSitePluginConfig(siteId: string, pluginId: string, config: Record<string, unknown>) {
+  await db
+    .insert(cmsSettings)
+    .values({ key: sitePluginConfigKey(siteId, pluginId), value: JSON.stringify(config) })
+    .onConflictDoUpdate({
+      target: cmsSettings.key,
+      set: { value: JSON.stringify(config) },
     });
 }
 
@@ -126,7 +148,11 @@ function createGuardedKernelView(
   };
 }
 
-async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnType<typeof createKernel>) {
+async function maybeRegisterPluginHooks(
+  plugin: PluginWithState,
+  kernel: ReturnType<typeof createKernel>,
+  options?: { siteId?: string; mustUse?: boolean },
+) {
   const pluginId = plugin.id;
   const capabilities = toRuntimeCapabilities(plugin);
   const absEntry = path.join(getPluginsDir(), pluginId, "index.mjs");
@@ -135,6 +161,8 @@ async function maybeRegisterPluginHooks(plugin: PluginWithState, kernel: ReturnT
     if (typeof mod?.register === "function") {
       const guardedKernel = createGuardedKernelView(plugin, kernel, capabilities);
       const guardedApi = createPluginExtensionApi(pluginId, {
+        siteId: options?.siteId,
+        mustUse: Boolean(options?.mustUse),
         capabilities,
         coreRegistry: {
           registerContentType(registration) {
@@ -180,7 +208,8 @@ export async function createKernelForRequest(siteId?: string) {
   for (const plugin of plugins) {
     if (!plugin.enabled) continue;
     const scope = plugin.scope || "site";
-    if (siteId && scope !== "core" && "siteEnabled" in plugin && !plugin.siteEnabled) continue;
+    const sitePlugin = siteId && scope !== "core" && "siteEnabled" in plugin;
+    if (sitePlugin && !plugin.mustUse && !plugin.siteEnabled) continue;
     const capabilities = toRuntimeCapabilities(plugin);
 
     if (plugin.menu) {
@@ -199,7 +228,10 @@ export async function createKernelForRequest(siteId?: string) {
       }
     }
 
-    await maybeRegisterPluginHooks(plugin, kernel);
+    await maybeRegisterPluginHooks(plugin, kernel, {
+      siteId,
+      mustUse: sitePlugin ? plugin.mustUse : false,
+    });
   }
 
   return kernel;

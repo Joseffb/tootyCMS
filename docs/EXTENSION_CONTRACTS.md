@@ -58,7 +58,7 @@ Plugins may:
 - Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`)
 - Declare plugin scope explicitly:
   - `scope: "core"` = MU-style plugin. When globally enabled, it runs across all sites.
-  - `scope: "site"` = site plugin. It must be globally enabled and explicitly enabled per site.
+  - `scope: "site"` = site plugin. It must be globally enabled; by default it is enabled/disabled per site, and may be forced network-wide with global `Must Use`.
 
 Scope governance:
 

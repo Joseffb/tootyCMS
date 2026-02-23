@@ -2,6 +2,7 @@ import db from "@/lib/db";
 import { cmsSettings, dataDomains, siteDataDomains, sites } from "@/lib/schema";
 import { eq, inArray } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
+import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
 import type {
   PluginAuthAdapterRegistration,
   PluginContentTypeRegistration,
@@ -43,6 +44,8 @@ type PluginCoreRegistry = {
 type PluginExtensionApiOptions = {
   capabilities?: Partial<PluginCapabilities>;
   coreRegistry?: PluginCoreRegistry;
+  siteId?: string;
+  mustUse?: boolean;
 };
 
 export type PluginExtensionApi = BaseExtensionApi & {
@@ -119,7 +122,18 @@ function pluginSettingKey(pluginId: string | undefined, key: string) {
   return `plugin_${pluginId}_${key}`;
 }
 
-function createReadBaseApi(pluginId?: string): BaseExtensionApi {
+function parseJsonObject<T>(raw: string | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOptions): BaseExtensionApi {
+  const boundSiteId = options?.siteId;
+  const useGlobalOnly = Boolean(options?.mustUse);
   return {
     pluginId,
     async getSiteById(siteId: string) {
@@ -144,11 +158,45 @@ function createReadBaseApi(pluginId?: string): BaseExtensionApi {
     },
     async getPluginSetting(key: string, fallback = "") {
       const finalKey = pluginSettingKey(pluginId, key);
-      const row = await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, finalKey),
-        columns: { value: true },
-      });
-      return row?.value ?? fallback;
+      if (!pluginId) {
+        const row = await db.query.cmsSettings.findFirst({
+          where: eq(cmsSettings.key, finalKey),
+          columns: { value: true },
+        });
+        return row?.value ?? fallback;
+      }
+
+      const globalConfigLookupKey = pluginConfigKey(pluginId);
+      const siteConfigLookupKey = boundSiteId ? sitePluginConfigKey(boundSiteId, pluginId) : "";
+      const siteLegacyLookupKey = boundSiteId ? `site_${boundSiteId}_${finalKey}` : "";
+      const lookupKeys = [globalConfigLookupKey, finalKey];
+      if (boundSiteId) {
+        if (!useGlobalOnly) lookupKeys.push(siteLegacyLookupKey);
+        lookupKeys.push(siteConfigLookupKey);
+      }
+
+      const rows = await db
+        .select({ key: cmsSettings.key, value: cmsSettings.value })
+        .from(cmsSettings)
+        .where(inArray(cmsSettings.key, lookupKeys));
+      const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+
+      if (boundSiteId && !useGlobalOnly) {
+        const siteLegacyValue = byKey[siteLegacyLookupKey];
+        if (siteLegacyValue !== undefined) return siteLegacyValue;
+      }
+
+      if (boundSiteId && !useGlobalOnly) {
+        const siteConfig = parseJsonObject<Record<string, unknown>>(byKey[siteConfigLookupKey], {});
+        const siteValue = siteConfig[key];
+        if (siteValue !== undefined && siteValue !== null) return String(siteValue);
+      }
+
+      const globalConfig = parseJsonObject<Record<string, unknown>>(byKey[globalConfigLookupKey], {});
+      const globalValue = globalConfig[key];
+      if (globalValue !== undefined && globalValue !== null) return String(globalValue);
+
+      return byKey[finalKey] ?? fallback;
     },
     async listDataDomains(siteId?: string) {
       const rows = await db.select().from(dataDomains);
@@ -174,7 +222,7 @@ export function createPluginExtensionApi(
   pluginId?: string,
   options?: PluginExtensionApiOptions,
 ): PluginExtensionApi {
-  const base = createReadBaseApi(pluginId);
+  const base = createReadBaseApi(pluginId, options);
   const capabilities = {
     ...DEFAULT_PLUGIN_CAPABILITIES,
     ...(options?.capabilities || {}),

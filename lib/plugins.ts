@@ -23,11 +23,14 @@ export type PluginManifest = PluginContract;
 
 export type PluginWithState = PluginManifest & {
   enabled: boolean;
+  mustUse: boolean;
   config: Record<string, unknown>;
 };
 
 export type PluginWithSiteState = PluginWithState & {
   siteEnabled: boolean;
+  siteConfig: Record<string, unknown>;
+  effectiveConfig: Record<string, unknown>;
 };
 
 export function pluginEnabledKey(pluginId: string) {
@@ -38,8 +41,16 @@ export function pluginConfigKey(pluginId: string) {
   return `plugin_${pluginId}_config`;
 }
 
+export function pluginMustUseKey(pluginId: string) {
+  return `plugin_${pluginId}_must_use`;
+}
+
 export function sitePluginEnabledKey(siteId: string, pluginId: string) {
   return `site_${siteId}_plugin_${pluginId}_enabled`;
+}
+
+export function sitePluginConfigKey(siteId: string, pluginId: string) {
+  return `site_${siteId}_plugin_${pluginId}_config`;
 }
 
 function normalizePluginId(raw: string) {
@@ -113,7 +124,7 @@ export async function listPluginsWithState() {
   const plugins = await getAvailablePlugins();
   if (plugins.length === 0) return [] as PluginWithState[];
 
-  const keys = plugins.flatMap((plugin) => [pluginEnabledKey(plugin.id), pluginConfigKey(plugin.id)]);
+  const keys = plugins.flatMap((plugin) => [pluginEnabledKey(plugin.id), pluginConfigKey(plugin.id), pluginMustUseKey(plugin.id)]);
   const rows = await db
     .select({ key: cmsSettings.key, value: cmsSettings.value })
     .from(cmsSettings)
@@ -124,9 +135,11 @@ export async function listPluginsWithState() {
   return plugins.map((plugin) => {
     const enabledRaw = byKey[pluginEnabledKey(plugin.id)];
     const configRaw = byKey[pluginConfigKey(plugin.id)];
+    const mustUseRaw = byKey[pluginMustUseKey(plugin.id)];
     return {
       ...plugin,
       enabled: enabledRaw === "true",
+      mustUse: mustUseRaw === "true",
       config: configRaw ? parseJsonObject<Record<string, unknown>>(configRaw, {}) : {},
     } satisfies PluginWithState;
   });
@@ -147,7 +160,7 @@ export async function listPluginsWithSiteState(siteId: string): Promise<PluginWi
   const plugins = await listPluginsWithState();
   if (!plugins.length) return [];
 
-  const keys = plugins.map((plugin) => sitePluginEnabledKey(siteId, plugin.id));
+  const keys = plugins.flatMap((plugin) => [sitePluginEnabledKey(siteId, plugin.id), sitePluginConfigKey(siteId, plugin.id)]);
   const rows = await db
     .select({ key: cmsSettings.key, value: cmsSettings.value })
     .from(cmsSettings)
@@ -155,10 +168,15 @@ export async function listPluginsWithSiteState(siteId: string): Promise<PluginWi
   const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
 
   return plugins.map((plugin) => {
-    const raw = byKey[sitePluginEnabledKey(siteId, plugin.id)];
+    const enabledRaw = byKey[sitePluginEnabledKey(siteId, plugin.id)];
+    const siteConfigRaw = byKey[sitePluginConfigKey(siteId, plugin.id)];
+    const siteConfig = siteConfigRaw ? parseJsonObject<Record<string, unknown>>(siteConfigRaw, {}) : {};
+    const effectiveConfig = plugin.mustUse ? { ...plugin.config } : { ...plugin.config, ...siteConfig };
     return {
       ...plugin,
-      siteEnabled: raw === undefined ? true : raw === "true",
+      siteEnabled: plugin.mustUse ? true : enabledRaw === undefined ? true : enabledRaw === "true",
+      siteConfig,
+      effectiveConfig,
     };
   });
 }

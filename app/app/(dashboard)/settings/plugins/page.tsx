@@ -1,7 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { listPluginsWithState, savePluginConfig, setPluginEnabled } from "@/lib/plugin-runtime";
+import { listPluginsWithState, savePluginConfig, setPluginEnabled, setPluginMustUse } from "@/lib/plugin-runtime";
 import { revalidatePath } from "next/cache";
 
 export default async function PluginSettingsPage() {
@@ -14,7 +14,9 @@ export default async function PluginSettingsPage() {
     "use server";
     const pluginId = String(formData.get("pluginId") || "");
     const enabled = formData.get("enabled") === "on";
+    const mustUse = formData.get("mustUse") === "on";
     await setPluginEnabled(pluginId, enabled);
+    await setPluginMustUse(pluginId, mustUse);
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
   }
@@ -38,7 +40,7 @@ export default async function PluginSettingsPage() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-300">
-        Drop plugins into <code>/plugins/&lt;plugin-id&gt;/plugin.json</code> and manage them here.
+        Drop plugins into <code>/plugins/&lt;plugin-id&gt;/plugin.json</code>. Global settings here act as gate + defaults for site plugins.
       </p>
 
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
@@ -79,6 +81,12 @@ export default async function PluginSettingsPage() {
                         <input type="checkbox" name="enabled" defaultChecked={plugin.enabled} className="h-4 w-4" />
                         <span className="text-xs text-stone-600 dark:text-stone-300">Enabled</span>
                       </label>
+                      {(plugin.scope || "site") === "site" && (
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" name="mustUse" defaultChecked={plugin.mustUse} className="h-4 w-4" />
+                          <span className="text-xs text-stone-600 dark:text-stone-300">Must Use</span>
+                        </label>
+                      )}
                       <button className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white">Save</button>
                     </form>
                     <Link href={`/plugins/${plugin.id}`} className="rounded-md border border-stone-300 px-3 py-1 text-xs dark:border-stone-600 dark:text-white">
