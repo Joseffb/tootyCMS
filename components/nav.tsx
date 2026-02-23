@@ -40,6 +40,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const [floatingWidgets, setFloatingWidgets] = useState<
     Array<{ id: string; title: string; content: string; position: "bottom-right" }>
   >([]);
+  const [hasAnalyticsProviders, setHasAnalyticsProviders] = useState(false);
   const currentSiteId = segments[0] === "site" && id ? id : segments[0] === "post" ? siteId ?? null : null;
 
   useEffect(() => {
@@ -94,6 +95,7 @@ export default function Nav({ children }: { children: ReactNode }) {
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (!json) return;
+        setHasAnalyticsProviders(Boolean(json.hasAnalyticsProviders));
         setEnvironmentBadge({
           show: Boolean(json.environmentBadge?.show),
           label: String(json.environmentBadge?.label || ""),
@@ -113,6 +115,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         );
       })
       .catch(() => {
+        setHasAnalyticsProviders(false);
         setEnvironmentBadge({
           show: false,
           label: "",
@@ -159,12 +162,16 @@ export default function Nav({ children }: { children: ReactNode }) {
           isActive: segments.length === 2,
           icon: <Newspaper width={18} />,
         },
-        {
-          name: "Analytics",
-          href: `/site/${id}/analytics`,
-          isActive: segments.includes("analytics"),
-          icon: <BarChart3 width={18} />,
-        },
+        ...(hasAnalyticsProviders
+          ? [
+              {
+                name: "Analytics",
+                href: `/site/${id}/analytics`,
+                isActive: segments.includes("analytics"),
+                icon: <BarChart3 width={18} />,
+              },
+            ]
+          : []),
         {
           name: "Settings",
           href: `/site/${id}/settings`,
@@ -233,7 +240,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         icon: <Settings width={18} />,
       })),
     ];
-  }, [segments, id, siteId, pluginTabs, pathname, dataDomainTabs]);
+  }, [segments, id, siteId, pluginTabs, pathname, dataDomainTabs, hasAnalyticsProviders]);
 
   const [showSidebar, setShowSidebar] = useState(false);
 
