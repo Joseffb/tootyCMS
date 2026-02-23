@@ -10,12 +10,10 @@ export async function register(kernel, api) {
 
   kernel.addFilter("admin:environment-badge", async (current, context = {}) => {
     const environment = context?.environment === "development" ? "development" : "production";
-    const showRaw = await api?.getPluginSetting("showEnvironmentBanner", "true");
     const developmentLabel = (await api?.getPluginSetting("developmentLabel", "Development")) || "Development";
     const productionLabel = (await api?.getPluginSetting("productionLabel", "Production")) || "Production";
-    const show = ["true", "1", "yes", "on"].includes(String(showRaw || "").trim().toLowerCase());
     return {
-      show,
+      show: true,
       label: environment === "development" ? developmentLabel : productionLabel,
       environment,
     };

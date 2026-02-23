@@ -11,11 +11,6 @@ const ALLOWED_PIPES = new Set([
   "domain_share",
 ]);
 
-function providerEnabled() {
-  const flag = String(process.env.ANALYTICS_TINYBIRD_ENABLED || "true").trim().toLowerCase();
-  return !["0", "false", "off", "no"].includes(flag);
-}
-
 function providerKey() {
   return String(process.env.ANALYTICS_TINYBIRD_KEY || "tinybird").trim().toLowerCase();
 }
@@ -30,12 +25,6 @@ function dashboardToken() {
 
 function ingestToken() {
   return String(process.env.ANALYTICS_TINYBIRD_INGEST_TOKEN || process.env.TB_INGEST_TOKEN || "").trim();
-}
-
-function isEnabledValue(raw, fallback) {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (!value) return fallback;
-  return !["0", "false", "off", "no"].includes(value);
 }
 
 function shouldHandleProvider(context = {}, key = providerKey()) {
@@ -61,8 +50,6 @@ function withJsonContentType(res) {
 export async function register(kernel, api) {
   kernel.addFilter("analytics:query", async (current, context = {}) => {
     if (current) return current;
-    const enabledRaw = await api?.getPluginSetting?.("enabled", String(providerEnabled()));
-    if (!isEnabledValue(enabledRaw, providerEnabled())) return current;
     const providerKeyValue = String((await api?.getPluginSetting?.("providerKey", providerKey())) || providerKey())
       .trim()
       .toLowerCase();
@@ -97,8 +84,6 @@ export async function register(kernel, api) {
   });
 
   kernel.addAction("analytics:event", async (event = {}) => {
-    const enabledRaw = await api?.getPluginSetting?.("enabled", String(providerEnabled()));
-    if (!isEnabledValue(enabledRaw, providerEnabled())) return;
     if (!shouldForwardEvent(event)) return;
 
     const token = String((await api?.getPluginSetting?.("ingestToken", ingestToken())) || "").trim();

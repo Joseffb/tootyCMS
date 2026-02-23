@@ -1,13 +1,3 @@
-function isEnabledValue(raw, fallback = false) {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (!value) return fallback;
-  return ["1", "true", "yes", "on"].includes(value);
-}
-
-function envEnabled() {
-  return isEnabledValue(process.env.ANALYTICS_GOOGLE_ENABLED, false);
-}
-
 function envTagId() {
   return String(
     process.env.ANALYTICS_GOOGLE_TAG_ID || process.env.ANALYTICS_GOOGLE_MEASUREMENT_ID || "",
@@ -20,9 +10,6 @@ function envDeveloperId() {
 
 export async function register(kernel, api) {
   kernel.addFilter("analytics:scripts", async (current = []) => {
-    const enabledRaw = await api?.getPluginSetting?.("enabled", String(envEnabled()));
-    if (!isEnabledValue(enabledRaw, envEnabled())) return current;
-
     const configuredTagId = String(
       (await api?.getPluginSetting?.("tagId", "")) ||
         (await api?.getPluginSetting?.("measurementId", "")) ||

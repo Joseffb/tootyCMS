@@ -1277,6 +1277,8 @@ export const createDomainPost = withSiteAuth(
       "max",
     );
     site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
+    revalidatePublicContentCache();
+    revalidatePublicContentCache();
 
     await emitCmsLifecycleEvent({
       name: "custom_event",
@@ -1412,6 +1414,7 @@ export const updateDomainPost = async (
         revalidateTag(`${siteRow.customDomain}-${slug}`, "max");
       }
     }
+    revalidatePublicContentCache();
 
     return {
       ...postRecord,
@@ -1538,6 +1541,7 @@ export const updateDomainPostMetadata = async (
         revalidateTag(`${domain}-${updatedSlug}`, "max");
       }
     }
+    revalidatePublicContentCache();
 
     return response;
   } catch (error: any) {
@@ -1555,7 +1559,7 @@ export const deleteDomainPost = async (postId: string) => {
 
   const post = await db.query.domainPosts.findFirst({
     where: eq(domainPosts.id, postId),
-    columns: { id: true, userId: true, siteId: true },
+    columns: { id: true, userId: true, siteId: true, slug: true },
   });
   if (!post || post.userId !== session.user.id) {
     return { error: "Post not found" };
@@ -1575,6 +1579,24 @@ export const deleteDomainPost = async (postId: string) => {
         contentId: post.id,
       },
     });
+
+    if (post.siteId) {
+      const siteRow = await db.query?.sites?.findFirst?.({
+        where: eq(sites.id, post.siteId),
+        columns: { subdomain: true, customDomain: true },
+      });
+      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
+      if (siteRow?.subdomain) {
+        const domain = `${siteRow.subdomain}.${rootDomain}`;
+        revalidateTag(`${domain}-posts`, "max");
+        revalidateTag(`${domain}-${post.slug}`, "max");
+      }
+      if (siteRow?.customDomain) {
+        revalidateTag(`${siteRow.customDomain}-posts`, "max");
+        revalidateTag(`${siteRow.customDomain}-${post.slug}`, "max");
+      }
+    }
+    revalidatePublicContentCache();
     return { siteId: post.siteId };
   } catch (error: any) {
     return { error: error.message };
@@ -1797,6 +1819,7 @@ export const updatePost = async (
         }
       }
     }
+    revalidatePublicContentCache();
 
     // 5. Return the updated post *with* its categories
     return {
@@ -1916,6 +1939,7 @@ export const updatePostMetadata = withPostAuth(
           revalidateTag(`${domain}-${updatedSlug}`, "max");
         }
       }
+      revalidatePublicContentCache();
 
       return response;
     } catch (error: any) {
@@ -1952,6 +1976,24 @@ export const deletePost = withPostAuth(
           contentId: post.id,
         },
       });
+
+      const siteRow = response?.siteId
+        ? await db.query?.sites?.findFirst?.({
+            where: eq(sites.id, response.siteId),
+            columns: { subdomain: true, customDomain: true },
+          })
+        : null;
+      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
+      if (siteRow?.subdomain) {
+        const domain = `${siteRow.subdomain}.${rootDomain}`;
+        revalidateTag(`${domain}-posts`, "max");
+        revalidateTag(`${domain}-${post.slug}`, "max");
+      }
+      if (siteRow?.customDomain) {
+        revalidateTag(`${siteRow.customDomain}-posts`, "max");
+        revalidateTag(`${siteRow.customDomain}-${post.slug}`, "max");
+      }
+      revalidatePublicContentCache();
 
       return response;
     } catch (error: any) {
@@ -2081,6 +2123,17 @@ function revalidateSettingsPath(path: string) {
   revalidatePath(path);
   const appPath = path.startsWith("/app") ? path : `/app${path}`;
   revalidatePath(appPath);
+}
+
+function revalidatePublicContentCache() {
+  // Frontend routes are path-cached; invalidate all public content surfaces after writes.
+  revalidatePath("/[domain]", "layout");
+  revalidatePath("/[domain]/[slug]", "page");
+  revalidatePath("/[domain]/posts", "page");
+  revalidatePath("/[domain]/c/[slug]", "page");
+  revalidatePath("/[domain]/t/[slug]", "page");
+  revalidatePath("/sitemap.xml");
+  revalidatePath("/robots.txt");
 }
 
 async function requireOwnedSite(siteIdRaw: string) {

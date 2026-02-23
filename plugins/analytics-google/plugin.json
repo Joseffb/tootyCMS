@@ -17,12 +17,6 @@
   },
   "settingsFields": [
     {
-      "key": "enabled",
-      "label": "Enable Provider",
-      "type": "checkbox",
-      "defaultValue": false
-    },
-    {
       "key": "providerKey",
       "label": "Provider Key",
       "type": "text",

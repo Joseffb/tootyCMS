@@ -17,12 +17,6 @@
   },
   "settingsFields": [
     {
-      "key": "showEnvironmentBanner",
-      "label": "Show Environment Banner",
-      "type": "checkbox",
-      "defaultValue": true
-    },
-    {
       "key": "developmentLabel",
       "label": "Development Label",
       "type": "text",

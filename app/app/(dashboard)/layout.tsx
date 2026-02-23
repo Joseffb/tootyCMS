@@ -5,6 +5,10 @@ import { ensureMainSiteForCurrentUser } from "@/lib/bootstrap";
 import Link from "next/link";
 import { getDatabaseHealthReport } from "@/lib/db-health";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   await ensureMainSiteForCurrentUser();
   const dbHealth = await getDatabaseHealthReport();
