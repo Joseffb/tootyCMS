@@ -1,33 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-
-const { getTokenMock } = vi.hoisted(() => ({
-  getTokenMock: vi.fn(),
-}));
-
-vi.mock("next-auth/jwt", () => ({
-  getToken: getTokenMock,
-}));
 
 import middleware from "@/middleware";
 
-function makeRequest(url: string, host: string) {
+function makeRequest(url: string, host: string, cookie?: string) {
+  const headers: Record<string, string> = { host };
+  if (cookie) headers.cookie = cookie;
   return new NextRequest(url, {
-    headers: {
-      host,
-    },
+    headers,
   });
 }
 
 describe("middleware routing", () => {
   beforeEach(() => {
-    getTokenMock.mockReset();
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "example.com";
     process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX = "vercel.app";
   });
 
   it("redirects unauthenticated app users to login", async () => {
-    getTokenMock.mockResolvedValue(null);
     const req = makeRequest("http://app.example.com/dashboard", "app.example.com");
 
     const response = await middleware(req);
@@ -37,8 +27,11 @@ describe("middleware routing", () => {
   });
 
   it("redirects authenticated users away from login page", async () => {
-    getTokenMock.mockResolvedValue({ sub: "u_1" });
-    const req = makeRequest("http://app.example.com/login", "app.example.com");
+    const req = makeRequest(
+      "http://app.example.com/login",
+      "app.example.com",
+      "next-auth.session-token=fake-token",
+    );
 
     const response = await middleware(req);
 
@@ -47,8 +40,11 @@ describe("middleware routing", () => {
   });
 
   it("rewrites authenticated app requests to /app", async () => {
-    getTokenMock.mockResolvedValue({ sub: "u_1" });
-    const req = makeRequest("http://app.example.com/settings?tab=profile", "app.example.com");
+    const req = makeRequest(
+      "http://app.example.com/settings?tab=profile",
+      "app.example.com",
+      "next-auth.session-token=fake-token",
+    );
 
     const response = await middleware(req);
 
@@ -58,8 +54,11 @@ describe("middleware routing", () => {
   });
 
   it("rewrites authenticated app root path to /app", async () => {
-    getTokenMock.mockResolvedValue({ sub: "u_1" });
-    const req = makeRequest("http://app.example.com/", "app.example.com");
+    const req = makeRequest(
+      "http://app.example.com/",
+      "app.example.com",
+      "next-auth.session-token=fake-token",
+    );
 
     const response = await middleware(req);
 
@@ -113,7 +112,6 @@ describe("middleware routing", () => {
   });
 
   it("normalizes /app/login on app subdomain to single /app/login rewrite", async () => {
-    getTokenMock.mockResolvedValue(null);
     const req = makeRequest("http://app.example.com/app/login", "app.example.com");
 
     const response = await middleware(req);

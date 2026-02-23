@@ -29,6 +29,15 @@ function traceEdge(scope: string, message: string, payload?: unknown) {
   console.debug(`[trace:${tier}:${scope}] ${message}`, payload);
 }
 
+function hasSessionCookie(req: NextRequest) {
+  return Boolean(
+    req.cookies.get("__Secure-next-auth.session-token")?.value ||
+      req.cookies.get("next-auth.session-token")?.value ||
+      req.cookies.get("__Secure-authjs.session-token")?.value ||
+      req.cookies.get("authjs.session-token")?.value,
+  );
+}
+
 export const config = {
   matcher: [
     "/((?!api/|_next/|_static/|_vercel|media/|sitemap\\.xml|robots\\.txt|.*\\..*).*)",
@@ -111,8 +120,7 @@ export default async function middleware(req: NextRequest) {
       traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
       return rewriteWithTrace("/setup");
     }
-    const { getToken } = await import("next-auth/jwt");
-    const session = await getToken({ req });
+    const session = hasSessionCookie(req);
     if (!session && appPath !== "/login") {
       traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });
       return redirectWithTrace("/login");
