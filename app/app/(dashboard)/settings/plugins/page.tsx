@@ -58,14 +58,34 @@ export default async function PluginSettingsPage() {
             {plugins.map((plugin) => (
               <tr key={plugin.id} className="border-t border-stone-200 dark:border-stone-700">
                 <td className="px-4 py-3 align-top">
-                  <div className="font-medium text-stone-900 dark:text-white">{plugin.name}</div>
+                  <div className="flex items-baseline gap-2">
+                    <div className="font-medium text-stone-900 dark:text-white">{plugin.name}</div>
+                    <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+                      {(plugin.scope || "site") === "core" ? "Core" : "Site"}
+                    </span>
+                    {plugin.developer ? (
+                      <div className="text-xs text-stone-500 italic">
+                        by{" "}
+                        {plugin.website ? (
+                          <a
+                            href={plugin.website}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline hover:text-stone-700 dark:hover:text-stone-300"
+                          >
+                            {plugin.developer}
+                          </a>
+                        ) : (
+                          plugin.developer
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="text-xs text-stone-500">{plugin.id}</div>
                   <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">{plugin.description}</div>
                 </td>
                 <td className="px-4 py-3 align-top">
-                  <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700 dark:bg-stone-800 dark:text-stone-200">
-                    {(plugin.scope || "site") === "core" ? "Core" : "Site"}
-                  </span>
+                  <span className="text-xs text-stone-500">Inherited</span>
                 </td>
                 <td className="px-4 py-3 align-top text-stone-700 dark:text-stone-300">{plugin.version || "n/a"}</td>
                 <td className="px-4 py-3 align-top">
@@ -104,6 +124,18 @@ export default async function PluginSettingsPage() {
                             <span className="font-medium text-stone-700 dark:text-stone-300">{field.label}</span>
                             {field.type === "checkbox" ? (
                               <input type="checkbox" name={field.key} defaultChecked={Boolean(plugin.config[field.key])} className="h-4 w-4" />
+                            ) : field.type === "select" ? (
+                              <select
+                                name={field.key}
+                                defaultValue={String(plugin.config[field.key] || field.defaultValue || "")}
+                                className="rounded-md border border-stone-300 px-2 py-1 text-xs dark:border-stone-600 dark:bg-black dark:text-white"
+                              >
+                                {(field.options || []).map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
                             ) : field.type === "textarea" ? (
                               <textarea name={field.key} defaultValue={String(plugin.config[field.key] || "")} className="rounded-md border border-stone-300 px-2 py-1 text-xs dark:border-stone-600 dark:bg-black dark:text-white" />
                             ) : (

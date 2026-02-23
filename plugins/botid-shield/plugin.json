@@ -19,8 +19,21 @@
     {
       "key": "mode",
       "label": "Mode",
-      "type": "text",
-      "placeholder": "monitor | enforce | off",
+      "type": "select",
+      "options": [
+        {
+          "label": "Monitor",
+          "value": "monitor"
+        },
+        {
+          "label": "Enforce",
+          "value": "enforce"
+        },
+        {
+          "label": "Off",
+          "value": "off"
+        }
+      ],
       "defaultValue": "monitor",
       "helpText": "monitor logs and allows; enforce blocks detected bots."
     },
@@ -50,5 +63,7 @@
       "placeholder": "HUMAN | BAD-BOT | GOOD-BOT | ALLOWED",
       "helpText": "Optional local-dev simulation value passed to BotID check."
     }
-  ]
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
 }

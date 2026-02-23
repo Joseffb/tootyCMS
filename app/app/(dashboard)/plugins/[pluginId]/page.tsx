@@ -33,6 +33,18 @@ export default async function PluginSetupPage({ params }: Props) {
   return (
     <div className="flex max-w-3xl flex-col gap-6 p-8">
       <h1 className="font-cal text-3xl font-bold">{pluginData.name}</h1>
+      {pluginData.developer ? (
+        <p className="text-xs text-stone-500 italic">
+          by{" "}
+          {pluginData.website ? (
+            <a href={pluginData.website} target="_blank" rel="noreferrer" className="underline">
+              {pluginData.developer}
+            </a>
+          ) : (
+            pluginData.developer
+          )}
+        </p>
+      ) : null}
       <p className="text-sm text-stone-600">{pluginData.description}</p>
 
       {(pluginData.settingsFields || []).length > 0 ? (
@@ -42,6 +54,18 @@ export default async function PluginSetupPage({ params }: Props) {
               <span className="font-medium text-stone-800">{field.label}</span>
               {field.type === "checkbox" ? (
                 <input type="checkbox" name={field.key} defaultChecked={Boolean(config[field.key])} className="h-4 w-4" />
+              ) : field.type === "select" ? (
+                <select
+                  name={field.key}
+                  defaultValue={String(config[field.key] || field.defaultValue || "")}
+                  className="rounded-md border border-stone-300 px-2 py-1"
+                >
+                  {(field.options || []).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               ) : field.type === "textarea" ? (
                 <textarea
                   name={field.key}

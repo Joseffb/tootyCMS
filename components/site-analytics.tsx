@@ -56,6 +56,17 @@ function toBar(rows: any[], key: 'page' | 'source' | 'country' | 'device'): List
   }));
 }
 
+function isValidSourceHost(name: string) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized || normalized.startsWith("(") || normalized.includes(" ")) return false;
+  return normalized.includes(".");
+}
+
+function isValidCountryCode(code?: string) {
+  const normalized = String(code || "").trim().toLowerCase();
+  return /^[a-z]{2}$/.test(normalized);
+}
+
 /* ---------- component ---------- */
 interface Props { domain: string; siteId?: string }        // e.g. "lexia.example.com"
 
@@ -132,7 +143,7 @@ export default function SiteAnalyticsCharts({ domain, siteId }: Props) {
                 name,
                 value,
                 icon:
-                  title === 'Top Sources'
+                  title === 'Top Sources' && isValidSourceHost(name)
                     ? () => (
                       <Image
                         src={`https://www.google.com/s2/favicons?sz=64&domain_url=${name}`}
@@ -142,11 +153,11 @@ export default function SiteAnalyticsCharts({ domain, siteId }: Props) {
                         className="mr-2.5"
                       />
                     )
-                    : title === 'Countries'
+                    : title === 'Countries' && isValidCountryCode(code)
                       ? () => (
                         <Image
-                          src={`https://flag.vercel.app/m/${code}.svg`}
-                          alt={code as string}
+                          src={`https://flag.vercel.app/m/${String(code).toLowerCase()}.svg`}
+                          alt={String(code)}
                           width={24}
                           height={16}
                           className="mr-2.5"

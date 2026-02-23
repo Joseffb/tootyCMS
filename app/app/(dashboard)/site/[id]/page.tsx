@@ -36,13 +36,24 @@ export default async function SitePosts({ params }: Props) {
     isPrimary,
   });
   const configuredSiteUrl = isPrimary ? (await getSiteUrlSetting()).value.trim() : "";
-  const publicUrl = configuredSiteUrl || derivedUrl;
+  const normalizedConfiguredUrl = configuredSiteUrl
+    ? (() => {
+        const normalized = configuredSiteUrl.replace(/:(\d+):\1(?=\/|$)/, ":$1");
+        try {
+          const parsed = new URL(normalized);
+          return `${parsed.protocol}//${parsed.host}`;
+        } catch {
+          return "";
+        }
+      })()
+    : "";
+  const publicUrl = normalizedConfiguredUrl || derivedUrl;
   const publicHost = configuredSiteUrl
     ? (() => {
         try {
-          return new URL(configuredSiteUrl).host;
+          return new URL(normalizedConfiguredUrl || configuredSiteUrl).host;
         } catch {
-          return configuredSiteUrl.replace(/^https?:\/\//, "");
+          return configuredSiteUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "").replace(/:(\d+):\1$/, ":$1");
         }
       })()
     : derivedHost;

@@ -8,6 +8,7 @@ const DEFAULTS = {
   acceptText: "Accept",
   declineText: "Decline",
   denyOnDismiss: true,
+  declineCooldownDays: 1,
 };
 
 function asBoolean(value: unknown, fallback: boolean) {
@@ -17,6 +18,12 @@ function asBoolean(value: unknown, fallback: boolean) {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+function asPositiveInt(value: unknown, fallback: number) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
 }
 
 export async function GET(req: NextRequest) {
@@ -34,6 +41,6 @@ export async function GET(req: NextRequest) {
     acceptText: String(config.acceptText || DEFAULTS.acceptText).trim() || DEFAULTS.acceptText,
     declineText: String(config.declineText || DEFAULTS.declineText).trim() || DEFAULTS.declineText,
     denyOnDismiss: asBoolean(config.denyOnDismiss, DEFAULTS.denyOnDismiss),
+    declineCooldownDays: asPositiveInt(config.declineCooldownDays, DEFAULTS.declineCooldownDays),
   });
 }
-

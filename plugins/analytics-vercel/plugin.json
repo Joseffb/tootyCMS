@@ -15,5 +15,7 @@
     "label": "Vercel Analytics",
     "path": "/app/plugins/analytics-vercel"
   },
-  "settingsFields": []
+  "settingsFields": [],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
 }

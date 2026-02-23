@@ -2,7 +2,8 @@ function normalizeHostInput(value: string | null | undefined) {
   return (value || "")
     .trim()
     .replace(/^https?:\/\//, "")
-    .replace(/\/+$/, "");
+    .replace(/\/+$/, "")
+    .replace(/:(\d+):\1$/, ":$1");
 }
 
 function splitHostAndPort(host: string) {

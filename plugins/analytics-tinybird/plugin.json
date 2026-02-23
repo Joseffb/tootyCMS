@@ -28,5 +28,7 @@
       "type": "password",
       "placeholder": "p.ey..."
     }
-  ]
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
 }

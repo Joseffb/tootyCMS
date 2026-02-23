@@ -117,6 +117,8 @@ const REQUIRED_TABLE_SUFFIXES = [
   "verificationTokens",
 ] as const;
 
+const DEFAULT_ENABLED_PLUGINS = ["hello-teety"] as const;
+
 async function tableExists(tableName: string) {
   const result = (await db.execute(
     sql`select exists (
@@ -256,6 +258,13 @@ export async function POST(req: Request) {
     await db
       .insert(cmsSettings)
       .values({ key: "site_url", value: inferredSiteUrl })
+      .onConflictDoNothing();
+  }
+
+  for (const pluginId of DEFAULT_ENABLED_PLUGINS) {
+    await db
+      .insert(cmsSettings)
+      .values({ key: `plugin_${pluginId}_enabled`, value: "true" })
       .onConflictDoNothing();
   }
 

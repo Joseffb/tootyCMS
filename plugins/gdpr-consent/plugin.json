@@ -41,6 +41,15 @@
       "label": "Treat Dismiss as Deny",
       "type": "checkbox",
       "defaultValue": true
+    },
+    {
+      "key": "declineCooldownDays",
+      "label": "Decline/Skip Cooldown (days)",
+      "type": "number",
+      "defaultValue": 1,
+      "helpText": "How many days to hide the prompt after Decline or Dismiss."
     }
-  ]
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
 }

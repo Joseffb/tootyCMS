@@ -14,6 +14,8 @@ import {
 } from "@/lib/privacy-consent";
 
 export default function AnalyticsConditional() {
+  const ACCEPT_TTL_DAYS = 180;
+  const CONSENT_SNOOZE_COOKIE = "tooty_analytics_consent_snooze";
   const pathname = usePathname();
   const [isAdminArea, setIsAdminArea] = useState(false);
   const [consentConfig, setConsentConfig] = useState<{
@@ -22,12 +24,14 @@ export default function AnalyticsConditional() {
     acceptText: string;
     declineText: string;
     denyOnDismiss: boolean;
+    declineCooldownDays: number;
   }>({
     enabled: false,
     bannerMessage: "We use anonymous analytics to improve this site.",
     acceptText: "Accept",
     declineText: "Decline",
     denyOnDismiss: true,
+    declineCooldownDays: 1,
   });
   const [showConsentModal, setShowConsentModal] = useState(false);
 
@@ -50,8 +54,13 @@ export default function AnalyticsConditional() {
     Cookies.set(LEGACY_ANALYTICS_CONSENT_COOKIE, value, { expires, path: "/" });
   };
 
+  const snoozeConsentPrompt = (expiresInDays: number) => {
+    Cookies.set(CONSENT_SNOOZE_COOKIE, "1", { expires: expiresInDays, path: "/" });
+  };
+
   const denyConsent = () => {
-    persistConsent("false", 1);
+    persistConsent("false", consentConfig.declineCooldownDays);
+    snoozeConsentPrompt(consentConfig.declineCooldownDays);
     setAllowed(false);
     setShowConsentModal(false);
 
@@ -68,7 +77,7 @@ export default function AnalyticsConditional() {
       denyConsent();
       return;
     }
-    persistConsent("true", new Date("2026-01-01T00:00:00Z"));
+    persistConsent("true", ACCEPT_TTL_DAYS);
     setAllowed(true);
     setShowConsentModal(false);
   };
@@ -90,6 +99,7 @@ export default function AnalyticsConditional() {
           acceptText: String(json.acceptText || "Accept"),
           declineText: String(json.declineText || "Decline"),
           denyOnDismiss: Boolean(json.denyOnDismiss),
+          declineCooldownDays: Math.max(1, Number.parseInt(String(json.declineCooldownDays || "1"), 10) || 1),
         });
       })
       .catch(() => undefined);
@@ -111,7 +121,8 @@ export default function AnalyticsConditional() {
     const consent = parseAnalyticsConsent(
       Cookies.get(ANALYTICS_CONSENT_COOKIE) || Cookies.get(LEGACY_ANALYTICS_CONSENT_COOKIE),
     );
-    setShowConsentModal(consent === "unknown");
+    const snoozed = Cookies.get(CONSENT_SNOOZE_COOKIE) === "1";
+    setShowConsentModal(consent === "unknown" && !snoozed);
   }, [isAdminArea, consentConfig.enabled]);
 
   // fire a page-view on mount or whenever we flip from denied→allowed
@@ -150,6 +161,7 @@ export default function AnalyticsConditional() {
                     denyConsent();
                     return;
                   }
+                  snoozeConsentPrompt(consentConfig.declineCooldownDays);
                   setShowConsentModal(false);
                 }}
               >

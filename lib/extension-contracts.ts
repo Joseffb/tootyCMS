@@ -2,12 +2,18 @@ import type { ThemeTokens } from "@/lib/theme-system";
 
 export type ExtensionKind = "plugin" | "theme";
 
-export type ExtensionFieldType = "text" | "textarea" | "password" | "number" | "checkbox";
+export type ExtensionFieldType = "text" | "textarea" | "password" | "number" | "checkbox" | "select";
+
+export type ExtensionSettingsOption = {
+  label: string;
+  value: string;
+};
 
 export type ExtensionSettingsField = {
   key: string;
   label: string;
   type?: ExtensionFieldType;
+  options?: ExtensionSettingsOption[];
   placeholder?: string;
   helpText?: string;
   defaultValue?: string;
@@ -24,6 +30,8 @@ export type PluginContract = {
   kind: "plugin";
   id: string;
   name: string;
+  developer?: string;
+  website?: string;
   description?: string;
   version?: string;
   minCoreVersion?: string;
@@ -100,9 +108,20 @@ function cleanField(field: unknown): ExtensionSettingsField | null {
       candidate.type === "textarea" ||
       candidate.type === "password" ||
       candidate.type === "number" ||
-      candidate.type === "checkbox"
+      candidate.type === "checkbox" ||
+      candidate.type === "select"
         ? candidate.type
         : "text",
+    options: Array.isArray(candidate.options)
+      ? candidate.options
+          .map((entry) => asRecord(entry))
+          .flatMap<ExtensionSettingsOption>((entry) => {
+            const value = String(entry.value ?? "").trim();
+            if (!value) return [];
+            const label = String(entry.label ?? value).trim() || value;
+            return [{ label, value }];
+          })
+      : undefined,
     placeholder: String(candidate.placeholder ?? "").trim(),
     helpText: String(candidate.helpText ?? "").trim(),
     defaultValue:
@@ -129,6 +148,8 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     kind: "plugin",
     id,
     name,
+    developer: String(candidate.developer ?? "").trim(),
+    website: String(candidate.website ?? "").trim(),
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
     minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),

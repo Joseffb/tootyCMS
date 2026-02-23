@@ -16,6 +16,21 @@ describe("extension contracts", () => {
     expect(plugin?.minCoreVersion).toBe("0.1.x");
   });
 
+  it("preserves plugin developer metadata", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "example-plugin",
+        name: "Example Plugin",
+        developer: "Tooty CMS Core",
+        website: "https://github.com/Joseffb/tootyCMS",
+      },
+      "example-plugin",
+    );
+    expect(plugin).not.toBeNull();
+    expect(plugin?.developer).toBe("Tooty CMS Core");
+    expect(plugin?.website).toBe("https://github.com/Joseffb/tootyCMS");
+  });
+
   it("preserves theme minimum core version field", () => {
     const theme = validateThemeContract(
       {

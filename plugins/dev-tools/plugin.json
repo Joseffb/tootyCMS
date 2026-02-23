@@ -30,5 +30,7 @@
       "placeholder": "Production",
       "defaultValue": "Production"
     }
-  ]
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
 }

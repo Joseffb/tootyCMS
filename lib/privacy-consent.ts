@@ -20,6 +20,5 @@ export function shouldCollectAnalytics(input: {
   gpcEnabled: boolean;
 }) {
   if (input.gpcEnabled) return false;
-  return input.consent !== "denied";
+  return input.consent === "granted";
 }
-
