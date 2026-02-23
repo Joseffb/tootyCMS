@@ -44,9 +44,16 @@ interface Data {
 
 
 export async function generateStaticParams() {
-  const allSites = await db.query.sites.findMany({
-    columns: { subdomain: true, customDomain: true },
-  });
+  let allSites: Array<{ subdomain: string | null; customDomain: string | null }> = [];
+  try {
+    allSites = await db.query.sites.findMany({
+      columns: { subdomain: true, customDomain: true },
+    });
+  } catch (error) {
+    // Allow production builds to succeed before migrations are applied.
+    console.warn("generateStaticParams skipped for [domain]:", error);
+    return [];
+  }
 
   return allSites
     .flatMap(({ subdomain, customDomain }) => [
