@@ -80,3 +80,12 @@ Plugin capability surface includes:
 Guardrails:
 - plugin runtime enforces declared capabilities for guarded operations
 - undeclared guarded operations continue to raise `[plugin-guard]` errors
+
+## Vercel Deployment Lessons (2026-02-23)
+
+- A project mis-set to framework `Other` can produce a deployment that reports `Ready` but serves Vercel `NOT_FOUND` for domain traffic.
+- Pin framework in-repo with `vercel.json`:
+  - `{ "framework": "nextjs" }`
+- Keep production runtime on Node.js `22` to match `engines.node`.
+- Use `DEBUG_MODE=false` for production deploys.
+- For app subdomain reachability, ensure `app.<root-domain>` has an explicit DNS record to the Vercel target from domain settings.

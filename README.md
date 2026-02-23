@@ -123,6 +123,15 @@ npm run dev
 App runs at:
 - `http://localhost:3000`
 
+## Vercel Deployment Guardrails
+
+- Keep the project framework set to `Next.js`.
+- This repo includes `vercel.json` (`"framework": "nextjs"`) to prevent accidental fallback to `Other`.
+- If Vercel builds this app as `Other`, deploys can look "ready" but serve a platform `404 NOT_FOUND` for all domains.
+- Keep runtime aligned with Node.js `22` (`engines.node`).
+- Set `DEBUG_MODE=false` in production.
+- For app subdomain routing, ensure `app.<root-domain>` has an explicit DNS record pointing to the Vercel target shown in your domain settings.
+
 ## Versioning Policy
 
 Tooty is currently in pre-`1.0.0` unstable development.
