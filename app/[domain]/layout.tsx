@@ -4,6 +4,14 @@ import { Metadata } from "next";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu } from "@/lib/menu-system";
 import { getActiveThemeForSite, getThemeAssetsForSite } from "@/lib/theme-runtime";
+import {
+  getSiteTextSetting,
+  SEO_META_DESCRIPTION_KEY,
+  SEO_META_TITLE_KEY,
+  SOCIAL_META_DESCRIPTION_KEY,
+  SOCIAL_META_IMAGE_KEY,
+  SOCIAL_META_TITLE_KEY,
+} from "@/lib/cms-config";
 import Script from "next/script";
 
 export async function generateMetadata({
@@ -16,37 +24,57 @@ export async function generateMetadata({
   const data = await getSiteData(decoded);
 
   if (!data) return null;
-  const activeTheme = data.id ? await getActiveThemeForSite(String(data.id)) : null;
+  const siteId = data.id ? String(data.id) : "";
+  const [activeTheme, seoSettings] = await Promise.all([
+    siteId ? getActiveThemeForSite(siteId) : Promise.resolve(null),
+    siteId
+      ? Promise.all([
+          getSiteTextSetting(siteId, SEO_META_TITLE_KEY, ""),
+          getSiteTextSetting(siteId, SEO_META_DESCRIPTION_KEY, ""),
+          getSiteTextSetting(siteId, SOCIAL_META_TITLE_KEY, ""),
+          getSiteTextSetting(siteId, SOCIAL_META_DESCRIPTION_KEY, ""),
+          getSiteTextSetting(siteId, SOCIAL_META_IMAGE_KEY, ""),
+        ])
+      : Promise.resolve(["", "", "", "", ""] as const),
+  ]);
   const themeConfig = (activeTheme?.config || {}) as Record<string, unknown>;
   const configuredTitle = String(themeConfig.site_title || "").trim();
   const configuredFavicon = String(themeConfig.site_favicon_url || "").trim();
+  const [seoMetaTitle, seoMetaDescription, socialMetaTitle, socialMetaDescription, socialMetaImage] = seoSettings;
   const {
     name,
     description,
     image,
     logo,
+    heroSubtitle,
   } = data as {
     name: string;
     description: string;
     image: string;
     logo: string;
+    heroSubtitle?: string | null;
   };
-  const title = configuredTitle || name;
+  const defaultDescription = (heroSubtitle || description || "").trim();
+  const title = seoMetaTitle || configuredTitle || name;
+  const seoDescription = seoMetaDescription || defaultDescription;
+  const ogTitle = socialMetaTitle || title;
+  const ogDescription = socialMetaDescription || seoDescription;
+  const ogImage = socialMetaImage || image || logo || "/icon.png";
   const favicon = configuredFavicon || logo || "/icon.png";
 
   return {
     title,
-    description,
+    description: seoDescription,
     openGraph: {
-      title,
-      description,
-      images: [image],
+      title: ogTitle,
+      description: ogDescription,
+      images: [ogImage],
     },
     twitter: {
       card: "summary_large_image",
-      title,
-      description,
-      images: [image],
+      title: ogTitle,
+      description: ogDescription,
+      images: [ogImage],
       creator: "@vercel",
     },
     icons: {

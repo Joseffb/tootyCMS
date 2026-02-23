@@ -21,6 +21,9 @@ import {
   SEO_INDEXING_ENABLED_KEY,
   SEO_META_DESCRIPTION_KEY,
   SEO_META_TITLE_KEY,
+  SOCIAL_META_DESCRIPTION_KEY,
+  SOCIAL_META_IMAGE_KEY,
+  SOCIAL_META_TITLE_KEY,
   SCHEDULES_ENABLED_KEY,
   SCHEDULES_PING_SITEMAP_KEY,
   setSiteBooleanSetting,
@@ -2308,14 +2311,11 @@ export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
-  const [randomDefaults, indexingEnabled, mainHeaderEnabled, showNetworkSites, seoMetaTitle, seoMetaDescription, writingSettings, domains] =
+  const [randomDefaults, mainHeaderEnabled, showNetworkSites, writingSettings, domains] =
     await Promise.all([
       getSiteBooleanSetting(site.id, "random_default_images_enabled", true),
-      getSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, true),
       getSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, true),
       getSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, false),
-      getSiteTextSetting(site.id, SEO_META_TITLE_KEY, ""),
-      getSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, ""),
       getSiteWritingSettings(site.id),
       getAllDataDomains(site.id),
     ]);
@@ -2323,11 +2323,8 @@ export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
   return {
     siteId: site.id,
     randomDefaultsEnabled: randomDefaults,
-    indexingEnabled,
     mainHeaderEnabled,
     showNetworkSites,
-    seoMetaTitle,
-    seoMetaDescription,
     writingSettings,
     dataDomains: domains.map((domain) => ({ key: domain.key, label: domain.label })),
   };
@@ -2340,11 +2337,8 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
   const { site } = owned;
 
   const randomDefaultsEnabled = formData.get("random_default_images_enabled") === "on";
-  const indexingEnabled = formData.get("seo_indexing_enabled") === "on";
   const mainHeaderEnabled = formData.get("main_header_enabled") === "on";
   const mainHeaderShowNetworkSites = formData.get("main_header_show_network_sites") === "on";
-  const seoMetaTitle = ((formData.get("seo_meta_title") as string | null) ?? "").trim();
-  const seoMetaDescription = ((formData.get("seo_meta_description") as string | null) ?? "").trim();
   const permalinkModeRaw = ((formData.get("writing_permalink_mode") as string | null) ?? "default").trim().toLowerCase();
   const permalinkMode = permalinkModeRaw === "custom" ? "custom" : "default";
   const singlePattern = ((formData.get("writing_single_pattern") as string | null) ?? "/%domain%/%slug%").trim() || "/%domain%/%slug%";
@@ -2361,9 +2355,6 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
 
   await Promise.all([
     setSiteBooleanSetting(site.id, "random_default_images_enabled", randomDefaultsEnabled),
-    setSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, indexingEnabled),
-    setSiteTextSetting(site.id, SEO_META_TITLE_KEY, seoMetaTitle),
-    setSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, seoMetaDescription),
     setSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, mainHeaderEnabled),
     setSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, mainHeaderShowNetworkSites),
     setSiteTextSetting(site.id, WRITING_PERMALINK_MODE_KEY, permalinkMode),
@@ -2374,6 +2365,76 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
   ]);
 
   revalidatePath(`/site/${site.id}/settings/reading`);
+  return { ok: true };
+};
+
+export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+
+  const [indexingEnabled, seoMetaTitle, seoMetaDescription, socialMetaTitle, socialMetaDescription, socialMetaImage] =
+    await Promise.all([
+      getSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, true),
+      getSiteTextSetting(site.id, SEO_META_TITLE_KEY, ""),
+      getSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, ""),
+      getSiteTextSetting(site.id, SOCIAL_META_TITLE_KEY, ""),
+      getSiteTextSetting(site.id, SOCIAL_META_DESCRIPTION_KEY, ""),
+      getSiteTextSetting(site.id, SOCIAL_META_IMAGE_KEY, ""),
+    ]);
+
+  const defaultDescription = (site.heroSubtitle || site.description || "").trim();
+
+  return {
+    siteId: site.id,
+    defaults: {
+      metaTitle: (site.name || "").trim(),
+      metaDescription: defaultDescription,
+      socialTitle: (site.name || "").trim(),
+      socialDescription: defaultDescription,
+      socialImage: (site.image || site.logo || "").trim(),
+    },
+    indexingEnabled,
+    seoMetaTitle,
+    seoMetaDescription,
+    socialMetaTitle,
+    socialMetaDescription,
+    socialMetaImage,
+  };
+};
+
+export const updateSiteSeoSettings = async (formData: FormData) => {
+  const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
+  const owned = await requireOwnedSite(siteIdRaw);
+  if ("error" in owned) return { error: owned.error };
+  const { site } = owned;
+
+  const indexingEnabled = formData.get("seo_indexing_enabled") === "on";
+  const seoMetaTitle = ((formData.get("seo_meta_title") as string | null) ?? "").trim();
+  const seoMetaDescription = ((formData.get("seo_meta_description") as string | null) ?? "").trim();
+  const socialMetaTitle = ((formData.get("social_meta_title") as string | null) ?? "").trim();
+  const socialMetaDescription = ((formData.get("social_meta_description") as string | null) ?? "").trim();
+  const socialMetaImage = ((formData.get("social_meta_image") as string | null) ?? "").trim();
+
+  await Promise.all([
+    setSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, indexingEnabled),
+    setSiteTextSetting(site.id, SEO_META_TITLE_KEY, seoMetaTitle),
+    setSiteTextSetting(site.id, SEO_META_DESCRIPTION_KEY, seoMetaDescription),
+    setSiteTextSetting(site.id, SOCIAL_META_TITLE_KEY, socialMetaTitle),
+    setSiteTextSetting(site.id, SOCIAL_META_DESCRIPTION_KEY, socialMetaDescription),
+    setSiteTextSetting(site.id, SOCIAL_META_IMAGE_KEY, socialMetaImage),
+  ]);
+
+  const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost").replace(/:\d+$/, "");
+  const tagDomains = [
+    site.subdomain ? `${site.subdomain}.${rootDomain}` : "",
+    site.customDomain || "",
+  ].filter(Boolean);
+  for (const domain of tagDomains) {
+    revalidateTag(`${domain}-metadata`, "max");
+  }
+
+  revalidatePath(`/site/${site.id}/settings/seo`);
   revalidatePath("/sitemap.xml");
   revalidatePath("/robots.txt");
   return { ok: true };

@@ -19,9 +19,9 @@ export default async function SiteReadingSettingsPage({ params }: Props) {
 
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-5 sm:p-8 dark:border-stone-700 dark:bg-black">
-      <h2 className="font-cal text-xl dark:text-white">Reading and SEO</h2>
+      <h2 className="font-cal text-xl dark:text-white">Reading</h2>
       <p className="mt-2 text-sm text-stone-500 dark:text-stone-400">
-        Site-specific SEO and canonical URL settings.
+        Site-level reading, header, and permalink settings.
       </p>
       <form
         action={async (formData) => {
@@ -45,16 +45,6 @@ export default async function SiteReadingSettingsPage({ params }: Props) {
         <label className="flex items-center gap-3 text-sm dark:text-white">
           <input
             type="checkbox"
-            name="seo_indexing_enabled"
-            defaultChecked={result.indexingEnabled}
-            className="h-4 w-4"
-          />
-          <span>Allow search indexing (site-level)</span>
-        </label>
-
-        <label className="flex items-center gap-3 text-sm dark:text-white">
-          <input
-            type="checkbox"
             name="main_header_enabled"
             defaultChecked={result.mainHeaderEnabled}
             className="h-4 w-4"
@@ -70,27 +60,6 @@ export default async function SiteReadingSettingsPage({ params }: Props) {
             className="h-4 w-4"
           />
           <span>Show network sites list in header</span>
-        </label>
-
-        <label className="flex flex-col gap-2 text-sm dark:text-white">
-          <span>Default SEO Title</span>
-          <input
-            type="text"
-            name="seo_meta_title"
-            defaultValue={result.seoMetaTitle}
-            placeholder="Site title"
-            className="max-w-xl rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900 dark:border-stone-600 dark:bg-black dark:text-white"
-          />
-        </label>
-
-        <label className="flex flex-col gap-2 text-sm dark:text-white">
-          <span>Default SEO Description</span>
-          <textarea
-            name="seo_meta_description"
-            defaultValue={result.seoMetaDescription}
-            placeholder="Default SEO description"
-            className="max-w-xl rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900 dark:border-stone-600 dark:bg-black dark:text-white"
-          />
         </label>
 
         <PermalinkModeFields

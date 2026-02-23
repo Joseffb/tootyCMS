@@ -30,6 +30,11 @@ export default function SiteSettingsNav() {
       segment: "reading",
     },
     {
+      name: "SEO & Social",
+      href: `/site/${id}/settings/seo`,
+      segment: "seo",
+    },
+    {
       name: "Writing",
       href: `/site/${id}/settings/writing`,
       segment: "writing",
