@@ -1,7 +1,12 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import { notFound, redirect } from "next/navigation";
-import { listPluginsWithSiteState, saveSitePluginConfig, setSitePluginEnabled } from "@/lib/plugin-runtime";
+import {
+  listPluginsWithSiteState,
+  saveSitePluginConfig,
+  setPluginEnabled,
+  setSitePluginEnabled,
+} from "@/lib/plugin-runtime";
 import { revalidatePath } from "next/cache";
 
 type Props = {
@@ -15,6 +20,11 @@ export default async function SitePluginSettingsPage({ params }: Props) {
   const id = decodeURIComponent((await params).id);
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
   if (!site || site.userId !== session.user.id) notFound();
+  const ownedSites = await db.query.sites.findMany({
+    where: (sites, { eq }) => eq(sites.userId, session.user.id),
+    columns: { id: true },
+  });
+  const singleSiteMode = ownedSites.length === 1;
 
   const plugins = (await listPluginsWithSiteState(site.id)).filter(
     (plugin) => (plugin.scope || "site") === "site",
@@ -26,9 +36,16 @@ export default async function SitePluginSettingsPage({ params }: Props) {
     const pluginId = String(formData.get("pluginId") || "");
     const enabled = formData.get("enabled") === "on";
     if (!siteId || !pluginId) return;
+    if (singleSiteMode) {
+      await setPluginEnabled(pluginId, enabled);
+    }
     await setSitePluginEnabled(siteId, pluginId, enabled);
     revalidatePath(`/site/${siteId}/settings/plugins`);
     revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    if (singleSiteMode) {
+      revalidatePath("/settings/plugins");
+      revalidatePath("/app/settings/plugins");
+    }
   }
 
   async function saveSiteConfig(formData: FormData) {
@@ -113,36 +130,44 @@ export default async function SitePluginSettingsPage({ params }: Props) {
                   </div>
                 </td>
                 <td className="px-4 py-3 align-top">
-                  <form action={toggleForSite} className="flex items-center gap-2">
-                    <input type="hidden" name="siteId" value={site.id} />
-                    <input type="hidden" name="pluginId" value={plugin.id} />
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        name="enabled"
-                        defaultChecked={plugin.siteEnabled}
-                        disabled={plugin.mustUse || !plugin.enabled}
-                        className="h-4 w-4"
-                      />
-                      <span className="text-xs text-stone-600 dark:text-stone-300">Active</span>
-                    </label>
-                    <button
-                      disabled={plugin.mustUse || !plugin.enabled}
-                      className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Save
-                    </button>
-                  </form>
-                  {plugin.mustUse && <p className="mt-2 text-xs text-stone-500">Must Use is enabled globally. This site cannot disable it.</p>}
-                  {!plugin.enabled && (
+                  {plugin.enabled || singleSiteMode ? (
+                    <form action={toggleForSite} className="flex items-center gap-2">
+                      <input type="hidden" name="siteId" value={site.id} />
+                      <input type="hidden" name="pluginId" value={plugin.id} />
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          name="enabled"
+                          defaultChecked={plugin.siteEnabled}
+                          disabled={plugin.mustUse && !singleSiteMode}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-xs text-stone-600 dark:text-stone-300">Active</span>
+                      </label>
+                      <button
+                        disabled={plugin.mustUse && !singleSiteMode}
+                        className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                    </form>
+                  ) : (
+                    <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
+                      Inactive (global disabled)
+                    </span>
+                  )}
+                  {plugin.mustUse && !singleSiteMode && (
+                    <p className="mt-2 text-xs text-stone-500">Must Use is enabled globally. This site cannot disable it.</p>
+                  )}
+                  {!plugin.enabled && !singleSiteMode && (
                     <p className="mt-2 text-xs text-stone-500">Enable globally first to activate on this site.</p>
                   )}
                 </td>
                 <td className="px-4 py-3 align-top">
                   {(plugin.settingsFields || []).length > 0 ? (
-                    plugin.mustUse ? (
+                    plugin.mustUse && !singleSiteMode ? (
                       <p className="text-xs text-stone-500">Must Use is enabled globally. Site overrides are disabled.</p>
-                    ) : !plugin.enabled ? (
+                    ) : !plugin.enabled && !singleSiteMode ? (
                       <p className="text-xs text-stone-500">Enable globally to configure site-level overrides.</p>
                     ) : (
                       <details className="rounded-md border border-stone-200 p-2 dark:border-stone-700">

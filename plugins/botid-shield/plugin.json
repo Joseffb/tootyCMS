@@ -1,0 +1,69 @@
+{
+  "id": "botid-shield",
+  "name": "BotID Shield",
+  "description": "Vercel BotID protection for sensitive API routes with monitor or enforce mode.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.2.x",
+  "scope": "core",
+  "capabilities": {
+    "hooks": false,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "BotID Shield",
+    "path": "/app/plugins/botid-shield"
+  },
+  "settingsFields": [
+    {
+      "key": "mode",
+      "label": "Mode",
+      "type": "select",
+      "options": [
+        {
+          "label": "Monitor",
+          "value": "monitor"
+        },
+        {
+          "label": "Enforce",
+          "value": "enforce"
+        },
+        {
+          "label": "Off",
+          "value": "off"
+        }
+      ],
+      "defaultValue": "monitor",
+      "helpText": "monitor logs and allows; enforce blocks detected bots."
+    },
+    {
+      "key": "protect_generate",
+      "label": "Protect /api/generate (POST)",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "protect_upload_image",
+      "label": "Protect /api/uploadImage (POST)",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "allow_verified_bots",
+      "label": "Allowed Verified Bots (CSV)",
+      "type": "text",
+      "placeholder": "googlebot,bingbot",
+      "helpText": "Verified bot names that are allowed in enforce mode."
+    },
+    {
+      "key": "development_bypass",
+      "label": "Dev Bypass",
+      "type": "text",
+      "placeholder": "HUMAN | BAD-BOT | GOOD-BOT | ALLOWED",
+      "helpText": "Optional local-dev simulation value passed to BotID check."
+    }
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

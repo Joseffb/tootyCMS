@@ -1,0 +1,34 @@
+{
+  "id": "analytics-tinybird",
+  "name": "Tinybird Analytics",
+  "description": "Analytics provider plugin using Tinybird pipes/events through generic analytics hooks.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.2.x",
+  "scope": "site",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false
+  },
+  "menu": {
+    "label": "Tinybird Analytics",
+    "path": "/app/plugins/analytics-tinybird"
+  },
+  "settingsFields": [
+    {
+      "key": "ingestToken",
+      "label": "Ingest Token",
+      "type": "password",
+      "placeholder": "p.ey..."
+    },
+    {
+      "key": "dashboardToken",
+      "label": "Dashboard Token",
+      "type": "password",
+      "placeholder": "p.ey..."
+    }
+  ],
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

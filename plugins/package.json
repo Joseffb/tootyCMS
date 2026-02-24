@@ -1,0 +1,13 @@
+{
+  "name": "tootycms-plugins",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "validate": "node ./scripts/validate-plugins.mjs",
+    "security:scan": "node ./scripts/security-scan.mjs",
+    "ci": "npm run validate && npm run security:scan"
+  }
+}
