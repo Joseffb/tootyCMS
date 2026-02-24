@@ -253,8 +253,8 @@ export default function Nav({ children }: { children: ReactNode }) {
         { name: "Themes", href: `/site/${id}/settings/themes`, match: `/site/${id}/settings/themes` },
         {
           name: "Plugins",
-          href: singleSiteMode ? "/settings/plugins" : `/site/${id}/settings/plugins`,
-          match: singleSiteMode ? "/settings/plugins" : `/site/${id}/settings/plugins`,
+          href: `/site/${id}/settings/plugins`,
+          match: `/site/${id}/settings/plugins`,
         },
       ].flatMap((item) => {
         const base: NavTab = {

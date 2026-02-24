@@ -15,16 +15,9 @@ export default async function SitePluginSettingsPage({ params }: Props) {
   const id = decodeURIComponent((await params).id);
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
   if (!site || site.userId !== session.user.id) notFound();
-  const ownedSites = await db.query.sites.findMany({
-    where: (sites, { eq }) => eq(sites.userId, session.user.id),
-    columns: { id: true },
-  });
-  if (ownedSites.length === 1) {
-    redirect("/settings/plugins");
-  }
 
   const plugins = (await listPluginsWithSiteState(site.id)).filter(
-    (plugin) => (plugin.scope || "site") === "site" && plugin.enabled,
+    (plugin) => (plugin.scope || "site") === "site",
   );
 
   async function toggleForSite(formData: FormData) {
@@ -107,7 +100,13 @@ export default async function SitePluginSettingsPage({ params }: Props) {
                 </td>
                 <td className="px-4 py-3 align-top">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Enabled</span>
+                    <span
+                      className={`rounded-full px-2 py-1 text-xs font-medium ${
+                        plugin.enabled ? "bg-emerald-100 text-emerald-700" : "bg-stone-200 text-stone-700"
+                      }`}
+                    >
+                      {plugin.enabled ? "Enabled" : "Disabled"}
+                    </span>
                     {plugin.mustUse && (
                       <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">Must Use</span>
                     )}
@@ -122,24 +121,29 @@ export default async function SitePluginSettingsPage({ params }: Props) {
                         type="checkbox"
                         name="enabled"
                         defaultChecked={plugin.siteEnabled}
-                        disabled={plugin.mustUse}
+                        disabled={plugin.mustUse || !plugin.enabled}
                         className="h-4 w-4"
                       />
                       <span className="text-xs text-stone-600 dark:text-stone-300">Active</span>
                     </label>
                     <button
-                      disabled={plugin.mustUse}
+                      disabled={plugin.mustUse || !plugin.enabled}
                       className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Save
                     </button>
                   </form>
                   {plugin.mustUse && <p className="mt-2 text-xs text-stone-500">Must Use is enabled globally. This site cannot disable it.</p>}
+                  {!plugin.enabled && (
+                    <p className="mt-2 text-xs text-stone-500">Enable globally first to activate on this site.</p>
+                  )}
                 </td>
                 <td className="px-4 py-3 align-top">
                   {(plugin.settingsFields || []).length > 0 ? (
                     plugin.mustUse ? (
                       <p className="text-xs text-stone-500">Must Use is enabled globally. Site overrides are disabled.</p>
+                    ) : !plugin.enabled ? (
+                      <p className="text-xs text-stone-500">Enable globally to configure site-level overrides.</p>
                     ) : (
                       <details className="rounded-md border border-stone-200 p-2 dark:border-stone-700">
                         <summary className="cursor-pointer text-xs font-medium text-stone-700 dark:text-stone-300">Configure site values</summary>
@@ -196,6 +200,13 @@ export default async function SitePluginSettingsPage({ params }: Props) {
                 </td>
               </tr>
             ))}
+            {plugins.length === 0 && (
+              <tr className="border-t border-stone-200 dark:border-stone-700">
+                <td colSpan={4} className="px-4 py-6 text-sm text-stone-500 dark:text-stone-400">
+                  No plugins discovered. Check `PLUGINS_PATH` and ensure each plugin directory has a valid `plugin.json`.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

@@ -3,19 +3,11 @@
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { useParams, useSelectedLayoutSegment } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 export default function SiteSettingsNav() {
   const { id } = useParams() as { id?: string };
   const segment = useSelectedLayoutSegment();
-  const [singleSiteMode, setSingleSiteMode] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/nav/context", { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : { siteCount: 0 }))
-      .then((json) => setSingleSiteMode(Number(json?.siteCount || 0) === 1))
-      .catch(() => setSingleSiteMode(false));
-  }, []);
 
   const navItems = useMemo(() => ([
     {
@@ -60,10 +52,10 @@ export default function SiteSettingsNav() {
     },
     {
       name: "Plugins",
-      href: singleSiteMode ? "/settings/plugins" : `/site/${id}/settings/plugins`,
-      segment: singleSiteMode ? null : "plugins",
+      href: `/site/${id}/settings/plugins`,
+      segment: "plugins",
     },
-  ]), [id, singleSiteMode]);
+  ]), [id]);
 
   return (
     <div className="flex space-x-4 border-b border-stone-200 pb-4 pt-2 dark:border-stone-700">

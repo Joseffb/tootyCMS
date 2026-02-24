@@ -120,6 +120,7 @@ export default async function SiteSettingsIndex({ params }: Props) {
           ))}
 
         {data.isPrimary || data.subdomain === "main" ? (
+          ownedSiteCount.count === 1 ? (
           <div className="rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
             <div className="relative flex flex-col space-y-4 p-5 sm:p-10">
               <h2 className="font-cal text-xl dark:text-white">Enable Multisite</h2>
@@ -140,6 +141,7 @@ export default async function SiteSettingsIndex({ params }: Props) {
               </p>
             </div>
           </div>
+          ) : null
         ) : (
           <DeleteSiteForm siteName={Promise.resolve({ siteName: data?.name! })} />
         )}
