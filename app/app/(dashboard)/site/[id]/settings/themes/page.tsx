@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { listThemesWithState, getSiteThemeId, saveThemeConfig, setSiteTheme } from "@/lib/themes";
+import { listThemesWithState, getSiteThemeId, saveThemeConfig, setSiteTheme, setThemeEnabled } from "@/lib/themes";
 import { notFound, redirect } from "next/navigation";
 import Image from "next/image";
 import { revalidatePath, revalidateTag } from "next/cache";
@@ -18,21 +18,28 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
   if (!site || site.userId !== session.user.id) notFound();
   const siteData = site;
+  const ownedSites = await db.query.sites.findMany({
+    where: (sites, { eq }) => eq(sites.userId, session.user.id),
+    columns: { id: true, isPrimary: true, subdomain: true },
+  });
+  const singleSiteMode = ownedSites.length === 1;
 
   const [themes, activeThemeId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteData.id)]);
-  const enabledThemes = themes.filter((theme) => theme.enabled);
-  const selectedThemeId =
-    enabledThemes.some((theme) => theme.id === activeThemeId)
-      ? activeThemeId
-      : (enabledThemes[0]?.id ?? "");
+  const selectableThemes = singleSiteMode ? themes : themes.filter((theme) => theme.enabled);
+  const selectedThemeId = selectableThemes.some((theme) => theme.id === activeThemeId)
+    ? activeThemeId
+    : (selectableThemes[0]?.id ?? "");
 
   async function saveTheme(formData: FormData) {
     "use server";
     const themeId = String(formData.get("themeId") || "");
     if (!themeId) return;
     const availableThemes = await listThemesWithState();
-    const selected = availableThemes.find((theme) => theme.id === themeId && theme.enabled);
+    const selected = availableThemes.find((theme) => theme.id === themeId && (singleSiteMode || theme.enabled));
     if (!selected) return;
+    if (singleSiteMode && !selected.enabled) {
+      await setThemeEnabled(themeId, true);
+    }
 
     await setSiteTheme(siteData.id, themeId);
 
@@ -81,7 +88,10 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
       <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
         <h2 className="font-cal text-xl dark:text-white">Site Theme</h2>
         <p className="mt-2 text-sm text-stone-500 dark:text-stone-400">
-          Choose from enabled themes. Add `thumbnail.png` to the root of each theme folder for preview.
+          {singleSiteMode
+            ? "Single-site mode: choose from all available themes."
+            : "Choose from enabled themes."}{" "}
+          Add `thumbnail.png` to the root of each theme folder for preview.
         </p>
         <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
           <table className="w-full text-sm">
@@ -93,7 +103,7 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
               </tr>
             </thead>
             <tbody>
-              {enabledThemes.map((theme) => (
+              {selectableThemes.map((theme) => (
                 <tr key={theme.id} className="border-t border-stone-200 dark:border-stone-700">
                   <td className="px-5 py-6 align-top">
                     <div className="relative h-48 w-80 overflow-hidden rounded-lg border border-stone-200 bg-stone-100 dark:border-stone-700 dark:bg-stone-900">

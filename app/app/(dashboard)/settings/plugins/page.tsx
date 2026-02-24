@@ -1,12 +1,29 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { listPluginsWithState, savePluginConfig, setPluginEnabled, setPluginMustUse } from "@/lib/plugin-runtime";
+import {
+  getPluginById,
+  listPluginsWithState,
+  savePluginConfig,
+  setPluginEnabled,
+  setPluginMustUse,
+  setSitePluginEnabled,
+} from "@/lib/plugin-runtime";
 import { revalidatePath } from "next/cache";
+import db from "@/lib/db";
 
 export default async function PluginSettingsPage() {
   const session = await getSession();
   if (!session) redirect("/login");
+
+  const ownedSites = await db.query.sites.findMany({
+    where: (sites, { eq }) => eq(sites.userId, session.user.id),
+    columns: { id: true, isPrimary: true, subdomain: true },
+  });
+  const singleSiteMode = ownedSites.length === 1;
+  const mainSiteId = singleSiteMode
+    ? (ownedSites.find((site) => site.isPrimary || site.subdomain === "main")?.id || ownedSites[0]?.id || null)
+    : null;
 
   const plugins = await listPluginsWithState();
 
@@ -17,6 +34,14 @@ export default async function PluginSettingsPage() {
     const mustUse = formData.get("mustUse") === "on";
     await setPluginEnabled(pluginId, enabled);
     await setPluginMustUse(pluginId, mustUse);
+    if (singleSiteMode && mainSiteId) {
+      const plugin = await getPluginById(pluginId);
+      if (plugin && (plugin.scope || "site") === "site") {
+        await setSitePluginEnabled(mainSiteId, pluginId, enabled || mustUse);
+        revalidatePath(`/site/${mainSiteId}/settings/plugins`);
+        revalidatePath(`/app/site/${mainSiteId}/settings/plugins`);
+      }
+    }
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
   }
@@ -42,6 +67,11 @@ export default async function PluginSettingsPage() {
       <p className="text-sm text-stone-600 dark:text-stone-300">
         Plugins are discovered from configured paths (comma-separated in `PLUGINS_PATH`) and use global settings here as gate + defaults for site plugins.
       </p>
+      {singleSiteMode ? (
+        <p className="text-sm text-stone-600 dark:text-stone-300">
+          Single-site mode: global plugin enablement is mirrored to this site. Site plugin settings use global defaults unless explicitly overridden.
+        </p>
+      ) : null}
 
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
         <table className="min-w-full text-sm">

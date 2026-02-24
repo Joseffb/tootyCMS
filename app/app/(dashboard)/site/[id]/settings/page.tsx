@@ -2,7 +2,11 @@
 import Form from "@/components/form";
 import { updateSite } from "@/lib/actions";
 import DeleteSiteForm from "@/components/form/delete-site-form";
+import CreateSiteButton from "@/components/create-site-button";
+import CreateSiteModal from "@/components/modal/create-site";
 import db from "@/lib/db";
+import { sites } from "@/lib/schema";
+import { count, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 
@@ -19,6 +23,10 @@ export default async function SiteSettingsIndex({ params }: Props) {
   const data = await db.query.sites.findFirst({
     where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
   });
+  const [ownedSiteCount] = await db
+    .select({ count: count() })
+    .from(sites)
+    .where(eq(sites.userId, session.user.id));
 
   // Handle case if no data is found
   if (!data) {
@@ -111,11 +119,25 @@ export default async function SiteSettingsIndex({ params }: Props) {
         )}
 
         {data.isPrimary || data.subdomain === "main" ? (
-          <div className="rounded-lg border border-stone-300 bg-stone-50 p-5 dark:border-stone-700 dark:bg-stone-900">
-            <h2 className="font-cal text-xl dark:text-white">Delete Site</h2>
-            <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
-              Main Site is protected and cannot be deleted.
-            </p>
+          <div className="rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
+            <div className="relative flex flex-col space-y-4 p-5 sm:p-10">
+              <h2 className="font-cal text-xl dark:text-white">Enable Multisite</h2>
+              <p className="text-sm text-stone-500 dark:text-stone-400">
+                Enable multisite by adding a second site.
+              </p>
+              <div className="w-fit">
+                <CreateSiteButton label="Add New Site">
+                  <CreateSiteModal />
+                </CreateSiteButton>
+              </div>
+            </div>
+            <div className="flex flex-col items-center justify-center space-y-2 rounded-b-lg border-t border-stone-200 bg-stone-50 p-3 sm:flex-row sm:justify-between sm:space-y-0 sm:px-10 dark:border-stone-700 dark:bg-stone-800">
+              <p className="text-sm text-stone-500 dark:text-stone-400">
+                {ownedSiteCount.count > 1
+                  ? "Multisite is enabled for your account."
+                  : "Single-site mode remains active until a second site is created."}
+              </p>
+            </div>
           </div>
         ) : (
           <DeleteSiteForm siteName={Promise.resolve({ siteName: data?.name! })} />

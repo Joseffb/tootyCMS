@@ -15,6 +15,13 @@ export default async function SitePluginSettingsPage({ params }: Props) {
   const id = decodeURIComponent((await params).id);
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
   if (!site || site.userId !== session.user.id) notFound();
+  const ownedSites = await db.query.sites.findMany({
+    where: (sites, { eq }) => eq(sites.userId, session.user.id),
+    columns: { id: true },
+  });
+  if (ownedSites.length === 1) {
+    redirect("/settings/plugins");
+  }
 
   const plugins = (await listPluginsWithSiteState(site.id)).filter(
     (plugin) => (plugin.scope || "site") === "site" && plugin.enabled,

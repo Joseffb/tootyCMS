@@ -74,7 +74,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const effectiveSiteId = currentSiteId || (singleSiteMode ? navContext.mainSiteId : null);
 
   useEffect(() => {
-    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
+    const query = !singleSiteMode && effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
     fetch(`/api/plugins/menu${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((json) => {
@@ -98,7 +98,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         );
       })
       .catch(() => setPluginTabs([]));
-  }, [effectiveSiteId]);
+  }, [effectiveSiteId, singleSiteMode]);
 
   useEffect(() => {
     fetch("/api/nav/context", { cache: "no-store" })
@@ -251,7 +251,11 @@ export default function Nav({ children }: { children: ReactNode }) {
         { name: "Writing", href: `/site/${id}/settings/writing`, match: `/site/${id}/settings/writing` },
         { name: "Menus", href: `/site/${id}/settings/menus`, match: `/site/${id}/settings/menus` },
         { name: "Themes", href: `/site/${id}/settings/themes`, match: `/site/${id}/settings/themes` },
-        { name: "Plugins", href: `/site/${id}/settings/plugins`, match: `/site/${id}/settings/plugins` },
+        {
+          name: "Plugins",
+          href: singleSiteMode ? "/settings/plugins" : `/site/${id}/settings/plugins`,
+          match: singleSiteMode ? "/settings/plugins" : `/site/${id}/settings/plugins`,
+        },
       ].flatMap((item) => {
         const base: NavTab = {
           name: item.name,
@@ -393,7 +397,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           { name: "Writing", href: `/site/${navContext.mainSiteId}/settings/writing`, match: `/site/${navContext.mainSiteId}/settings/writing` },
           { name: "Menus", href: `/site/${navContext.mainSiteId}/settings/menus`, match: `/site/${navContext.mainSiteId}/settings/menus` },
           { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
-          { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
+          { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
         ].flatMap((item) => {
           const base: NavTab = {
             name: item.name,
