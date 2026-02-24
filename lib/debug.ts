@@ -58,7 +58,8 @@ export function trace(scope: string, message: string, payload?: unknown) {
       if (traceFsUnavailable) return;
       try {
         if (typeof (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime !== "undefined") return;
-        const { mkdir, appendFile } = await import("fs/promises");
+        const fsPromisesModule = ["fs", "promises"].join("/");
+        const { mkdir, appendFile } = await import(fsPromisesModule);
         const now = new Date();
         const day = now.toISOString().slice(0, 10);
         const filePath = `${TRACE_DIR}/${day}.jsonl`;

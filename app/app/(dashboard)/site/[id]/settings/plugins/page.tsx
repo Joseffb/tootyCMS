@@ -33,6 +33,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
   const id = decodeURIComponent((await params).id);
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
   if (!site || site.userId !== session.user.id) notFound();
+  const siteId = site.id;
   const ownedSites = await db.query.sites.findMany({
     where: (sites, { eq }) => eq(sites.userId, session.user.id),
     columns: { id: true },
@@ -100,10 +101,10 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     try {
       await installFromRepo("plugin", directory);
     } catch {
-      redirect(`/site/${site.id}/settings/plugins?tab=discover&error=rate_limit`);
+      redirect(`/site/${siteId}/settings/plugins?tab=discover&error=rate_limit`);
     }
-    revalidatePath(`/site/${site.id}/settings/plugins`);
-    revalidatePath(`/app/site/${site.id}/settings/plugins`);
+    revalidatePath(`/site/${siteId}/settings/plugins`);
+    revalidatePath(`/app/site/${siteId}/settings/plugins`);
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
   }
@@ -122,7 +123,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
         )}
       </div>
 
-      <CatalogTabs basePath={`/site/${site.id}/settings/plugins`} activeTab={activeTab} enabled={singleSiteMode} />
+      <CatalogTabs basePath={`/site/${siteId}/settings/plugins`} activeTab={activeTab} enabled={singleSiteMode} />
 
       {activeTab === "discover" ? (
         <div className="space-y-4 rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
@@ -225,7 +226,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
                 <td className="px-4 py-3 align-top">
                   {plugin.enabled || singleSiteMode ? (
                     <form action={toggleForSite} className="flex items-center gap-2">
-                      <input type="hidden" name="siteId" value={site.id} />
+                      <input type="hidden" name="siteId" value={siteId} />
                       <input type="hidden" name="pluginId" value={plugin.id} />
                       <label className="flex items-center gap-2">
                         <input
