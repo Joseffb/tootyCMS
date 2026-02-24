@@ -5,14 +5,26 @@ import { notFound, redirect } from "next/navigation";
 import Image from "next/image";
 import { revalidatePath, revalidateTag } from "next/cache";
 import SiteThemeSettingsModal from "@/components/site-theme-settings-modal";
+import CatalogTabs from "@/components/catalog-tabs";
+import {
+  installFromRepo,
+  listLocalInstalledIds,
+  listRepoCatalog,
+  toRepoCatalogFriendlyError,
+} from "@/lib/repo-catalog";
 
 type Props = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string }>;
 };
 
-export default async function SiteThemeSettingsPage({ params }: Props) {
+export default async function SiteThemeSettingsPage({ params, searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
+  const paramsQuery = (await searchParams) || {};
+  const requestedTab = paramsQuery.tab === "discover" ? "discover" : "installed";
+  const query = String(paramsQuery.q || "");
+  const errorCode = String(paramsQuery.error || "");
 
   const id = decodeURIComponent((await params).id);
   const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
@@ -23,8 +35,20 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
     columns: { id: true, isPrimary: true, subdomain: true },
   });
   const singleSiteMode = ownedSites.length === 1;
+  const activeTab = singleSiteMode ? requestedTab : "installed";
 
   const [themes, activeThemeId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteData.id)]);
+  const installedIds = await listLocalInstalledIds("theme");
+  let discoverEntries: Awaited<ReturnType<typeof listRepoCatalog>> = [];
+  let discoverError = "";
+  if (activeTab === "discover") {
+    try {
+      discoverEntries = await listRepoCatalog("theme", query);
+    } catch (error) {
+      discoverError = error instanceof Error ? error.message : "Failed loading theme catalog.";
+    }
+  }
+  const friendlyError = toRepoCatalogFriendlyError(discoverError, errorCode);
   const selectableThemes = singleSiteMode ? themes : themes.filter((theme) => theme.enabled);
   const selectedThemeId = selectableThemes.some((theme) => theme.id === activeThemeId)
     ? activeThemeId
@@ -83,6 +107,21 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
     redirect(`/app/site/${siteData.id}/settings/themes`);
   }
 
+  async function installTheme(formData: FormData) {
+    "use server";
+    const directory = String(formData.get("directory") || "").trim();
+    if (!directory) return;
+    try {
+      await installFromRepo("theme", directory);
+    } catch {
+      redirect(`/site/${siteData.id}/settings/themes?tab=discover&error=rate_limit`);
+    }
+    revalidatePath(`/site/${siteData.id}/settings/themes`);
+    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
+    revalidatePath("/settings/themes");
+    revalidatePath("/app/settings/themes");
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
@@ -93,6 +132,54 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
             : "Choose from enabled themes."}{" "}
           Add `thumbnail.png` to the root of each theme folder for preview.
         </p>
+        <div className="mt-4">
+          <CatalogTabs
+            basePath={`/site/${siteData.id}/settings/themes`}
+            activeTab={activeTab}
+            enabled={singleSiteMode}
+          />
+        </div>
+        {activeTab === "discover" ? (
+          <div className="mt-4 space-y-2 rounded-md border border-stone-200 p-3 dark:border-stone-700">
+            <form className="flex items-center gap-2">
+              <input type="hidden" name="tab" value="discover" />
+              <input
+                name="q"
+                defaultValue={query}
+                placeholder="Search themes"
+                className="w-full max-w-sm rounded-md border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+              />
+              <button className="rounded-md border border-black bg-black px-3 py-1.5 text-xs text-white">Search</button>
+            </form>
+            {friendlyError ? (
+              <p className="text-sm text-rose-600 dark:text-rose-400">{friendlyError}</p>
+            ) : null}
+            {discoverEntries.map((entry) => {
+              const alreadyInstalled = installedIds.has(entry.directory);
+              return (
+                <div key={entry.directory} className="flex items-start justify-between rounded-md border border-stone-200 p-3 dark:border-stone-700">
+                  <div>
+                    <div className="font-medium text-stone-900 dark:text-white">{entry.name}</div>
+                    <div className="text-xs text-stone-500">{entry.id}</div>
+                    <div className="text-xs text-stone-600 dark:text-stone-300">{entry.description}</div>
+                  </div>
+                  {alreadyInstalled ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Installed</span>
+                  ) : (
+                    <form action={installTheme}>
+                      <input type="hidden" name="directory" value={entry.directory} />
+                      <button className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white">Install</button>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+            {discoverEntries.length === 0 ? (
+              <p className="text-sm text-stone-500 dark:text-stone-400">No repo themes found for this search.</p>
+            ) : null}
+          </div>
+        ) : null}
+        {activeTab === "installed" ? (
         <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
           <table className="w-full text-sm">
             <thead className="bg-stone-50 text-left dark:bg-stone-900">
@@ -152,6 +239,7 @@ export default async function SiteThemeSettingsPage({ params }: Props) {
             </tbody>
           </table>
         </div>
+        ) : null}
       </div>
     </div>
   );

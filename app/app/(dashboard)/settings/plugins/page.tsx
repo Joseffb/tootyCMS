@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import CatalogTabs from "@/components/catalog-tabs";
 import {
   getPluginById,
   listPluginsWithState,
@@ -11,10 +12,24 @@ import {
 } from "@/lib/plugin-runtime";
 import { revalidatePath } from "next/cache";
 import db from "@/lib/db";
+import {
+  installFromRepo,
+  listLocalInstalledIds,
+  listRepoCatalog,
+  toRepoCatalogFriendlyError,
+} from "@/lib/repo-catalog";
 
-export default async function PluginSettingsPage() {
+type Props = {
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string }>;
+};
+
+export default async function PluginSettingsPage({ searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
+  const params = (await searchParams) || {};
+  const activeTab = params.tab === "discover" ? "discover" : "installed";
+  const query = String(params.q || "");
+  const errorCode = String(params.error || "");
 
   const ownedSites = await db.query.sites.findMany({
     where: (sites, { eq }) => eq(sites.userId, session.user.id),
@@ -26,6 +41,17 @@ export default async function PluginSettingsPage() {
     : null;
 
   const plugins = await listPluginsWithState();
+  const installedIds = await listLocalInstalledIds("plugin");
+  let discoverEntries: Awaited<ReturnType<typeof listRepoCatalog>> = [];
+  let discoverError = "";
+  if (activeTab === "discover") {
+    try {
+      discoverEntries = await listRepoCatalog("plugin", query);
+    } catch (error) {
+      discoverError = error instanceof Error ? error.message : "Failed loading plugin catalog.";
+    }
+  }
+  const friendlyError = toRepoCatalogFriendlyError(discoverError, errorCode);
 
   async function togglePlugin(formData: FormData) {
     "use server";
@@ -62,6 +88,19 @@ export default async function PluginSettingsPage() {
     revalidatePath("/app/settings/plugins");
   }
 
+  async function installPlugin(formData: FormData) {
+    "use server";
+    const directory = String(formData.get("directory") || "").trim();
+    if (!directory) return;
+    try {
+      await installFromRepo("plugin", directory);
+    } catch {
+      redirect("/settings/plugins?tab=discover&error=rate_limit");
+    }
+    revalidatePath("/settings/plugins");
+    revalidatePath("/app/settings/plugins");
+  }
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-300">
@@ -73,6 +112,52 @@ export default async function PluginSettingsPage() {
         </p>
       ) : null}
 
+      <CatalogTabs basePath="/settings/plugins" activeTab={activeTab} />
+
+      {activeTab === "discover" ? (
+        <div className="space-y-4 rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
+          <form className="flex items-center gap-2">
+            <input type="hidden" name="tab" value="discover" />
+            <input
+              name="q"
+              defaultValue={query}
+              placeholder="Search plugins"
+              className="w-full max-w-sm rounded-md border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+            />
+            <button className="rounded-md border border-black bg-black px-3 py-1.5 text-xs text-white">Search</button>
+          </form>
+          <div className="space-y-2">
+            {friendlyError ? (
+              <p className="text-sm text-rose-600 dark:text-rose-400">{friendlyError}</p>
+            ) : null}
+            {discoverEntries.map((entry) => {
+              const alreadyInstalled = installedIds.has(entry.directory);
+              return (
+                <div key={entry.directory} className="flex items-start justify-between rounded-md border border-stone-200 p-3 dark:border-stone-700">
+                  <div>
+                    <div className="font-medium text-stone-900 dark:text-white">{entry.name}</div>
+                    <div className="text-xs text-stone-500">{entry.id}</div>
+                    <div className="text-xs text-stone-600 dark:text-stone-300">{entry.description}</div>
+                  </div>
+                  {alreadyInstalled ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Installed</span>
+                  ) : (
+                    <form action={installPlugin}>
+                      <input type="hidden" name="directory" value={entry.directory} />
+                      <button className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white">Install</button>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+            {discoverEntries.length === 0 ? (
+              <p className="text-sm text-stone-500 dark:text-stone-400">No repo plugins found for this search.</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "installed" ? (
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
         <table className="min-w-full text-sm">
           <thead className="bg-stone-50 text-left text-stone-700 dark:bg-stone-900 dark:text-stone-200">
@@ -183,6 +268,7 @@ export default async function PluginSettingsPage() {
           </tbody>
         </table>
       </div>
+      ) : null}
     </div>
   );
 }
