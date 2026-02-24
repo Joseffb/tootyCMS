@@ -71,8 +71,13 @@ export default async function SitePluginSettingsPage({ params }: Props) {
       <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
         <h2 className="font-cal text-xl dark:text-white">Site Plugins</h2>
         <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
-          Global plugin settings control availability and defaults. This page controls site activation and site-specific overrides.
+          Use this page to activate plugins to add functionality to your site.
         </p>
+        {!singleSiteMode && (
+          <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
+            Note: Global plugin settings controls availability and defaults. This page controls site activation and site-specific overrides.
+          </p>
+        )}
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
