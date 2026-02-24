@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import path from "path";
-import { getThemesDir } from "@/lib/extension-paths";
+import { getThemesDirs } from "@/lib/extension-paths";
+import { getAvailableThemes } from "@/lib/themes";
 
 const mimeByExt: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -33,11 +34,20 @@ async function serveFile(filePath: string) {
   });
 }
 
+async function resolveThemeRoot(themeId: string) {
+  const themes = await getAvailableThemes();
+  const matched = themes.find((theme) => theme.id === themeId) as (typeof themes[number] & { sourceDir?: string }) | undefined;
+  if (matched?.sourceDir) {
+    return path.join(matched.sourceDir, themeId);
+  }
+  const themeDirs = getThemesDirs();
+  return path.join(themeDirs[0] || path.join(process.cwd(), "themes"), themeId);
+}
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ themeId: string; assetPath: string[] }> },
 ) {
-  const themesDir = getThemesDir();
   const { themeId, assetPath } = await params;
   const safeThemeId = safeSegment(themeId);
   const cleanParts = (assetPath || []).map(safeSegment).filter(Boolean);
@@ -46,10 +56,11 @@ export async function GET(
     return new NextResponse("Not Found", { status: 404 });
   }
 
+  const themeRoot = await resolveThemeRoot(safeThemeId);
+
   if (cleanParts.length === 1 && cleanParts[0] === "thumbnail.png") {
-    const filePath = path.join(themesDir, safeThemeId, "thumbnail.png");
-    const rootDir = path.join(themesDir, safeThemeId);
-    if (filePath.startsWith(rootDir)) {
+    const filePath = path.join(themeRoot, "thumbnail.png");
+    if (filePath.startsWith(themeRoot)) {
       try {
         return await serveFile(filePath);
       } catch {
@@ -60,7 +71,7 @@ export async function GET(
 
   const roots = ["assets", "public"];
   for (const root of roots) {
-    const rootDir = path.join(themesDir, safeThemeId, root);
+    const rootDir = path.join(themeRoot, root);
     const filePath = path.join(rootDir, ...cleanParts);
     if (!filePath.startsWith(rootDir)) continue;
 

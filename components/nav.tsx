@@ -4,6 +4,8 @@ import Link from "next/link";
 import {
   ArrowLeft,
   BarChart3,
+  ChevronDown,
+  ChevronRight,
   Edit3,
   Globe,
   LayoutDashboard,
@@ -13,11 +15,27 @@ import {
 } from "lucide-react";
 import { useParams, usePathname, useSelectedLayoutSegments } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { getSiteFromPostId } from "@/lib/actions";
 import Image from "next/image";
 import { getSitePublicUrl } from "@/lib/site-url";
 
 const externalLinks: any[] = [];
+type NavTab = {
+  name: string;
+  href: string;
+  isActive?: boolean;
+  icon: ReactNode;
+  isChild?: boolean;
+  childLevel?: 1 | 2;
+};
+
+const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }> = [
+  { name: "Sites", href: "/settings/sites", match: "/settings/sites" },
+  { name: "Themes", href: "/settings/themes", match: "/settings/themes" },
+  { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
+  { name: "Database", href: "/settings/database", match: "/settings/database" },
+  { name: "Schedules", href: "/settings/schedules", match: "/settings/schedules" },
+  { name: "Users", href: "/settings/users", match: "/settings/users" },
+];
 
 export default function Nav({ children }: { children: ReactNode }) {
   const tootyHomeHref = getSitePublicUrl({ isPrimary: true, subdomain: "main" });
@@ -25,9 +43,19 @@ export default function Nav({ children }: { children: ReactNode }) {
   const { id } = useParams() as { id?: string };
   const pathname = usePathname();
 
-  const [siteId, setSiteId] = useState<string | null>();
   const [pluginTabs, setPluginTabs] = useState<Array<{ name: string; href: string }>>([]);
-  const [dataDomainTabs, setDataDomainTabs] = useState<Array<{ name: string; href: string }>>([]);
+  const [dataDomainTabs, setDataDomainTabs] = useState<
+    Array<{ name: string; singular: string; listHref: string; addHref: string }>
+  >([]);
+  const [navContext, setNavContext] = useState<{
+    siteCount: number;
+    mainSiteId: string | null;
+    sites: Array<{ id: string; name: string }>;
+  }>({
+    siteCount: 0,
+    mainSiteId: null,
+    sites: [],
+  });
   const [environmentBadge, setEnvironmentBadge] = useState<{
     show: boolean;
     label: string;
@@ -41,16 +69,13 @@ export default function Nav({ children }: { children: ReactNode }) {
     Array<{ id: string; title: string; content: string; position: "bottom-right" }>
   >([]);
   const [hasAnalyticsProviders, setHasAnalyticsProviders] = useState(false);
-  const currentSiteId = segments[0] === "site" && id ? id : segments[0] === "post" ? siteId ?? null : null;
+  const currentSiteId = segments[0] === "site" && id ? id : null;
+  const singleSiteMode = navContext.siteCount === 1 && Boolean(navContext.mainSiteId);
+  const effectiveSiteId = currentSiteId || (singleSiteMode ? navContext.mainSiteId : null);
 
   useEffect(() => {
-    if (segments[0] === "post" && id) {
-      getSiteFromPostId(id).then((site) => setSiteId(site));
-    }
-  }, [segments, id]);
-
-  useEffect(() => {
-    fetch("/api/plugins/menu", { cache: "no-store" })
+    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
+    fetch(`/api/plugins/menu${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((json) => {
         if (!Array.isArray(json?.items)) {
@@ -58,21 +83,49 @@ export default function Nav({ children }: { children: ReactNode }) {
           return;
         }
         setPluginTabs(
-          json.items.map((item: any) => ({
-            name: item.label,
-            href: item.href,
-          })),
+          json.items
+            .map((item: any) => ({
+              name: String(item.label || ""),
+              href: String(item.href || ""),
+              order: Number.isFinite(Number(item.order)) ? Number(item.order) : 999,
+            }))
+            .filter((item: any) => item.name && item.href)
+            .sort((a: any, b: any) => (a.order - b.order) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+            .map((item: any) => ({
+              name: item.name,
+              href: item.href,
+            })),
         );
       })
       .catch(() => setPluginTabs([]));
+  }, [effectiveSiteId]);
+
+  useEffect(() => {
+    fetch("/api/nav/context", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : { siteCount: 0, mainSiteId: null, sites: [] }))
+      .then((json) => {
+        setNavContext({
+          siteCount: Number(json?.siteCount || 0),
+          mainSiteId: json?.mainSiteId ? String(json.mainSiteId) : null,
+          sites: Array.isArray(json?.sites)
+            ? json.sites
+                .map((site: any) => ({
+                  id: String(site?.id || ""),
+                  name: String(site?.name || ""),
+                }))
+                .filter((site: { id: string; name: string }) => site.id)
+            : [],
+        });
+      })
+      .catch(() => setNavContext({ siteCount: 0, mainSiteId: null, sites: [] }));
   }, []);
 
   useEffect(() => {
-    if (!currentSiteId) {
+    if (!effectiveSiteId) {
       setDataDomainTabs([]);
       return;
     }
-    fetch(`/api/data-domains/menu?siteId=${encodeURIComponent(currentSiteId)}`, { cache: "no-store" })
+    fetch(`/api/data-domains/menu?siteId=${encodeURIComponent(effectiveSiteId)}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((json) => {
         if (!Array.isArray(json?.items)) {
@@ -80,17 +133,21 @@ export default function Nav({ children }: { children: ReactNode }) {
           return;
         }
         setDataDomainTabs(
-          json.items.map((item: any) => ({
-            name: item.label,
-            href: item.href,
-          })),
+          json.items
+            .map((item: any) => ({
+              name: String(item.label || ""),
+              singular: String(item.singular || ""),
+              listHref: String(item.listHref || ""),
+              addHref: String(item.addHref || ""),
+            }))
+            .filter((item: any) => item.name && item.listHref && item.addHref),
         );
       })
       .catch(() => setDataDomainTabs([]));
-  }, [currentSiteId]);
+  }, [effectiveSiteId]);
 
   useEffect(() => {
-    const query = currentSiteId ? `?siteId=${encodeURIComponent(currentSiteId)}` : "";
+    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
     fetch(`/api/plugins/admin-ui${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
@@ -123,9 +180,39 @@ export default function Nav({ children }: { children: ReactNode }) {
         });
         setFloatingWidgets([]);
       });
-  }, [currentSiteId]);
+  }, [effectiveSiteId]);
 
-  const tabs = useMemo(() => {
+  const globalSettingsWithChildren = useMemo<NavTab[]>(() => {
+    const parent: NavTab = {
+      name: "Settings",
+      href: "/settings",
+      isActive: segments[0] === "settings",
+      icon: <Settings width={18} />,
+    };
+    const settingsChildren: NavTab[] = GLOBAL_SETTINGS_TABS.flatMap((item) => {
+      const base: NavTab = {
+        name: item.name,
+        href: item.href,
+        isActive: pathname?.includes(item.match),
+        icon: <Settings width={18} />,
+        isChild: true,
+        childLevel: 1 as const,
+      };
+      if (item.name !== "Plugins") return [base];
+      const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
+        name: plugin.name,
+        href: plugin.href,
+        isActive: pathname?.includes(plugin.href),
+        icon: <Settings width={18} />,
+        isChild: true,
+        childLevel: 2 as const,
+      }));
+      return [base, ...pluginChildren];
+    });
+    return [parent, ...settingsChildren];
+  }, [pathname, pluginTabs, segments]);
+
+  const tabs = useMemo<NavTab[]>(() => {
     const domainPostMatch = pathname?.match(
       /^\/site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
     );
@@ -155,12 +242,59 @@ export default function Nav({ children }: { children: ReactNode }) {
     }
 
     if (segments[0] === "site" && id) {
-      const siteTabs = [
+      const siteSettingsChildren: NavTab[] = [
+        { name: "General", href: `/site/${id}/settings`, match: `/site/${id}/settings` },
+        { name: "Categories", href: `/site/${id}/settings/categories`, match: `/site/${id}/settings/categories` },
+        { name: "Post-Types", href: `/site/${id}/settings/domains`, match: `/site/${id}/settings/domains` },
+        { name: "Reading", href: `/site/${id}/settings/reading`, match: `/site/${id}/settings/reading` },
+        { name: "SEO & Social", href: `/site/${id}/settings/seo`, match: `/site/${id}/settings/seo` },
+        { name: "Writing", href: `/site/${id}/settings/writing`, match: `/site/${id}/settings/writing` },
+        { name: "Menus", href: `/site/${id}/settings/menus`, match: `/site/${id}/settings/menus` },
+        { name: "Themes", href: `/site/${id}/settings/themes`, match: `/site/${id}/settings/themes` },
+        { name: "Plugins", href: `/site/${id}/settings/plugins`, match: `/site/${id}/settings/plugins` },
+      ].flatMap((item) => {
+        const base: NavTab = {
+          name: item.name,
+          href: item.href,
+          isActive: pathname?.includes(item.match),
+          icon: <Settings width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
+        };
+        if (item.name !== "Plugins") return [base];
+        const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
+          name: plugin.name,
+          href: plugin.href,
+          isActive: pathname?.includes(plugin.href),
+          icon: <Settings width={18} />,
+          isChild: true,
+          childLevel: 2 as const,
+        }));
+        return [base, ...pluginChildren];
+      });
+
+      const siteTabs: NavTab[] = [
         {
           name: "Posts",
           href: `/site/${id}`,
           isActive: segments.length === 2,
           icon: <Newspaper width={18} />,
+        },
+        {
+          name: "List Posts",
+          href: `/site/${id}`,
+          isActive: segments.length === 2,
+          icon: <Newspaper width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
+        },
+        {
+          name: "Add Post",
+          href: `/site/${id}/domain/post/create`,
+          isActive: pathname?.includes(`/site/${id}/domain/post/create`),
+          icon: <Newspaper width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
         },
         ...(hasAnalyticsProviders
           ? [
@@ -178,40 +312,134 @@ export default function Nav({ children }: { children: ReactNode }) {
           isActive: segments.includes("settings"),
           icon: <Settings width={18} />,
         },
-        ...dataDomainTabs.map((item) => ({
-          name: item.name,
-          href: item.href,
-          isActive: pathname?.includes(item.href),
-          icon: <Globe width={18} />,
-        })),
-      ].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-
-      return [
-        { name: "Back to All Sites", href: "/sites", icon: <ArrowLeft width={18} /> },
-        ...siteTabs,
+        ...siteSettingsChildren,
+        ...dataDomainTabs.flatMap((item) => ([
+          {
+            name: item.name,
+            href: item.listHref,
+            isActive: pathname?.includes(item.listHref),
+            icon: <Globe width={18} />,
+          },
+          {
+            name: `List ${item.name}`,
+            href: item.listHref,
+            isActive: pathname?.includes(item.listHref),
+            icon: <Globe width={18} />,
+            isChild: true as const,
+            childLevel: 1 as const,
+          },
+          {
+            name: `Add ${item.singular}`,
+            href: item.addHref,
+            isActive: pathname?.includes(item.addHref),
+            icon: <Globe width={18} />,
+            isChild: true as const,
+            childLevel: 1 as const,
+          },
+        ])),
       ];
+
+      return singleSiteMode
+        ? siteTabs
+        : [{ name: "Back to All Sites", href: "/sites", icon: <ArrowLeft width={18} /> }, ...siteTabs];
     }
 
-    if (segments[0] === "post" && id) {
-      return [
+    if (singleSiteMode && navContext.mainSiteId) {
+      const singleSiteTabs: NavTab[] = [
         {
-          name: "Back to All Posts",
-          href: siteId ? `/site/${siteId}` : "/sites",
-          icon: <ArrowLeft width={18} />,
+          name: "Posts",
+          href: `/site/${navContext.mainSiteId}`,
+          isActive: pathname === `/site/${navContext.mainSiteId}` || segments.length === 0,
+          icon: <Newspaper width={18} />,
         },
         {
-          name: "Editor",
-          href: `/post/${id}`,
-          isActive: segments.length === 2,
-          icon: <Edit3 width={18} />,
+          name: "List Posts",
+          href: `/site/${navContext.mainSiteId}`,
+          isActive: pathname === `/site/${navContext.mainSiteId}` || segments.length === 0,
+          icon: <Newspaper width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
         },
+        {
+          name: "Add Post",
+          href: `/site/${navContext.mainSiteId}/domain/post/create`,
+          isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
+          icon: <Newspaper width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
+        },
+        ...(hasAnalyticsProviders
+          ? [
+              {
+                name: "Analytics",
+                href: `/site/${navContext.mainSiteId}/analytics`,
+                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/analytics`),
+                icon: <BarChart3 width={18} />,
+              } as NavTab,
+            ]
+          : []),
         {
           name: "Settings",
-          href: `/post/${id}/settings`,
-          isActive: segments.includes("settings"),
+          href: `/site/${navContext.mainSiteId}/settings`,
+          isActive: pathname?.includes(`/site/${navContext.mainSiteId}/settings`),
           icon: <Settings width={18} />,
         },
+        ...[
+          { name: "General", href: `/site/${navContext.mainSiteId}/settings`, match: `/site/${navContext.mainSiteId}/settings` },
+          { name: "Categories", href: `/site/${navContext.mainSiteId}/settings/categories`, match: `/site/${navContext.mainSiteId}/settings/categories` },
+          { name: "Post-Types", href: `/site/${navContext.mainSiteId}/settings/domains`, match: `/site/${navContext.mainSiteId}/settings/domains` },
+          { name: "Reading", href: `/site/${navContext.mainSiteId}/settings/reading`, match: `/site/${navContext.mainSiteId}/settings/reading` },
+          { name: "SEO & Social", href: `/site/${navContext.mainSiteId}/settings/seo`, match: `/site/${navContext.mainSiteId}/settings/seo` },
+          { name: "Writing", href: `/site/${navContext.mainSiteId}/settings/writing`, match: `/site/${navContext.mainSiteId}/settings/writing` },
+          { name: "Menus", href: `/site/${navContext.mainSiteId}/settings/menus`, match: `/site/${navContext.mainSiteId}/settings/menus` },
+          { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
+          { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
+        ].flatMap((item) => {
+          const base: NavTab = {
+            name: item.name,
+            href: item.href,
+            isActive: pathname?.includes(item.match),
+            icon: <Settings width={18} />,
+            isChild: true as const,
+            childLevel: 1 as const,
+          };
+          if (item.name !== "Plugins") return [base];
+          const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
+            name: plugin.name,
+            href: plugin.href,
+            isActive: pathname?.includes(plugin.href),
+            icon: <Settings width={18} />,
+            isChild: true,
+            childLevel: 2 as const,
+          }));
+          return [base, ...pluginChildren];
+        }),
+        ...dataDomainTabs.flatMap((item) => ([
+          {
+            name: item.name,
+            href: item.listHref,
+            isActive: pathname?.includes(item.listHref),
+            icon: <Globe width={18} />,
+          },
+          {
+            name: `List ${item.name}`,
+            href: item.listHref,
+            isActive: pathname?.includes(item.listHref),
+            icon: <Globe width={18} />,
+            isChild: true as const,
+            childLevel: 1 as const,
+          },
+          {
+            name: `Add ${item.singular}`,
+            href: item.addHref,
+            isActive: pathname?.includes(item.addHref),
+            icon: <Globe width={18} />,
+            isChild: true as const,
+            childLevel: 1 as const,
+          },
+        ])),
       ];
+      return singleSiteTabs;
     }
 
     return [
@@ -227,22 +455,55 @@ export default function Nav({ children }: { children: ReactNode }) {
         isActive: segments[0] === "sites",
         icon: <Globe width={18} />,
       },
-      {
-        name: "Settings",
-        href: "/settings",
-        isActive: segments[0] === "settings",
-        icon: <Settings width={18} />,
-      },
-      ...pluginTabs.map((item) => ({
-        name: item.name,
-        href: item.href,
-        isActive: segments[0] === "plugins" && pathname?.includes(item.href),
-        icon: <Settings width={18} />,
+      ...[...navContext.sites]
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+        .map((site) => ({
+        name: site.name,
+        href: `/site/${site.id}`,
+        isActive: pathname?.includes(`/site/${site.id}`),
+        icon: <Globe width={18} />,
+        isChild: true,
+        childLevel: 1 as const,
       })),
+      ...globalSettingsWithChildren,
     ];
-  }, [segments, id, siteId, pluginTabs, pathname, dataDomainTabs, hasAnalyticsProviders]);
+  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, singleSiteMode, pluginTabs, globalSettingsWithChildren]);
 
   const [showSidebar, setShowSidebar] = useState(false);
+  const [collapsedByHref, setCollapsedByHref] = useState<Record<string, boolean>>({});
+
+  const renderedTabs = useMemo(() => {
+    let currentLevel0Href: string | null = null;
+    let currentLevel1Href: string | null = null;
+
+    return tabs.map((tab, idx) => {
+      const level = tab.childLevel ?? 0;
+      if (level === 0) {
+        currentLevel0Href = tab.href;
+        currentLevel1Href = null;
+      } else if (level === 1) {
+        currentLevel1Href = tab.href;
+      }
+
+      const nextLevel = tabs[idx + 1]?.childLevel ?? 0;
+      const hasChildren = nextLevel > level;
+      const level0Collapsed = currentLevel0Href ? (collapsedByHref[currentLevel0Href] ?? true) : false;
+      const level1Collapsed = currentLevel1Href ? (collapsedByHref[currentLevel1Href] ?? true) : false;
+      const visible =
+        level === 0
+          ? true
+          : level === 1
+            ? !level0Collapsed
+            : !level0Collapsed && !level1Collapsed;
+
+      return {
+        ...tab,
+        level,
+        hasChildren,
+        visible,
+      };
+    });
+  }, [tabs, collapsedByHref]);
 
   useEffect(() => {
     setShowSidebar(false);
@@ -340,16 +601,39 @@ export default function Nav({ children }: { children: ReactNode }) {
             ) : null}
           </div>
           <div className="grid gap-1">
-            {tabs.map(({ name, href, isActive, icon }) => (
+            {renderedTabs
+              .filter((tab) => tab.visible)
+              .map(({ name, href, isActive, icon, isChild, childLevel, hasChildren, level }) => (
               <Link
-                key={name}
+                key={`${name}-${href}`}
                 href={href}
                 className={`flex items-center space-x-3 ${
                   isActive ? "bg-stone-200 text-black dark:bg-stone-700" : ""
-                } rounded-lg px-2 py-1.5 transition-all duration-150 ease-in-out hover:bg-stone-200 active:bg-stone-300 dark:text-white dark:hover:bg-stone-700 dark:active:bg-stone-800`}
+                } rounded-lg px-2 py-1.5 transition-all duration-150 ease-in-out hover:bg-stone-200 active:bg-stone-300 dark:text-white dark:hover:bg-stone-700 dark:active:bg-stone-800 ${
+                  !isChild ? "" : childLevel === 2 ? "ml-10" : "ml-5"
+                }`}
               >
                 {icon}
-                <span className="text-sm font-medium">{name}</span>
+                <span className="text-sm font-medium flex-1">{name}</span>
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    aria-label={`${collapsedByHref[href] ? "Expand" : "Collapse"} ${name}`}
+                    className="rounded p-0.5 hover:bg-stone-300/50 dark:hover:bg-stone-600/50"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setCollapsedByHref((prev) => ({
+                        ...prev,
+                        [href]: !(prev[href] ?? true),
+                      }));
+                    }}
+                  >
+                    {(collapsedByHref[href] ?? true) ? <ChevronRight width={14} /> : <ChevronDown width={14} />}
+                  </button>
+                ) : level > 0 ? (
+                  <span className="inline-block w-[18px]" />
+                ) : null}
               </Link>
             ))}
           </div>

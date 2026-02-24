@@ -32,7 +32,7 @@ export default async function DomainPostPage({ params }: Props) {
   const resolvedPostId = decodeURIComponent(postId);
 
   const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
-  if (!domain || domain.key === "post") {
+  if (!domain) {
     notFound();
   }
 

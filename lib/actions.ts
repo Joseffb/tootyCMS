@@ -46,10 +46,10 @@ import { put } from "@vercel/blob";
 import { and, asc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { withPostAuth, withSiteAuth } from "./auth";
+import { withSiteAuth } from "./auth";
 import db from "./db";
-import { SelectPost, SelectSite, cmsSettings, posts, sites, users } from "./schema";
-import { categories, dataDomains, domainPostMeta, domainPosts, postCategories, postMeta, postTags, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
+import { SelectSite, cmsSettings, sites, users } from "./schema";
+import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
 import { USER_ROLES, type UserRole, isAdministrator } from "./rbac";
 import {
@@ -196,7 +196,7 @@ export const createTagByName = async (name: string) => {
 };
 export const getAllMetaKeys = async () => {
   try {
-    const rows = await db.select({ key: postMeta.key }).from(postMeta).orderBy(asc(postMeta.key));
+    const rows = await db.select({ key: domainPostMeta.key }).from(domainPostMeta).orderBy(asc(domainPostMeta.key));
     const unique = Array.from(new Set(rows.map((row) => row.key))).filter(Boolean);
     return unique;
   } catch {
@@ -250,20 +250,11 @@ export const getAllDataDomains = async (siteId?: string) => {
   } catch {
     usageRows = [];
   }
-  let corePostUsageCount = 0;
-  try {
-    const [coreUsage] = await db
-      .select({ usageCount: sql<number>`count(*)::int` })
-      .from(posts);
-    corePostUsageCount = coreUsage?.usageCount ?? 0;
-  } catch {
-    corePostUsageCount = 0;
-  }
   const usageMap = new Map(usageRows.map((row) => [row.dataDomainId, row.usageCount]));
   if (!siteId) {
     return rows.map((row) => ({
       ...row,
-      usageCount: row.key === "post" ? corePostUsageCount : usageMap.get(row.id) ?? 0,
+      usageCount: usageMap.get(row.id) ?? 0,
     }));
   }
 
@@ -285,7 +276,7 @@ export const getAllDataDomains = async (siteId?: string) => {
       ...row,
       assigned: row.key === "post" ? true : assignmentMap.has(row.id),
       isActive: row.key === "post" ? true : assignmentMap.get(row.id) ?? false,
-      usageCount: row.key === "post" ? corePostUsageCount : usageMap.get(row.id) ?? 0,
+      usageCount: usageMap.get(row.id) ?? 0,
   }));
 };
 
@@ -1217,17 +1208,6 @@ export const deleteSite = withSiteAuth(
   },
 );
 
-export const getSiteFromPostId = async (postId: string) => {
-  const post = await db.query.posts.findFirst({
-    where: eq(posts.id, postId),
-    columns: {
-      siteId: true,
-    },
-  });
-
-  return post?.siteId;
-};
-
 export const getSiteFromDomainPostId = async (postId: string) => {
   const post = await db.query.domainPosts.findFirst({
     where: eq(domainPosts.id, postId),
@@ -1254,7 +1234,7 @@ export const createDomainPost = withSiteAuth(
     }
 
     const domain = await getSiteDataDomainByKey(site.id, domainKey);
-    if (!domain || domain.key === "post") {
+    if (!domain) {
       return {
         error: "Data domain not found for site",
       };
@@ -1551,7 +1531,14 @@ export const updateDomainPostMetadata = async (
   }
 };
 
-export const deleteDomainPost = async (postId: string) => {
+export const deleteDomainPost = async (formData: FormData, postId: string) => {
+  const confirmation = String(formData.get("confirm") ?? "").trim().toLowerCase();
+  if (confirmation !== "delete") {
+    return {
+      error: "Type delete to confirm post deletion.",
+    };
+  }
+
   const session = await getSession();
   if (!session?.user.id) {
     return { error: "Not authenticated" };
@@ -1602,407 +1589,6 @@ export const deleteDomainPost = async (postId: string) => {
     return { error: error.message };
   }
 };
-
-export const createPost = withSiteAuth(
-  async (_: FormData, site: SelectSite) => {
-    const session = await getSession();
-    if (!session?.user.id) {
-      return {
-        error: "Not authenticated",
-      };
-    }
-
-    const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
-    const [response] = await db
-      .insert(posts)
-      .values({
-        siteId: site.id,
-        userId: session.user.id,
-        slug: toSeoSlug(`post ${nanoid()}`),
-        ...(useRandomDefaultImages ? { image: pickRandomTootyImage() } : {}),
-      })
-      .returning();
-
-    revalidateTag(
-      `${site.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`,
-      "max",
-    );
-    site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
-
-    await emitCmsLifecycleEvent({
-      name: "custom_event",
-      siteId: site.id,
-      payload: {
-        event: "content_created",
-        contentType: "post",
-        contentId: response.id,
-      },
-    });
-
-    return response;
-  },
-);
-
-// creating a separate function for this because we're not using FormData
-// lib/actions.ts
-
-export const updatePost = async (
-  data: Partial<SelectPost> & {
-    id: string;                    // always required
-    layout?: string | null;
-    categoryIds?: number[];
-    tagIds?: number[];
-    taxonomyIds?: number[];
-    metaEntries?: Array<{ key: string; value: string }>;
-  }
-) => {
-  const session = await getSession();
-  if (!session?.user.id) {
-    return { error: "Not authenticated" };
-  }
-
-  // 1. Verify ownership + grab siteId & slug
-  const existing = await db.query.posts.findFirst({
-    where: eq(posts.id, data.id),
-    columns: { userId: true, siteId: true, slug: true },
-  });
-  if (!existing || existing.userId !== session.user.id) {
-    return { error: "Post not found or not authorized" };
-  }
-
-  try {
-    // 2. Transaction: update post + sync categories
-    const postRecord = await db.transaction(async (tx) => {
-      // a) update posts table
-      const [updated] = await tx
-        .update(posts)
-        .set({
-          title: data.title,
-          description: data.description,
-          slug: typeof data.slug === "string" ? toSeoSlug(data.slug) : undefined,
-          content: data.content,
-          layout: data.layout ?? null,
-        })
-        .where(eq(posts.id, data.id))
-        .returning();
-
-      // b) taxonomy relationships (WordPress-style terms/taxonomies/relationships)
-      try {
-        await tx.delete(termRelationships).where(eq(termRelationships.objectId, data.id));
-        const taxonomyIds = Array.from(
-          new Set(
-            Array.isArray(data.taxonomyIds)
-              ? data.taxonomyIds
-              : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
-          ),
-        );
-        if (taxonomyIds.length > 0) {
-          await tx.insert(termRelationships).values(
-            taxonomyIds.map((termTaxonomyId) => ({
-              objectId: data.id,
-              termTaxonomyId,
-            })),
-          );
-        }
-      } catch {
-        // Legacy fallback while taxonomy tables are not migrated yet.
-        await tx.delete(postCategories).where(eq(postCategories.postId, data.id));
-        if (Array.isArray(data.categoryIds) && data.categoryIds.length > 0) {
-          await tx.insert(postCategories).values(
-            data.categoryIds.map((categoryId) => ({
-              postId: data.id,
-              categoryId,
-            })),
-          );
-        }
-        await tx.delete(postTags).where(eq(postTags.postId, data.id));
-        if (Array.isArray(data.tagIds) && data.tagIds.length > 0) {
-          await tx.insert(postTags).values(
-            data.tagIds.map((tagId) => ({
-              postId: data.id,
-              tagId,
-            })),
-          );
-        }
-      }
-
-      // c) clear old post meta and set current values
-      try {
-        await tx.delete(postMeta).where(eq(postMeta.postId, data.id));
-        if (Array.isArray(data.metaEntries) && data.metaEntries.length > 0) {
-          const normalizedMeta = data.metaEntries
-            .map((entry) => ({
-              key: entry.key.trim(),
-              value: entry.value.trim(),
-            }))
-            .filter((entry) => entry.key.length > 0);
-
-          if (normalizedMeta.length > 0) {
-            await tx.insert(postMeta).values(
-              normalizedMeta.map((entry) => ({
-                postId: data.id,
-                key: entry.key,
-                value: entry.value,
-              })),
-            );
-          }
-        }
-      } catch {
-        // Legacy fallback when post_meta table is not migrated yet.
-      }
-
-      return updated;
-    });
-
-    // 3. Fetch fresh categories
-    let cats: Array<{ categoryId: number }> = [];
-    let tagRows: Array<{ tagId: number }> = [];
-    try {
-      const taxonomyRows = await db
-        .select({
-          id: termTaxonomies.id,
-          taxonomy: termTaxonomies.taxonomy,
-        })
-        .from(termRelationships)
-        .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
-        .where(eq(termRelationships.objectId, data.id));
-      cats = taxonomyRows
-        .filter((row) => row.taxonomy === "category")
-        .map((row) => ({ categoryId: row.id }));
-      tagRows = taxonomyRows
-        .filter((row) => row.taxonomy === "tag")
-        .map((row) => ({ tagId: row.id }));
-    } catch {
-      const legacyCats = await db.query.postCategories.findMany({
-        where: eq(postCategories.postId, data.id),
-        columns: { categoryId: true },
-      });
-      const legacyTags = await db.query.postTags.findMany({
-        where: eq(postTags.postId, data.id),
-        columns: { tagId: true },
-      });
-      cats = legacyCats.map((c) => ({ categoryId: c.categoryId }));
-      tagRows = legacyTags.map((t) => ({ tagId: t.tagId }));
-    }
-    let metaRows: Array<{ key: string; value: string }> = [];
-    try {
-      metaRows = await db.query.postMeta.findMany({
-        where: eq(postMeta.postId, data.id),
-        columns: { key: true, value: true },
-      });
-    } catch {
-      metaRows = [];
-    }
-
-    // 4. Revalidate cache tags (domain-based, matching fetchers.ts)
-    const { siteId, slug } = existing;
-    const updatedSlug = postRecord?.slug ?? slug;
-    if (siteId) {
-      const siteRow = await db.query.sites.findFirst({
-        where: eq(sites.id, siteId),
-        columns: { subdomain: true, customDomain: true },
-      });
-      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-      if (siteRow?.subdomain) {
-        const domain = `${siteRow.subdomain}.${rootDomain}`;
-        revalidateTag(`${domain}-posts`, "max");
-        revalidateTag(`${domain}-${slug}`, "max");
-        if (updatedSlug !== slug) {
-          revalidateTag(`${domain}-${updatedSlug}`, "max");
-        }
-      }
-      if (siteRow?.customDomain) {
-        revalidateTag(`${siteRow.customDomain}-posts`, "max");
-        revalidateTag(`${siteRow.customDomain}-${slug}`, "max");
-        if (updatedSlug !== slug) {
-          revalidateTag(`${siteRow.customDomain}-${updatedSlug}`, "max");
-        }
-      }
-    }
-    revalidatePublicContentCache();
-
-    // 5. Return the updated post *with* its categories
-    return {
-      ...postRecord,
-      categories: cats,
-      tags: tagRows,
-      meta: metaRows,
-    };
-  } catch (error: any) {
-    console.error("🧨 updatePost error:", error);
-    return { error: error.message };
-  }
-};
-
-export const updatePostMetadata = withPostAuth(
-  async (
-    formData: FormData,
-    post: SelectPost & {
-      site: SelectSite;
-    },
-    key: string
-  ) => {
-    try {
-      let response;
-
-      const maybeFile = formData.get("image") as File | null;
-      const maybeUrl = formData.get("imageUrl") as string | null;
-      const maybeFinal = formData.get("imageFinalName") as string | null;
-
-      const finalUrl =
-        maybeFinal?.length ? maybeFinal :
-          maybeUrl?.length ? maybeUrl :
-            undefined;
-
-      // 🖼️ Handle image upload for "image" key
-      if (key === "image") {
-        // 1. Direct file upload (Vercel Blob)
-        if (maybeFile && maybeFile.size > 0 && process.env.BLOB_READ_WRITE_TOKEN) {
-          const filename = `${nanoid()}.${maybeFile.type.split("/")[1]}`;
-          const { url } = await put(filename, maybeFile, { access: "public" });
-          const blurhash = await getBlurDataURL(url);
-
-          response = await db
-            .update(posts)
-            .set({
-              image: url,
-              imageBlurhash: blurhash,
-            })
-            .where(eq(posts.id, post.id))
-            .returning()
-            .then((res) => res[0]);
-
-          // 2. Local file or provided URL
-        } else if (finalUrl) {
-          const blurhash = await getBlurDataURL(`${process.cwd()}/public${finalUrl}`);
-
-          response = await db
-            .update(posts)
-            .set({
-              image: finalUrl,
-              imageBlurhash: blurhash,
-            })
-            .where(eq(posts.id, post.id))
-            .returning()
-            .then((res) => res[0]);
-
-        } else {
-          return { error: "No valid image upload or URL provided" };
-        }
-
-      } else {
-        // 📝 Any other metadata (e.g., title, description, published)
-        const value = formData.get(key) as string;
-        const nextValue =
-          key === "published"
-            ? value === "true"
-            : key === "slug"
-              ? toSeoSlug(value)
-              : value;
-
-        response = await db
-          .update(posts)
-          .set({
-            [key]: nextValue,
-          })
-          .where(eq(posts.id, post.id))
-          .returning()
-          .then((res) => res[0]);
-
-        if (key === "published" && nextValue === true && !post.published) {
-          await emitCmsLifecycleEvent({
-            name: "content_published",
-            siteId: post.siteId,
-            payload: {
-              contentType: "post",
-              contentId: post.id,
-            },
-          });
-        }
-      }
-
-      // ♻️ Revalidate all relevant cache tags
-      const domain = post.site?.customDomain;
-      const subdomain = post.site?.subdomain;
-      const currentSlug = post.slug;
-      const updatedSlug = response?.slug ?? currentSlug;
-
-      revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`, "max");
-      revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${currentSlug}`, "max");
-      if (updatedSlug !== currentSlug) {
-        revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${updatedSlug}`, "max");
-      }
-      if (domain) {
-        revalidateTag(`${domain}-posts`, "max");
-        revalidateTag(`${domain}-${currentSlug}`, "max");
-        if (updatedSlug !== currentSlug) {
-          revalidateTag(`${domain}-${updatedSlug}`, "max");
-        }
-      }
-      revalidatePublicContentCache();
-
-      return response;
-    } catch (error: any) {
-      return {
-        error: error.code === "P2002"
-          ? `This slug is already in use`
-          : error.message,
-      };
-    }
-  }
-);
-export const deletePost = withPostAuth(
-  async (formData: FormData, post: SelectPost) => {
-    const confirmation = String(formData.get("confirm") ?? "").trim().toLowerCase();
-    if (confirmation !== "delete") {
-      return {
-        error: "Type delete to confirm post deletion.",
-      };
-    }
-
-    try {
-      const [response] = await db
-        .delete(posts)
-        .where(eq(posts.id, post.id))
-        .returning({
-          siteId: posts.siteId,
-        });
-
-      await emitCmsLifecycleEvent({
-        name: "content_deleted",
-        siteId: response?.siteId,
-        payload: {
-          contentType: "post",
-          contentId: post.id,
-        },
-      });
-
-      const siteRow = response?.siteId
-        ? await db.query?.sites?.findFirst?.({
-            where: eq(sites.id, response.siteId),
-            columns: { subdomain: true, customDomain: true },
-          })
-        : null;
-      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-      if (siteRow?.subdomain) {
-        const domain = `${siteRow.subdomain}.${rootDomain}`;
-        revalidateTag(`${domain}-posts`, "max");
-        revalidateTag(`${domain}-${post.slug}`, "max");
-      }
-      if (siteRow?.customDomain) {
-        revalidateTag(`${siteRow.customDomain}-posts`, "max");
-        revalidateTag(`${siteRow.customDomain}-${post.slug}`, "max");
-      }
-      revalidatePublicContentCache();
-
-      return response;
-    } catch (error: any) {
-      return {
-        error: error.message,
-      };
-    }
-  },
-);
 
 export const editUser = async (
   formData: FormData,
@@ -2403,12 +1989,12 @@ export const resetCmsCache = async () => {
 
   const allPosts = await db
     .select({
-      slug: posts.slug,
+      slug: domainPosts.slug,
       subdomain: sites.subdomain,
       customDomain: sites.customDomain,
     })
-    .from(posts)
-    .leftJoin(sites, eq(posts.siteId, sites.id));
+    .from(domainPosts)
+    .leftJoin(sites, eq(domainPosts.siteId, sites.id));
 
   for (const post of allPosts) {
     if (post.subdomain) {

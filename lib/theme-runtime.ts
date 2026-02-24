@@ -1,7 +1,7 @@
 import { access, readFile } from "fs/promises";
 import path from "path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
-import { getThemesDir } from "@/lib/extension-paths";
+import { getThemesDirs } from "@/lib/extension-paths";
 import {
   domainArchiveTemplateCandidates,
   domainDetailTemplateCandidates,
@@ -30,6 +30,10 @@ async function exists(filePath: string) {
   }
 }
 
+function getThemeBaseDir(active: ThemeWithState) {
+  return active.sourceDir || getThemesDirs()[0] || path.join(process.cwd(), "themes");
+}
+
 export async function getActiveThemeForSite(siteId: string): Promise<ThemeWithState | null> {
   const [themes, selectedId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteId)]);
   if (!themes.length) return null;
@@ -40,7 +44,7 @@ export async function getActiveThemeForSite(siteId: string): Promise<ThemeWithSt
 export async function getThemeAssetsForSite(siteId: string) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return { styles: [], scripts: [] };
-  const themesDir = getThemesDir();
+  const themesDir = getThemeBaseDir(active);
 
   const manifestAssets = (active as any).assets || {};
   const styles = Array.isArray(manifestAssets.styles)
@@ -67,7 +71,7 @@ export async function getThemeAssetsForSite(siteId: string) {
 export async function getThemeTemplateForSite(siteId: string) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
-  const themesDir = getThemesDir();
+  const themesDir = getThemeBaseDir(active);
 
   const manifestTemplates = (active as any).templates || {};
   const configured = typeof manifestTemplates.home === "string" ? manifestTemplates.home : "";
@@ -114,7 +118,7 @@ export async function getThemeQueryRequestsForSite(siteId: string, routeKind: st
 export async function getThemeTemplateFromCandidates(siteId: string, candidates: string[]) {
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
-  const themesDir = getThemesDir();
+  const themesDir = getThemeBaseDir(active);
 
   for (const candidate of candidates) {
     if (!candidate) continue;

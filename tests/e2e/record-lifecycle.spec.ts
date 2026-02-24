@@ -2,13 +2,14 @@ import { expect, test } from "@playwright/test";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
 import { and, eq } from "drizzle-orm";
-import { posts, sites } from "../../lib/schema";
+import { dataDomains, domainPosts, sites } from "../../lib/schema";
 
 const db = drizzle(sql);
 const runId = `e2e-record-${Date.now()}`;
 const postSlug = `${runId}-post`;
 
 let mainSiteId = "";
+let postDomainId = 0;
 
 test.describe.configure({ mode: "serial" });
 
@@ -24,14 +25,18 @@ test.beforeAll(async () => {
   }
 
   mainSiteId = siteRows[0].id;
+  const domainRows = await db.select({ id: dataDomains.id }).from(dataDomains).where(eq(dataDomains.key, "post")).limit(1);
+  if (!domainRows[0]) throw new Error("Post data domain not found for record lifecycle e2e.");
+  postDomainId = domainRows[0].id;
 });
 
 test.afterAll(async () => {
-  await db.delete(posts).where(and(eq(posts.siteId, mainSiteId), eq(posts.slug, postSlug)));
+  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
 });
 
 test("post record lifecycle: add and delete record", async () => {
-  await db.insert(posts).values({
+  await db.insert(domainPosts).values({
+    dataDomainId: postDomainId,
     title: `E2E Lifecycle ${runId}`,
     slug: postSlug,
     content: "<p>E2E lifecycle content.</p>",
@@ -40,18 +45,18 @@ test("post record lifecycle: add and delete record", async () => {
   });
 
   const created = await db
-    .select({ id: posts.id, slug: posts.slug })
-    .from(posts)
-    .where(and(eq(posts.siteId, mainSiteId), eq(posts.slug, postSlug)))
+    .select({ id: domainPosts.id, slug: domainPosts.slug })
+    .from(domainPosts)
+    .where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)))
     .limit(1);
   expect(created[0]?.slug).toBe(postSlug);
 
-  await db.delete(posts).where(and(eq(posts.siteId, mainSiteId), eq(posts.slug, postSlug)));
+  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
 
   const removed = await db
-    .select({ id: posts.id })
-    .from(posts)
-    .where(and(eq(posts.siteId, mainSiteId), eq(posts.slug, postSlug)))
+    .select({ id: domainPosts.id })
+    .from(domainPosts)
+    .where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)))
     .limit(1);
   expect(removed).toHaveLength(0);
 });

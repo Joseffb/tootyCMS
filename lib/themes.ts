@@ -4,7 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 import type { ThemeTokens } from "@/lib/theme-system";
-import { getThemesDir } from "@/lib/extension-paths";
+import { getThemesDirs } from "@/lib/extension-paths";
 import {
   normalizeExtensionId,
   type ThemeContract,
@@ -17,10 +17,14 @@ import { trace } from "@/lib/debug";
 export type ThemeSettingsField = ExtensionSettingsField;
 
 export type ThemeManifest = ThemeContract;
+type ThemeManifestResolved = ThemeManifest & {
+  sourceDir: string;
+};
 
 export type ThemeWithState = ThemeManifest & {
   enabled: boolean;
   config: Record<string, unknown>;
+  sourceDir?: string;
 };
 
 export type ThemeSystemPrimaries = {
@@ -58,10 +62,6 @@ function parseJson<T>(raw: string, fallback: T): T {
   }
 }
 
-function normalizeThemeId(raw: string) {
-  return normalizeExtensionId(raw);
-}
-
 function normalizeThemeConfig(raw: Record<string, unknown>) {
   const next = { ...SYSTEM_THEME_PRIMARIES, ...raw } as Record<string, unknown>;
   const docsSlug =
@@ -92,38 +92,48 @@ function normalizeThemeConfig(raw: Record<string, unknown>) {
 }
 
 export async function getAvailableThemes(): Promise<ThemeManifest[]> {
-  const themesDir = getThemesDir();
-  let entries: string[] = [];
-  try {
-    entries = await readdir(themesDir);
-  } catch {
-    return [];
-  }
+  const themeDirs = getThemesDirs();
+  const byId = new Map<string, ThemeManifestResolved>();
 
-  const manifests: ThemeManifest[] = [];
-  for (const entry of entries) {
-    const manifestPath = path.join(themesDir, entry, "theme.json");
+  for (const themesDir of themeDirs) {
+    let entries: string[] = [];
     try {
-      const raw = await readFile(manifestPath, "utf8");
-      const parsed = parseJson<unknown>(raw, {});
-      const validated = validateThemeContract(parsed, entry);
-      if (!validated) continue;
-      if (!isCoreVersionCompatible(validated.minCoreVersion)) {
-        trace("extensions", "theme skipped due core version mismatch", {
-          themeId: validated.id,
-          themeVersion: validated.version || "",
-          minCoreVersion: validated.minCoreVersion || "",
-          coreVersion: CORE_VERSION,
-        });
-        continue;
-      }
-      manifests.push(validated);
+      entries = await readdir(themesDir);
     } catch {
       continue;
     }
+
+    for (const entry of entries) {
+      const manifestPath = path.join(themesDir, entry, "theme.json");
+      try {
+        const raw = await readFile(manifestPath, "utf8");
+        const parsed = parseJson<unknown>(raw, {});
+        const validated = validateThemeContract(parsed, entry);
+        if (!validated) continue;
+        if (!isCoreVersionCompatible(validated.minCoreVersion)) {
+          trace("extensions", "theme skipped due core version mismatch", {
+            themeId: validated.id,
+            themeVersion: validated.version || "",
+            minCoreVersion: validated.minCoreVersion || "",
+            coreVersion: CORE_VERSION,
+          });
+          continue;
+        }
+        if (byId.has(validated.id)) {
+          trace("extensions", "theme skipped due duplicate id in lower-priority path", {
+            themeId: validated.id,
+            sourceDir: themesDir,
+          });
+          continue;
+        }
+        byId.set(validated.id, { ...validated, sourceDir: themesDir });
+      } catch {
+        continue;
+      }
+    }
   }
 
-  return manifests.sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function listThemesWithState(): Promise<ThemeWithState[]> {
@@ -166,6 +176,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
         ...fieldDefaults,
         ...storedConfig,
       }),
+      sourceDir: (theme as ThemeManifestResolved).sourceDir,
     };
   });
 }

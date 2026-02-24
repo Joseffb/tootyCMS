@@ -40,7 +40,7 @@ export default async function PluginSettingsPage() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-300">
-        Drop plugins into <code>/plugins/&lt;plugin-id&gt;/plugin.json</code>. Global settings here act as gate + defaults for site plugins.
+        Plugins are discovered from configured paths (comma-separated in `PLUGINS_PATH`) and use global settings here as gate + defaults for site plugins.
       </p>
 
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">

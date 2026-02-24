@@ -59,12 +59,12 @@ Legacy `main` subdomain support remains internal for route compatibility, but us
 ## Theme/Plugin Path Overrides
 
 New optional env variables:
-- `THEMES_PATH`
-- `PLUGINS_PATH`
+- `THEMES_PATH` (supports comma-separated paths)
+- `PLUGINS_PATH` (supports comma-separated paths)
 
 Behavior:
 - empty/unset => default folders (`themes/`, `plugins/`)
-- set => absolute or workspace-relative override
+- set => comma-separated absolute or workspace-relative paths (left-to-right priority)
 
 Applied to:
 - theme/plugin discovery

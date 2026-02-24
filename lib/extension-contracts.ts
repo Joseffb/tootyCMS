@@ -47,6 +47,7 @@ export type PluginContract = {
   menu?: {
     label?: string;
     path?: string;
+    order?: number;
   };
   settingsFields?: ExtensionSettingsField[];
   editor?: {
@@ -176,6 +177,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
       ? {
           label: String(menu.label ?? name).trim(),
           path: String(menu.path ?? "").trim(),
+          order: Number.isFinite(Number(menu.order)) ? Number(menu.order) : undefined,
         }
       : undefined,
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),

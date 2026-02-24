@@ -29,11 +29,8 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
 
   return (
     <form
-      action={async () => {
-        if (!window.confirm("Are you sure you want to delete this entry?")) {
-          return;
-        }
-        const res = await deleteDomainPost(postId);
+      action={async (formData: FormData) => {
+        const res = await deleteDomainPost(formData, postId);
         if ((res as any).error) {
           toast.error((res as any).error);
           return;
@@ -47,15 +44,14 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
       <div className="relative flex flex-col space-y-4 p-5 sm:p-10">
         <h2 className="font-cal text-xl dark:text-white">Delete Entry</h2>
         <p className="text-sm text-stone-500 dark:text-stone-400">
-          Deletes this entry permanently. Type the entry title <b>{resolvedPostName}</b> to confirm.
+          Please type <b>&quot;Delete&quot;</b> below to confirm deleting <b>{resolvedPostName}</b>.
         </p>
 
         <input
           name="confirm"
           type="text"
           required
-          pattern={resolvedPostName}
-          placeholder={resolvedPostName}
+          placeholder="Please confirm your delete request"
           className="w-full max-w-md rounded-md border border-stone-300 text-sm text-stone-900 placeholder-stone-300 focus:border-stone-500 focus:outline-none focus:ring-stone-500 dark:border-stone-600 dark:bg-black dark:text-white dark:placeholder-stone-700"
         />
       </div>

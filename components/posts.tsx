@@ -2,7 +2,9 @@ import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import Image from "next/image";
 import { redirect } from "next/navigation";
-import PostCard from "./post-card";
+import DomainPostCard from "./domain-post-card";
+import { desc, eq } from "drizzle-orm";
+import { dataDomains } from "@/lib/schema";
 
 export default async function Posts({
   siteId,
@@ -16,23 +18,30 @@ export default async function Posts({
     redirect("/login");
   }
 
-  const posts = await db.query.posts.findMany({
-    where: (posts, { and, eq }) =>
+  const domain = await db.query.dataDomains.findFirst({
+    where: eq(dataDomains.key, "post"),
+    columns: { id: true },
+  });
+  if (!domain) return null;
+
+  const rows = await db.query.domainPosts.findMany({
+    where: (table, { and, eq }) =>
       and(
-        eq(posts.userId, session.user.id),
-        siteId ? eq(posts.siteId, siteId) : undefined,
+        eq(table.userId, session.user.id),
+        eq(table.dataDomainId, domain.id),
+        siteId ? eq(table.siteId, siteId) : undefined,
       ),
     with: {
       site: true,
     },
-    orderBy: (posts, { desc }) => desc(posts.updatedAt),
+    orderBy: (table) => desc(table.updatedAt),
     ...(limit ? { limit } : {}),
   });
 
-  return posts.length > 0 ? (
+  return rows.length > 0 ? (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {posts.map((post) => (
-        <PostCard key={post.id} data={post} />
+      {rows.map((post) => (
+        <DomainPostCard key={post.id} data={post} siteId={post.siteId || siteId || ""} domainKey="post" />
       ))}
     </div>
   ) : (

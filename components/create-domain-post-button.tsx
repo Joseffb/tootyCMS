@@ -1,7 +1,6 @@
 "use client";
 
 import { useTransition } from "react";
-import { createDomainPost } from "@/lib/actions";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import LoadingDots from "@/components/icons/loading-dots";
@@ -22,10 +21,7 @@ export default function CreateDomainPostButton({
     <button
       onClick={() =>
         startTransition(async () => {
-          const post = await createDomainPost(null, siteId, domainKey);
-          if ((post as any)?.error) return;
-          router.refresh();
-          router.push(`/site/${siteId}/domain/${domainKey}/post/${post.id}`);
+          router.push(`/site/${siteId}/domain/${domainKey}/create`);
         })
       }
       className={cn(

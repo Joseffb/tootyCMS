@@ -8,6 +8,8 @@ vi.mock("@/lib/plugins", () => ({
   getAvailablePlugins: vi.fn(async () => []),
   getEnabledPluginMenuItems: vi.fn(async () => []),
   getPluginById: vi.fn(async () => null),
+  getPluginEntryPath: vi.fn(async () => "/nonexistent/plugin/index.mjs"),
+  listPluginsWithSiteState: vi.fn(async () => []),
   listPluginsWithState: listPluginsWithStateMock,
   pluginConfigKey: (pluginId: string) => `plugin_${pluginId}_config`,
   pluginEnabledKey: (pluginId: string) => `plugin_${pluginId}_enabled`,

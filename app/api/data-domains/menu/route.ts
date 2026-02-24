@@ -1,7 +1,7 @@
 import { getAllDataDomains } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { pluralizeLabel } from "@/lib/data-domain-labels";
+import { pluralizeLabel, singularizeLabel } from "@/lib/data-domain-labels";
 import { sites } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -31,8 +31,11 @@ export async function GET(request: Request) {
     .map((domain: any) => ({
       id: domain.id,
       label: pluralizeLabel(domain.label),
-      href: `/site/${siteId}/domain/${domain.key}`,
-    }));
+      singular: singularizeLabel(domain.label),
+      listHref: `/site/${siteId}/domain/${domain.key}`,
+      addHref: `/site/${siteId}/domain/${domain.key}/create`,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 
   return NextResponse.json({ items });
 }

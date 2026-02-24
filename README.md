@@ -46,15 +46,15 @@ See:
 
 - `app/` — routes, API handlers, dashboard UI
 - `lib/` — core domain logic (actions, runtime, themes/plugins/kernel)
-- `themes/` — theme folders (`theme.json`, templates, assets, optional public files)
-- `plugins/` — plugin folders (`plugin.json`, optional `index.mjs`)
+- `themes/` — optional local theme folder (additional theme roots can be configured via `THEMES_PATH`)
+- `plugins/` — optional local plugin folder (additional plugin roots can be configured via `PLUGINS_PATH`)
 - `docs/` — architecture + contracts + subsystem docs
 - `tests/` — unit and integration tests
 
 ## Theme System
 
 Themes live in `themes/<theme-id>/` by default.
-You can override the root path with `THEMES_PATH` (absolute or workspace-relative).
+You can override source roots with `THEMES_PATH` (comma-separated absolute or workspace-relative paths).
 
 Required:
 - `theme.json`
@@ -80,7 +80,7 @@ Example: `themes/tooty-light/templates/tax_category_documentation.html` is used 
 ## Plugin System
 
 Plugins live in `plugins/<plugin-id>/` by default.
-You can override the root path with `PLUGINS_PATH` (absolute or workspace-relative).
+You can override source roots with `PLUGINS_PATH` (comma-separated absolute or workspace-relative paths).
 
 Required:
 - `plugin.json`

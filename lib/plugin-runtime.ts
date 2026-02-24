@@ -6,8 +6,8 @@ import { createPluginExtensionApi, type PluginCapabilities } from "@/lib/extensi
 import {
   type PluginWithState,
   getAvailablePlugins,
-  getEnabledPluginMenuItems,
   getPluginById,
+  getPluginEntryPath,
   listPluginsWithState,
   listPluginsWithSiteState,
   pluginConfigKey,
@@ -17,9 +17,7 @@ import {
   sitePluginEnabledKey,
 } from "@/lib/plugins";
 import { pathToFileURL } from "url";
-import path from "path";
 import { trace } from "@/lib/debug";
-import { getPluginsDir } from "@/lib/extension-paths";
 
 function isAuthFilterName(name: unknown) {
   return (
@@ -155,7 +153,7 @@ async function maybeRegisterPluginHooks(
 ) {
   const pluginId = plugin.id;
   const capabilities = toRuntimeCapabilities(plugin);
-  const absEntry = path.join(getPluginsDir(), pluginId, "index.mjs");
+  const absEntry = await getPluginEntryPath(pluginId);
   try {
     // Bypass bundler module resolution so external plugin paths (PLUGINS_PATH) load reliably.
     const nativeImport = new Function("specifier", "return import(specifier);") as (specifier: string) => Promise<any>;
@@ -250,13 +248,27 @@ export async function createKernelForRequest(siteId?: string) {
   return kernel;
 }
 
-export async function getDashboardPluginMenuItems(): Promise<MenuItem[]> {
-  const dynamicItems = await getEnabledPluginMenuItems();
-  return dynamicItems.map((item, idx) => ({
-    label: item.label,
-    href: item.href,
-    order: 90 + idx,
-  }));
+export async function getDashboardPluginMenuItems(siteId?: string): Promise<MenuItem[]> {
+  const plugins = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
+  const dynamicItems = plugins
+    .filter((plugin) => {
+      if (!plugin.enabled || !plugin.menu) return false;
+      if (!siteId) return true;
+      const isCore = (plugin.scope || "site") === "core";
+      const siteEnabled = "siteEnabled" in plugin ? Boolean(plugin.siteEnabled) : true;
+      return isCore || plugin.mustUse || siteEnabled;
+    })
+    .map((plugin) => ({
+      label: plugin.menu?.label || plugin.name,
+      href: plugin.menu?.path || `/plugins/${plugin.id}`,
+      order: Number.isFinite(Number(plugin.menu?.order)) ? Number(plugin.menu?.order) : 90,
+    }))
+    .sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order;
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+    });
+
+  return dynamicItems;
 }
 
 export { getAvailablePlugins, getPluginById, listPluginsWithState, listPluginsWithSiteState };

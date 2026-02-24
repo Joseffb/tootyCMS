@@ -6,7 +6,6 @@ import {
   cmsSettings,
   dataDomains,
   domainPosts,
-  posts,
   siteDataDomains,
   sites,
   termRelationships,
@@ -24,6 +23,7 @@ const categorySlug = `${runId}-category`;
 let mainSiteId = "";
 let mainUserId = "";
 let postId = "";
+let postDomainId = 0;
 let projectDomainId = 0;
 let categoryTaxonomyId = 0;
 let siteHost = "main.localhost";
@@ -144,6 +144,15 @@ test.beforeAll(async () => {
     throw new Error("Data domain `project` not found.");
   }
   projectDomainId = projectDomainRows[0].id;
+  const postDomainRows = await db
+    .select({ id: dataDomains.id })
+    .from(dataDomains)
+    .where(eq(dataDomains.key, "post"))
+    .limit(1);
+  if (!postDomainRows[0]) {
+    throw new Error("Data domain `post` not found.");
+  }
+  postDomainId = postDomainRows[0].id;
 
   await db
     .insert(siteDataDomains)
@@ -154,8 +163,9 @@ test.beforeAll(async () => {
     });
 
   const postRows = await db
-    .insert(posts)
+    .insert(domainPosts)
     .values({
+      dataDomainId: postDomainId,
       title: `URL Pattern Post ${runId}`,
       slug: postSlug,
       content: "<p>URL pattern test post body.</p>",
@@ -163,7 +173,7 @@ test.beforeAll(async () => {
       siteId: mainSiteId,
       userId: mainUserId,
     })
-    .returning({ id: posts.id });
+    .returning({ id: domainPosts.id });
   postId = postRows[0].id;
 
   await db.insert(domainPosts).values({
@@ -221,7 +231,7 @@ test.afterAll(async () => {
   await restoreSettings(mainSiteId);
   await db.delete(termRelationships).where(and(eq(termRelationships.objectId, postId), eq(termRelationships.termTaxonomyId, categoryTaxonomyId)));
   await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.slug, projectSlug)));
-  await db.delete(posts).where(and(eq(posts.siteId, mainSiteId), eq(posts.slug, postSlug)));
+  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
   await db.delete(termTaxonomies).where(eq(termTaxonomies.id, categoryTaxonomyId));
   await db.delete(terms).where(eq(terms.slug, categorySlug));
 });

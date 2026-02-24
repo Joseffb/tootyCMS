@@ -1,7 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import Posts from "@/components/posts";
-import CreatePostButton from "@/components/create-post-button";
+import CreateDomainPostButton from "@/components/create-domain-post-button";
 import db from "@/lib/db";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSetting } from "@/lib/cms-config";
@@ -74,7 +74,7 @@ export default async function SitePosts({ params }: Props) {
             {publicHost} ↗
           </a>
         </div>
-        <CreatePostButton />
+        <CreateDomainPostButton siteId={decodeURIComponent(id)} domainKey="post" domainLabel="Post" />
       </div>
       <Posts siteId={decodeURIComponent(id)} />
     </>

@@ -2,11 +2,26 @@ import { Suspense } from "react";
 import Sites from "@/components/sites";
 import OverviewStats from "@/components/overview-stats";
 import Posts from "@/components/posts";
-import Link from "next/link";
 import PlaceholderCard from "@/components/placeholder-card";
 import OverviewSitesCTA from "@/components/overview-sites-cta";
+import { getSession } from "@/lib/auth";
+import db from "@/lib/db";
+import { redirect } from "next/navigation";
 
-export default function Overview() {
+export default async function Overview() {
+  const session = await getSession();
+  if (session) {
+    const ownedSites = await db.query.sites.findMany({
+      where: (sites, { eq }) => eq(sites.userId, session.user.id),
+      columns: { id: true, isPrimary: true, subdomain: true },
+    });
+    if (ownedSites.length === 1) {
+      const primary =
+        ownedSites.find((site) => site.isPrimary || site.subdomain === "main") || ownedSites[0];
+      redirect(`/site/${primary.id}`);
+    }
+  }
+
   return (
     <div className="flex w-full max-w-none flex-col space-y-12 p-8">
       <div className="flex flex-col space-y-6">

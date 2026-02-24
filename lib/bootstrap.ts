@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { posts, sites } from "@/lib/schema";
+import { dataDomains, domainPosts, siteDataDomains, sites } from "@/lib/schema";
 import { isRandomDefaultImagesEnabled } from "@/lib/cms-config";
 import { and, eq, isNull } from "drizzle-orm";
 
@@ -216,14 +216,33 @@ async function ensureSeedSiteThumbnail(siteId: string) {
 }
 
 async function removeLegacyDocumentationPost(siteId: string) {
-  await db.delete(posts).where(and(eq(posts.siteId, siteId), eq(posts.slug, "documentation")));
+  const postDomain = await db.query.dataDomains.findFirst({
+    where: eq(dataDomains.key, "post"),
+    columns: { id: true },
+  });
+  if (!postDomain) return;
+  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomain.id), eq(domainPosts.slug, "documentation")));
 }
 
 async function ensureDefaultStarterPosts(siteId: string, userId: string, useRandomDefaultImages: boolean) {
+  const postDomain = await db.query.dataDomains.findFirst({
+    where: eq(dataDomains.key, "post"),
+    columns: { id: true },
+  });
+  if (!postDomain) return;
   await db
-    .insert(posts)
+    .insert(siteDataDomains)
+    .values({ siteId, dataDomainId: postDomain.id, isActive: true })
+    .onConflictDoUpdate({
+      target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
+      set: { isActive: true, updatedAt: new Date() },
+    });
+
+  await db
+    .insert(domainPosts)
     .values([
     {
+      dataDomainId: postDomain.id,
       siteId,
       userId,
       title: "Theme Guide: HTML + CSS First",
@@ -237,6 +256,7 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
       published: true,
     },
     {
+      dataDomainId: postDomain.id,
       siteId,
       userId,
       title: "About This Site",
@@ -250,6 +270,7 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
       published: true,
     },
     {
+      dataDomainId: postDomain.id,
       siteId,
       userId,
       title: "Gallery Showcase",
@@ -261,6 +282,7 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
       published: true,
     },
     {
+      dataDomainId: postDomain.id,
       siteId,
       userId,
       title: "Welcome to Tooty CMS",
@@ -272,13 +294,13 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
       published: true,
     },
   ])
-    .onConflictDoNothing({ target: [posts.slug, posts.siteId] });
+    .onConflictDoNothing({ target: [domainPosts.slug, domainPosts.dataDomainId] });
 
   // Keep welcome post newest so default feeds show it first on initial load.
   await db
-    .update(posts)
+    .update(domainPosts)
     .set({ createdAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(posts.siteId, siteId), eq(posts.slug, "welcome-to-tooty")));
+    .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomain.id), eq(domainPosts.slug, "welcome-to-tooty")));
 }
 
 export async function ensureMainSiteForCurrentUser() {
@@ -299,7 +321,13 @@ export async function ensureMainSiteForUser(userId: string) {
       await ensurePrimarySiteUsesMainSubdomain(existingPrimary.id);
     }
     await ensureSeedSiteThumbnail(existingPrimary.id);
-    await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingPrimary.id), isNull(posts.layout)));
+    const postDomain = await db.query.dataDomains.findFirst({
+      where: eq(dataDomains.key, "post"),
+      columns: { id: true },
+    });
+    if (postDomain) {
+      await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingPrimary.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
+    }
     return;
   }
 
@@ -317,7 +345,13 @@ export async function ensureMainSiteForUser(userId: string) {
       await ensurePrimarySiteUsesMainSubdomain(existingAny.id);
     }
     await ensureSeedSiteThumbnail(existingAny.id);
-    await db.update(posts).set({ layout: "post" }).where(and(eq(posts.siteId, existingAny.id), isNull(posts.layout)));
+    const postDomain = await db.query.dataDomains.findFirst({
+      where: eq(dataDomains.key, "post"),
+      columns: { id: true },
+    });
+    if (postDomain) {
+      await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingAny.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
+    }
     return;
   }
 

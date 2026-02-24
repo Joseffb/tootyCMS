@@ -25,8 +25,8 @@ import {
   getTaxonomyOverview,
   getTaxonomyTerms,
   getTaxonomyTermsPreview,
-  updatePost,
-  updatePostMetadata,
+  updateDomainPost,
+  updateDomainPostMetadata,
 } from "@/lib/actions";
 import TextareaAutosize from "react-textarea-autosize";
 import { cn } from "@/lib/utils";
@@ -205,8 +205,8 @@ function normalizeSlugInput(value: string) {
 export default function Editor({
   post,
   defaultEditorMode = "rich-text",
-  onSave = updatePost,
-  onUpdateMetadata = updatePostMetadata,
+  onSave = updateDomainPost,
+  onUpdateMetadata = updateDomainPostMetadata,
   enableThumbnail = true,
 }: {
   post: PostWithSite;

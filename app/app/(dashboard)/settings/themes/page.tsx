@@ -37,7 +37,7 @@ export default async function ThemeSettingsPage() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-300">
-        Drop themes into <code>/themes/&lt;theme-id&gt;/theme.json</code> and manage them here.
+        Themes are discovered from configured paths (comma-separated in `THEMES_PATH`) and managed here.
       </p>
 
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
