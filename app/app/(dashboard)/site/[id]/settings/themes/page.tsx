@@ -1,5 +1,4 @@
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
 import { listThemesWithState, getSiteThemeId, saveThemeConfig, setSiteTheme, setThemeEnabled } from "@/lib/themes";
 import { notFound, redirect } from "next/navigation";
 import Image from "next/image";
@@ -12,10 +11,12 @@ import {
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ tab?: string; q?: string; error?: string }>;
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
 };
 
 export default async function SiteThemeSettingsPage({ params, searchParams }: Props) {
@@ -25,16 +26,14 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   const requestedTab = paramsQuery.tab === "discover" ? "discover" : "installed";
   const query = String(paramsQuery.q || "");
   const errorCode = String(paramsQuery.error || "");
+  const view = paramsQuery.view === "active" || paramsQuery.view === "inactive" ? paramsQuery.view : "all";
 
   const id = decodeURIComponent((await params).id);
-  const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
-  if (!site || site.userId !== session.user.id) notFound();
+  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
+  if (!site) notFound();
   const siteData = site;
-  const ownedSites = await db.query.sites.findMany({
-    where: (sites, { eq }) => eq(sites.userId, session.user.id),
-    columns: { id: true, isPrimary: true, subdomain: true },
-  });
-  const singleSiteMode = ownedSites.length === 1;
+  const siteIds = await listSiteIdsForUser(session.user.id);
+  const singleSiteMode = siteIds.length === 1;
   const activeTab = singleSiteMode ? requestedTab : "installed";
 
   const [themes, activeThemeId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteData.id)]);
@@ -53,6 +52,12 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   const selectedThemeId = selectableThemes.some((theme) => theme.id === activeThemeId)
     ? activeThemeId
     : (selectableThemes[0]?.id ?? "");
+  const visibleThemes = selectableThemes.filter((theme) => {
+    const active = theme.id === selectedThemeId;
+    if (view === "active") return active;
+    if (view === "inactive") return !active;
+    return true;
+  });
 
   async function saveTheme(formData: FormData) {
     "use server";
@@ -141,7 +146,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
         </div>
         {activeTab === "discover" ? (
           <div className="mt-4 space-y-2 rounded-md border border-stone-200 p-3 dark:border-stone-700">
-            <form className="flex items-center gap-2">
+            <form className="flex w-full items-center justify-end gap-2">
               <input type="hidden" name="tab" value="discover" />
               <input
                 name="q"
@@ -158,10 +163,25 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
               const alreadyInstalled = installedIds.has(entry.directory);
               return (
                 <div key={entry.directory} className="flex items-start justify-between rounded-md border border-stone-200 p-3 dark:border-stone-700">
-                  <div>
-                    <div className="font-medium text-stone-900 dark:text-white">{entry.name}</div>
-                    <div className="text-xs text-stone-500">{entry.id}</div>
-                    <div className="text-xs text-stone-600 dark:text-stone-300">{entry.description}</div>
+                  <div className="flex items-start gap-3">
+                    <div className="h-20 w-36 overflow-hidden rounded-md border border-stone-200 bg-stone-100 dark:border-stone-700 dark:bg-stone-900">
+                      {entry.thumbnailUrl ? (
+                        <img
+                          src={entry.thumbnailUrl}
+                          alt={`${entry.name} thumbnail`}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[11px] text-stone-500">No thumbnail</div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-medium text-stone-900 dark:text-white">{entry.name}</div>
+                      <div className="text-xs text-stone-500">{entry.id}</div>
+                      <div className="text-xs text-stone-600 dark:text-stone-300">{entry.description}</div>
+                    </div>
                   </div>
                   {alreadyInstalled ? (
                     <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Installed</span>
@@ -180,6 +200,40 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
           </div>
         ) : null}
         {activeTab === "installed" ? (
+        <div className="mt-4 flex items-center gap-2">
+          <a
+            href={`/site/${siteData.id}/settings/themes?tab=installed&view=all`}
+            className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "all"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View All
+          </a>
+          <a
+            href={`/site/${siteData.id}/settings/themes?tab=installed&view=active`}
+            className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "active"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View Active
+          </a>
+          <a
+            href={`/site/${siteData.id}/settings/themes?tab=installed&view=inactive`}
+            className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "inactive"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View Inactive
+          </a>
+        </div>
+        ) : null}
+        {activeTab === "installed" ? (
         <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
           <table className="w-full text-sm">
             <thead className="bg-stone-50 text-left dark:bg-stone-900">
@@ -190,7 +244,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
               </tr>
             </thead>
             <tbody>
-              {selectableThemes.map((theme) => (
+              {visibleThemes.map((theme) => (
                 <tr key={theme.id} className="border-t border-stone-200 dark:border-stone-700">
                   <td className="px-5 py-6 align-top">
                     <div className="relative h-48 w-80 overflow-hidden rounded-lg border border-stone-200 bg-stone-100 dark:border-stone-700 dark:bg-stone-900">
@@ -226,7 +280,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
                       <button
                         className={`rounded-md border px-3 py-1.5 text-xs ${
                           selectedThemeId === theme.id
-                            ? "border-emerald-700 bg-emerald-700 text-white"
+                            ? "!border-stone-300 !bg-white !text-black"
                             : "border-black bg-black text-white hover:bg-white hover:text-black"
                         }`}
                       >

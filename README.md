@@ -114,10 +114,21 @@ npm install
 cp .env.example .env
 ```
 
+Recommended for isolation:
+- Set `POSTGRES_TEST_URL` to a separate Neon branch/database for integration and e2e tests.
+- If `POSTGRES_TEST_URL` is empty, test scripts fall back to `POSTGRES_URL`.
+- Full guide: `docs/TESTING_DB.md`
+
 3. Run database schema push (used in build script) and start dev server
 
 ```bash
 npm run dev
+```
+
+Optional but recommended:
+
+```bash
+npm run hooks:install
 ```
 
 App runs at:
@@ -198,6 +209,8 @@ npm run test:all
 - `docs/MEDIA_MANAGER.md`
 - `docs/DATA_DOMAINS.md`
 - `docs/TRACING.md`
+- `docs/SECURITY_CI.md`
+- `docs/TESTING_DB.md`
 
 ## Status
 

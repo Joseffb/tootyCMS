@@ -19,6 +19,10 @@ type CatalogRepo = {
   branch: string;
 };
 
+const GITHUB_REQUEST_DELAY_MS = Number.parseInt(process.env.TOOTY_GITHUB_REQUEST_DELAY_MS || "120", 10);
+let githubRequestChain: Promise<void> = Promise.resolve();
+let githubLastRequestAt = 0;
+
 function parseRepoSlug(raw: string | undefined, fallbackOwner: string, fallbackRepo: string) {
   const slug = String(raw || "").trim();
   if (!slug) return { owner: fallbackOwner, repo: fallbackRepo };
@@ -33,6 +37,7 @@ export type CatalogEntry = {
   description: string;
   version: string;
   directory: string;
+  thumbnailUrl?: string;
 };
 
 const pluginRepo = parseRepoSlug(
@@ -85,11 +90,48 @@ function githubHeaders() {
   return headers;
 }
 
-async function fetchGithubJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
-    headers: githubHeaders(),
-    cache: "no-store",
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withGithubRequestDelay<T>(fn: () => Promise<T>): Promise<T> {
+  const hasToken = Boolean((process.env.TOOTY_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "").trim());
+  if (hasToken) {
+    return fn();
+  }
+
+  const delayMs = Number.isFinite(GITHUB_REQUEST_DELAY_MS) ? Math.max(0, GITHUB_REQUEST_DELAY_MS) : 0;
+
+  let release: () => void = () => {};
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
   });
+
+  const previous = githubRequestChain;
+  githubRequestChain = previous.then(() => next);
+
+  await previous;
+
+  const elapsed = Date.now() - githubLastRequestAt;
+  if (delayMs > 0 && elapsed < delayMs) {
+    await sleep(delayMs - elapsed);
+  }
+
+  githubLastRequestAt = Date.now();
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+async function fetchGithubJson<T>(url: string): Promise<T> {
+  const res = await withGithubRequestDelay(() =>
+    fetch(url, {
+      headers: githubHeaders(),
+      cache: "no-store",
+    }),
+  );
   if (!res.ok) {
     const remaining = res.headers.get("x-ratelimit-remaining");
     const reset = res.headers.get("x-ratelimit-reset");
@@ -102,10 +144,12 @@ async function fetchGithubJson<T>(url: string): Promise<T> {
 }
 
 async function fetchGithubBytes(url: string): Promise<Uint8Array> {
-  const res = await fetch(url, {
-    headers: githubHeaders(),
-    cache: "no-store",
-  });
+  const res = await withGithubRequestDelay(() =>
+    fetch(url, {
+      headers: githubHeaders(),
+      cache: "no-store",
+    }),
+  );
   if (!res.ok) {
     throw new Error(`Failed downloading file (${res.status})`);
   }
@@ -149,25 +193,38 @@ export async function listRepoCatalog(kind: CatalogKind, query = ""): Promise<Ca
   const manifestFile = manifestName(kind);
   for (const directory of directories) {
     try {
-      const manifestObj = await fetchGithubJson<GithubContentItem>(
-        githubApiUrl(repo, `${directory}/${manifestFile}`),
+      const directoryContents = await fetchGithubJson<GithubContentItem[]>(
+        githubApiUrl(repo, directory),
       );
+      const manifestObj = directoryContents.find((item) => item.type === "file" && item.name === manifestFile);
+      if (!manifestObj) continue;
       let raw = "";
       if (manifestObj.content && manifestObj.encoding === "base64") {
         raw = Buffer.from(manifestObj.content, "base64").toString("utf8");
       } else if (manifestObj.download_url) {
         raw = Buffer.from(await fetchGithubBytes(manifestObj.download_url)).toString("utf8");
       } else {
-        continue;
+        const manifestFileObj = await fetchGithubJson<GithubContentItem>(
+          githubApiUrl(repo, `${directory}/${manifestFile}`),
+        );
+        if (manifestFileObj.content && manifestFileObj.encoding === "base64") {
+          raw = Buffer.from(manifestFileObj.content, "base64").toString("utf8");
+        } else if (manifestFileObj.download_url) {
+          raw = Buffer.from(await fetchGithubBytes(manifestFileObj.download_url)).toString("utf8");
+        } else {
+          continue;
+        }
       }
       const manifest = parseManifest(raw, directory);
       if (!manifest) continue;
+      const thumbnailObj = directoryContents.find((item) => item.type === "file" && item.name === "thumbnail.png");
       entries.push({
         id: manifest.id,
         name: manifest.name,
         description: manifest.description,
         version: manifest.version,
         directory,
+        thumbnailUrl: thumbnailObj?.download_url || undefined,
       });
     } catch {
       // skip non-manifest folders

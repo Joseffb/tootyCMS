@@ -32,7 +32,7 @@ describe("analytics-google plugin", () => {
     });
 
     await register(kernel as any, { getPluginSetting });
-    const scriptFilter = filters.get("analytics:scripts")?.[0];
+    const scriptFilter = filters.get("domain:scripts")?.[0];
     expect(scriptFilter).toBeTruthy();
 
     const scripts = await scriptFilter!([]);
@@ -44,7 +44,7 @@ describe("analytics-google plugin", () => {
   it("returns current scripts when no tag id is configured", async () => {
     const { kernel, filters } = createKernel();
     await register(kernel as any, { getPluginSetting });
-    const scriptFilter = filters.get("analytics:scripts")?.[0];
+    const scriptFilter = filters.get("domain:scripts")?.[0];
 
     const existing = [{ id: "existing", src: "/existing.js" }];
     const scripts = await scriptFilter!(existing);

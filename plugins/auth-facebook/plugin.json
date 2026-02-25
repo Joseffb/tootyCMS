@@ -1,0 +1,36 @@
+{
+  "kind": "plugin",
+  "id": "auth-facebook",
+  "name": "Admin Auth Facebook",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables Facebook OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "facebook",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "Facebook Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_FACEBOOK_ID env",
+      "helpText": "Optional DB override. If set with Client Secret, this overrides AUTH_FACEBOOK_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "Facebook Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_FACEBOOK_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID, this overrides AUTH_FACEBOOK_SECRET."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.3.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

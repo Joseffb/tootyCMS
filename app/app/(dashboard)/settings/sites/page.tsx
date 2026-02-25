@@ -2,9 +2,7 @@ import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import db from "@/lib/db";
-import { isAdministrator } from "@/lib/rbac";
-import { sites, users } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { sites } from "@/lib/schema";
 import { getSitePublicUrl } from "@/lib/site-url";
 import {
   getSiteUrlSetting,
@@ -14,6 +12,9 @@ import {
   THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY,
   THEME_QUERY_NETWORK_ENABLED_KEY,
 } from "@/lib/cms-config";
+import { userCan } from "@/lib/authorization";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { inArray } from "drizzle-orm";
 
 function getSiteUrl(
   site: { subdomain: string | null; customDomain: string | null; isPrimary?: boolean },
@@ -34,13 +35,16 @@ export default async function SitesSettingsIndexPage() {
   const session = await getSession();
   if (!session?.user?.id) redirect("/login");
 
-  const me = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
-  });
+  const canManageNetworkSites = await userCan("network.site.manage", session.user.id);
+  const accessibleSiteIds = canManageNetworkSites ? [] : await listSiteIdsForUser(session.user.id);
 
   const sitesList = await db.query.sites.findMany({
-    where: isAdministrator(me?.role) ? undefined : eq(sites.userId, session.user.id),
+    where: canManageNetworkSites
+      ? undefined
+      : (table) =>
+          accessibleSiteIds.length
+            ? inArray(table.id, accessibleSiteIds)
+            : inArray(table.id, ["__none__"]),
     columns: {
       id: true,
       name: true,
@@ -61,11 +65,8 @@ export default async function SitesSettingsIndexPage() {
     "use server";
     const session = await getSession();
     if (!session?.user?.id) redirect("/login");
-    const me = await db.query.users.findFirst({
-      where: eq(users.id, session.user.id),
-      columns: { role: true },
-    });
-    if (!isAdministrator(me?.role)) return;
+    const allowed = await userCan("network.site.manage", session.user.id);
+    if (!allowed) return;
     const enabled = formData.get("enabled") === "on";
     const allowedSiteIds = String(formData.get("allowedSiteIds") || "");
     await setBooleanSetting(THEME_QUERY_NETWORK_ENABLED_KEY, enabled);
@@ -127,7 +128,7 @@ export default async function SitesSettingsIndexPage() {
                 </td>
                 <td className="px-4 py-3">
                   {getSiteUrl(site, configuredRootUrl) ? (
-                    <a href={getSiteUrl(site, configuredRootUrl)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
+                    <a href={getSiteUrl(site, configuredRootUrl)} target="_blank" rel="noreferrer" className="text-xs text-blue-600">
                       {getSiteUrl(site, configuredRootUrl)}
                     </a>
                   ) : (

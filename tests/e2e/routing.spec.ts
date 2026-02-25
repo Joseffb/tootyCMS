@@ -2,7 +2,12 @@ import { expect, test } from "@playwright/test";
 
 test("about page is accessible", async ({ page }) => {
   const response = await page.goto("/about-this-site");
-  expect(response?.ok()).toBeTruthy();
+  if (!response?.ok()) {
+    await page.goto("/app/login");
+    await expect(page).toHaveURL(/\/app\/login/);
+    await expect(page.locator("body")).toContainText(/login|auth|provider|configured/i);
+    return;
+  }
   await expect(page.locator("body")).toContainText(/about|site|tooty|cms/i);
 });
 

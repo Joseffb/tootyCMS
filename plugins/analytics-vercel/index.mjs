@@ -1,5 +1,5 @@
 export async function register(kernel, api) {
-  kernel.addFilter("analytics:scripts", async (current = []) => {
+  kernel.addFilter("domain:scripts", async (current = []) => {
     return [
       ...current,
       {

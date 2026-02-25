@@ -30,24 +30,24 @@ export default function SiteThemeSettingsModal({
       <button
         type="button"
         onClick={() => dialogRef.current?.showModal()}
-        className="mt-3 inline-flex rounded-md border border-stone-300 px-2.5 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-900"
+        className="mt-3 inline-flex rounded-md border border-black bg-white px-2.5 py-1.5 text-xs font-semibold text-black hover:bg-stone-100"
       >
         Theme Settings
       </button>
 
-      <dialog ref={dialogRef} className="w-full max-w-xl rounded-xl border border-stone-300 p-0 backdrop:bg-black/50 dark:border-stone-700">
-        <div className="border-b border-stone-200 px-4 py-3 dark:border-stone-700">
-          <h3 className="text-sm font-semibold text-stone-900 dark:text-white">{themeName} Settings</h3>
-          <p className="mt-1 text-xs text-stone-600 dark:text-stone-300">Theme-level overrides only.</p>
-          <p className="mt-1 text-[11px] text-stone-500 dark:text-stone-400">
+      <dialog ref={dialogRef} className="w-full max-w-xl rounded-xl border border-black bg-white p-0 text-black backdrop:bg-black/50">
+        <div className="border-b border-stone-300 px-4 py-3">
+          <h3 className="text-sm font-semibold text-black">{themeName} Settings</h3>
+          <p className="mt-1 text-xs text-stone-700">Theme-level overrides only.</p>
+          <p className="mt-1 text-[11px] text-stone-600">
             Fresh installs use each field&apos;s theme default value until saved.
           </p>
         </div>
-        <form action={action} className="space-y-3 px-4 py-4">
+        <form action={action} className="space-y-3 bg-white px-4 py-4 text-black">
           <input type="hidden" name="themeId" value={themeId} />
           {fields.map((field) => (
             <label key={field.key} className="block text-xs">
-              <span className="mb-1 block font-medium text-stone-800 dark:text-stone-200">{field.label}</span>
+              <span className="mb-1 block font-medium text-black">{field.label}</span>
               {field.type === "checkbox" ? (
                 <input type="checkbox" name={field.key} defaultChecked={Boolean(config[field.key])} className="h-4 w-4" />
               ) : field.type === "textarea" ? (
@@ -55,7 +55,7 @@ export default function SiteThemeSettingsModal({
                   name={field.key}
                   defaultValue={valueFor(field.key, field.defaultValue)}
                   placeholder={field.placeholder}
-                  className="min-h-24 w-full rounded-md border border-stone-300 px-2 py-1.5 text-xs dark:border-stone-600 dark:bg-black dark:text-white"
+                  className="min-h-24 w-full rounded-md border border-stone-400 bg-white px-2 py-1.5 text-xs text-black"
                 />
               ) : (
                 <input
@@ -63,18 +63,18 @@ export default function SiteThemeSettingsModal({
                   name={field.key}
                   defaultValue={valueFor(field.key, field.defaultValue)}
                   placeholder={field.placeholder}
-                  className="w-full rounded-md border border-stone-300 px-2 py-1.5 text-xs dark:border-stone-600 dark:bg-black dark:text-white"
+                  className="w-full rounded-md border border-stone-400 bg-white px-2 py-1.5 text-xs text-black"
                 />
               )}
-              {field.helpText ? <span className="mt-1 block text-[11px] text-stone-500 dark:text-stone-400">{field.helpText}</span> : null}
+              {field.helpText ? <span className="mt-1 block text-[11px] text-stone-600">{field.helpText}</span> : null}
             </label>
           ))}
           <div className="flex items-center gap-2 pt-1">
-            <button className="rounded-md border border-black bg-black px-3 py-1.5 text-xs text-white">Save Theme Settings</button>
+            <button className="rounded-md border border-black bg-black px-3 py-1.5 text-xs font-semibold text-white">Save Theme Settings</button>
             <button
               type="button"
               onClick={() => dialogRef.current?.close()}
-              className="rounded-md border border-stone-300 px-3 py-1.5 text-xs text-stone-700 dark:border-stone-600 dark:text-stone-200"
+              className="rounded-md border border-black bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-stone-100"
             >
               Cancel
             </button>

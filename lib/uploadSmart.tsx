@@ -11,6 +11,7 @@ export async function uploadSmart({
   name: string;
   siteId: string;
 }): Promise<{ url: string; filename: string }> {
+  const mode = String(process.env.NEXT_PUBLIC_MEDIA_UPLOAD_PROVIDER || "auto").trim().toLowerCase();
   const traceId = (typeof crypto !== "undefined" && "randomUUID" in crypto) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
   traceClient("upload.client", "upload start", {
     traceId,
@@ -24,39 +25,32 @@ export async function uploadSmart({
   formData.append("name", name);
   formData.append("siteId", siteId);
 
-  // Try Vercel Blob first.
-  const blobRes = await fetch("/api/uploadImage", {
-    method: "POST",
-    body: formData,
-    headers: {
-      "x-trace-id": String(traceId),
-    },
-  });
+  const tryEndpoints =
+    mode === "blob"
+      ? ["/api/uploadImage"]
+      : mode === "s3"
+        ? ["/api/uploadImageLocal"]
+        : mode === "dbblob"
+          ? ["/api/uploadImageDb"]
+          : ["/api/uploadImage", "/api/uploadImageLocal", "/api/uploadImageDb"];
 
-  if (blobRes.ok) {
-    const { url, filename } = await blobRes.json();
-    traceClient("upload.client", "upload success via blob", { traceId, siteId, name, filename });
-    return { url, filename: filename ?? `${siteId}/${name}-${file.name}` };
+  let lastError = "Upload failed";
+  for (const endpoint of tryEndpoints) {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      body: formData,
+      headers: {
+        "x-trace-id": String(traceId),
+      },
+    });
+    if (res.ok) {
+      const { url, filename } = await res.json();
+      traceClient("upload.client", `upload success via ${endpoint}`, { traceId, siteId, name, filename });
+      return { url, filename: filename ?? `${siteId}/${name}-${file.name}` };
+    }
+    lastError = `${endpoint} failed (${res.status})`;
+    traceClient("upload.client", `upload failed via ${endpoint}`, { traceId, siteId, name, status: res.status });
   }
-  traceClient("upload.client", "blob upload failed, trying local", {
-    traceId,
-    status: blobRes.status,
-  });
 
-  // Fallback to local upload
-  const localRes = await fetch("/api/uploadImageLocal", {
-    method: "POST",
-    body: formData,
-    headers: {
-      "x-trace-id": String(traceId),
-    },
-  });
-
-  if (!localRes.ok) {
-    traceClient("upload.client", "local upload failed", { traceId, status: localRes.status });
-    throw new Error("Local image upload failed");
-  }
-  const { url, filename } = await localRes.json();
-  traceClient("upload.client", "upload success via local", { traceId, siteId, name, filename });
-  return { url, filename: filename ?? `${siteId}/${name}-${file.name}` };
+  throw new Error(lastError);
 }

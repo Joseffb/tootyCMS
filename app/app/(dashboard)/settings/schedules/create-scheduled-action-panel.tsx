@@ -9,10 +9,11 @@ type SiteOption = {
 
 type Props = {
   sites: SiteOption[];
+  actionOptions: Array<{ key: string; label: string; description?: string }>;
   action: (formData: FormData) => Promise<void>;
 };
 
-export default function CreateScheduledActionPanel({ sites, action }: Props) {
+export default function CreateScheduledActionPanel({ sites, actionOptions, action }: Props) {
   const [open, setOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -52,8 +53,21 @@ export default function CreateScheduledActionPanel({ sites, action }: Props) {
               name="actionKey"
               required
               placeholder="core.ping_sitemap"
+              list="schedule-action-options"
               className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
             />
+            <datalist id="schedule-action-options">
+              {actionOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </datalist>
+            {actionOptions.length > 0 ? (
+              <p className="mt-1 text-[11px] text-stone-500 dark:text-stone-400">
+                Known actions: {actionOptions.map((option) => option.key).join(", ")}
+              </p>
+            ) : null}
           </label>
           <label className="text-xs text-stone-600 dark:text-stone-300">
             Owner Type
@@ -96,6 +110,26 @@ export default function CreateScheduledActionPanel({ sites, action }: Props) {
               type="number"
               min={1}
               name="runEveryMinutes"
+              defaultValue={60}
+              className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+            />
+          </label>
+          <label className="text-xs text-stone-600 dark:text-stone-300">
+            Max Retries
+            <input
+              type="number"
+              min={0}
+              name="maxRetries"
+              defaultValue={3}
+              className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+            />
+          </label>
+          <label className="text-xs text-stone-600 dark:text-stone-300">
+            Backoff Base (seconds)
+            <input
+              type="number"
+              min={5}
+              name="backoffBaseSeconds"
               defaultValue={60}
               className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
             />

@@ -9,11 +9,11 @@ import {
   setTaxonomyLabel,
   updateTaxonomyTerm,
 } from "@/lib/actions";
-import db from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Fragment } from "react";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -30,10 +30,8 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
     redirect("/login");
   }
   const id = (await params).id;
-  const site = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
-  });
-  if (!site || site.userId !== session.user.id) {
+  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  if (!site) {
     notFound();
   }
 

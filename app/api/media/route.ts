@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import db from "@/lib/db";
-import { isAdministrator } from "@/lib/rbac";
 import { getSession } from "@/lib/auth";
-import { media, sites, users } from "@/lib/schema";
+import { media, sites } from "@/lib/schema";
 import { trace } from "@/lib/debug";
+import { canUserAccessSiteAnyCapability } from "@/lib/authorization";
 
 export async function GET(req: Request) {
   const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
@@ -26,20 +26,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "siteId is required" }, { status: 400 });
   }
 
-  const actor = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
-  });
-
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
-    columns: { id: true, userId: true },
+    columns: { id: true },
   });
   if (!site) {
     trace("media.api", "site not found", { traceId, siteId });
     return NextResponse.json({ error: "Site not found" }, { status: 404 });
   }
-  const canAccess = isAdministrator(actor?.role) || site.userId === session.user.id;
+  const canAccess = await canUserAccessSiteAnyCapability(session.user.id, site.id, [
+    "site.media.create",
+    "site.media.edit.own",
+    "site.media.edit.any",
+    "site.media.delete.own",
+    "site.media.delete.any",
+  ]);
   if (!canAccess) {
     trace("media.api", "forbidden", { traceId, siteId, userId: session.user.id });
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

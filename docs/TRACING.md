@@ -1,6 +1,7 @@
 # Tracing
 
 Tracing is enabled in debug mode and records structured events for lifecycle, middleware, media, and upload flows.
+The contract uses JSONL with explicit log levels and retention controls.
 
 ## Debug mode
 
@@ -18,6 +19,14 @@ When debug mode is on:
    - `trace(scope, message, payload?)`
 2. Trace events are persisted as JSONL on local Node runtime:
    - `logs/traces/YYYY-MM-DD.jsonl`
+
+Each event includes a structured level:
+
+- `info`
+- `warn`
+- `error`
+
+Current `trace(...)` default level is `info`.
 
 ## Trace tier prefix
 
@@ -39,11 +48,23 @@ Each line is a JSON object:
 {
   "ts": "2026-02-20T22:13:59.871Z",
   "tier": "Dev",
+  "level": "info",
   "scope": "media.api",
   "message": "request success",
   "payload": { "traceId": "...", "siteId": "...", "count": 1 }
 }
 ```
+
+## Rotation and retention
+
+Trace files are rotated daily by filename (`YYYY-MM-DD.jsonl`).
+
+Retention env controls:
+
+- `TRACE_RETENTION_DAYS` (default `14`)
+- `TRACE_MAX_FILES` (default `60`)
+
+On write, the tracer prunes stale files by age and enforces max file count.
 
 ## Redaction
 

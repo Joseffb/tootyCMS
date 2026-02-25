@@ -1,10 +1,10 @@
 {
   "id": "dev-tools",
-  "name": "Dev Tools",
+  "name": "Admin - Dev Tools",
   "description": "Adds developer-focused dashboard tools and optional render hooks.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
-  "scope": "core",
+  "scope": "network",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -12,7 +12,7 @@
     "serverHandlers": false
   },
   "menu": {
-    "label": "Dev Tools",
+    "label": "Admin - Dev Tools",
     "path": "/plugins/dev-tools"
   },
   "settingsFields": [
@@ -32,5 +32,6 @@
     }
   ],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

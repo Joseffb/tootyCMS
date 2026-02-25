@@ -1,0 +1,36 @@
+{
+  "kind": "plugin",
+  "id": "auth-apple",
+  "name": "Admin Auth Apple",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables Apple OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "apple",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "Apple Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_APPLE_ID env",
+      "helpText": "Optional DB override. If set with Client Secret, this overrides AUTH_APPLE_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "Apple Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_APPLE_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID, this overrides AUTH_APPLE_SECRET."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.3.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

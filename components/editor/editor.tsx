@@ -58,6 +58,11 @@ type EditorPlugin = {
   name: string;
   snippets: EditorPluginSnippet[];
 };
+type EditorFooterPanel = {
+  id: string;
+  title: string;
+  content: string;
+};
 type PostMetaEntry = { key: string; value: string };
 type MediaItem = {
   id: number;
@@ -208,12 +213,16 @@ export default function Editor({
   onSave = updateDomainPost,
   onUpdateMetadata = updateDomainPostMetadata,
   enableThumbnail = true,
+  canEdit = true,
+  canPublish = true,
 }: {
   post: PostWithSite;
   defaultEditorMode?: EditorMode;
   onSave?: SavePostAction;
   onUpdateMetadata?: UpdatePostMetadataAction;
   enableThumbnail?: boolean;
+  canEdit?: boolean;
+  canPublish?: boolean;
 }) {
   const [initialContent, setInitialContent] = useState<JSONContent | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
@@ -236,6 +245,7 @@ export default function Editor({
   const [editorMode, setEditorMode] = useState<EditorMode>(defaultEditorMode);
   const [htmlDraft, setHtmlDraft] = useState<string>("");
   const [editorPlugins, setEditorPlugins] = useState<EditorPlugin[]>([]);
+  const [editorFooterPanels, setEditorFooterPanels] = useState<EditorFooterPanel[]>([]);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [postImageUrls, setPostImageUrls] = useState<string[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
@@ -346,11 +356,24 @@ export default function Editor({
   }, []);
 
   useEffect(() => {
-    fetch("/api/plugins/editor", { cache: "no-store" })
+    const params = new URLSearchParams();
+    if (post.siteId) params.set("siteId", post.siteId);
+    if (post.id) params.set("postId", post.id);
+    fetch(`/api/plugins/editor?${params.toString()}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { plugins: [] }))
       .then((json) => {
         const plugins = Array.isArray(json.plugins) ? json.plugins : [];
         setEditorPlugins(plugins);
+        const footerPanels = Array.isArray(json.footerPanels) ? json.footerPanels : [];
+        setEditorFooterPanels(
+          footerPanels
+            .map((panel: any) => ({
+              id: String(panel?.id || ""),
+              title: String(panel?.title || ""),
+              content: String(panel?.content || ""),
+            }))
+            .filter((panel: EditorFooterPanel) => panel.id && panel.content),
+        );
         const pluginSlashItems = plugins.flatMap((plugin: any) =>
           (plugin.snippets || []).map((snippet: any) => ({
             pluginId: plugin.id,
@@ -365,9 +388,10 @@ export default function Editor({
       })
       .catch(() => {
         setEditorPlugins([]);
+        setEditorFooterPanels([]);
         setPluginSuggestionItems([]);
       });
-  }, []);
+  }, [post.siteId, post.id]);
 
   useEffect(() => {
     if (!post.siteId) {
@@ -497,6 +521,7 @@ export default function Editor({
   };
 
   const enqueueSave = (immediate = false) => {
+    if (!canEdit) return;
     const json = getContentJSON();
     const latest = dataRef.current;
     const content = JSON.stringify(json);
@@ -536,6 +561,7 @@ export default function Editor({
   };
 
   const saveNow = async () => {
+    if (!canEdit) return;
     const json = getContentJSON();
     const latest = dataRef.current;
     const content = JSON.stringify(json);
@@ -610,6 +636,7 @@ export default function Editor({
   };
 
   const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {
+    if (!canEdit) return;
     updateSelectedTermsByTaxonomy((prev) => {
       const current = prev[taxonomy] ?? [];
       const next = current.includes(termId)
@@ -638,6 +665,7 @@ export default function Editor({
   };
 
   const addOrSelectTaxonomyTerm = async (taxonomy: string, rawName: string) => {
+    if (!canEdit) return;
     const trimmed = rawName.trim();
     if (!trimmed) return;
     const existing = getTermsForTaxonomy(taxonomy).find(
@@ -675,6 +703,7 @@ export default function Editor({
   };
 
   const addMetaEntry = (key: string, value: string) => {
+    if (!canEdit) return;
     const nextKey = key.trim();
     if (!nextKey) return;
     const nextValue = value.trim();
@@ -694,6 +723,7 @@ export default function Editor({
   };
 
   useEffect(() => {
+    if (!canEdit) return;
     if (!data?.id) return;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -705,6 +735,7 @@ export default function Editor({
       const isCmdS = isMac ? e.metaKey && e.key.toLowerCase() === "s" : e.ctrlKey && e.key.toLowerCase() === "s";
 
       if (isCmdS) {
+        if (!canEdit) return;
         e.preventDefault();
         void saveNow();
       }
@@ -713,7 +744,7 @@ export default function Editor({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorMode]);
+  }, [editorMode, canEdit]);
 
   const url = `${getSitePublicUrl({
     subdomain: data.site?.subdomain,
@@ -722,6 +753,7 @@ export default function Editor({
   }).replace(/\/$/, "")}/${data.slug}`;
 
   const handleThumbnailUpload = (file: File | null) => {
+    if (!canEdit) return;
     if (!file) return;
     if (!post.siteId) {
       toast.error("Site not found for this post.");
@@ -755,6 +787,7 @@ export default function Editor({
   };
 
   const setThumbnailFromMediaItem = (item: MediaItem) => {
+    if (!canEdit) return;
     startTransitionThumbnail(async () => {
       try {
         const formData = new FormData();
@@ -789,9 +822,11 @@ export default function Editor({
                 <ExternalLink className="h-4 w-4" />
               </a>
             )}
-            <div className="rounded-lg bg-accent px-2 py-1 text-sm text-muted-foreground">
-              {formatSaveLabel(saveStatus, saveError)}
-            </div>
+            {canEdit ? (
+              <div className="rounded-lg bg-accent px-2 py-1 text-sm text-muted-foreground">
+                {formatSaveLabel(saveStatus, saveError)}
+              </div>
+            ) : null}
             <div className={charsCount ? "rounded-lg bg-accent px-2 py-1 text-sm text-muted-foreground" : "hidden"}>
               {charsCount} Words
             </div>
@@ -834,22 +869,29 @@ export default function Editor({
 
             <button
               onClick={() => {
+                if (!canPublish) return;
                 const formData = new FormData();
                 formData.append("published", String(!data.published));
                 startTransitionPublishing(async () => {
-                  await onUpdateMetadata(formData, post.id, "published").then(() => {
+                  try {
+                    const response = await onUpdateMetadata(formData, post.id, "published");
+                    if ((response as any)?.error) {
+                      throw new Error(String((response as any).error));
+                    }
                     toast.success(`Successfully ${data.published ? "unpublished" : "published"} your post.`);
                     setData((prev) => ({ ...prev, published: !prev.published }));
-                  });
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Failed to update publish status.");
+                  }
                 });
               }}
               className={cn(
                 "flex h-7 w-24 items-center justify-center space-x-2 rounded-lg border text-sm transition-all focus:outline-none",
-                isPendingPublishing
+                isPendingPublishing || !canPublish
                   ? "cursor-not-allowed border-muted bg-muted text-muted-foreground"
                   : "border border-black bg-white text-black hover:bg-gray-800 hover:text-white active:bg-muted dark:border-stone-700",
               )}
-              disabled={isPendingPublishing}
+              disabled={isPendingPublishing || !canPublish}
             >
               {isPendingPublishing ? <LoadingDots /> : <p>{data.published ? "Unpublish" : "Publish"}</p>}
             </button>
@@ -863,12 +905,14 @@ export default function Editor({
             value={data.title ?? ""}
             autoFocus
             onChange={(e) => setData({ ...data, title: e.target.value })}
+            readOnly={!canEdit}
             className="border-none bg-background px-0 font-cal text-3xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
           <TextareaAutosize
             placeholder="Description"
             value={data.description ?? ""}
             onChange={(e) => setData({ ...data, description: e.target.value })}
+            readOnly={!canEdit}
             className="w-full resize-none border-none bg-background px-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
           <div className="max-w-xl">
@@ -883,6 +927,7 @@ export default function Editor({
                 value={data.slug ?? ""}
                 onChange={(e) => setData({ ...data, slug: normalizeSlugInput(e.target.value) })}
                 placeholder="post-slug"
+                readOnly={!canEdit}
                 className="w-full border-none bg-transparent px-2 py-1.5 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
               />
             </div>
@@ -892,7 +937,7 @@ export default function Editor({
         <EditorRoot>
           <div
             className={cn(
-              "relative w-full max-w-screen-lg overflow-hidden border-muted bg-background sm:mb-[calc(20vh)] sm:rounded-lg sm:border sm:shadow-lg",
+              "relative w-full max-w-screen-lg overflow-hidden border-muted bg-background sm:mb-8 sm:rounded-lg sm:border sm:shadow-lg",
               editorMode === "html-css-first" ? "hidden" : "block",
             )}
           >
@@ -929,10 +974,11 @@ export default function Editor({
                 const imageCount = countImageNodes(json);
                 const imageCountChanged = imageCount !== lastImageCountRef.current;
                 lastImageCountRef.current = imageCount;
-                enqueueSave(imageCountChanged);
+                if (canEdit) enqueueSave(imageCountChanged);
               }}
               onCreate={({ editor }) => {
                 editorRef.current = editor;
+                editor.setEditable(canEdit);
                 setCharsCount(editor.storage.characterCount.words());
                 setCurrentBlockMode(getCurrentBlockMode(editor));
                 setCurrentTextAlign(getCurrentTextAlign(editor));
@@ -970,8 +1016,21 @@ export default function Editor({
           </div>
         </EditorRoot>
 
-        {editorMode === "rich-text" && (
-          <div className="mt-2 flex justify-end">
+        {editorFooterPanels.length > 0 && (
+          <div className="mb-3 space-y-2 rounded-md border border-stone-200 bg-stone-50 p-3">
+            {editorFooterPanels.map((panel) => (
+              <div key={panel.id} className="rounded border border-stone-200 bg-white px-3 py-2">
+                {panel.title ? (
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-600">{panel.title}</div>
+                ) : null}
+                <p className="text-sm text-stone-700">{panel.content}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {editorMode === "rich-text" && canEdit && (
+          <div className="mt-2 flex justify-start">
             <button
               type="button"
               onClick={() => void saveNow()}
@@ -994,14 +1053,17 @@ export default function Editor({
             <textarea
               value={htmlDraft}
               onChange={(e) => {
+                if (!canEdit) return;
                 setHtmlDraft(e.target.value);
                 htmlDirtyRef.current = true;
                 setSaveStatus("unsaved");
               }}
+              readOnly={!canEdit}
               className="min-h-[500px] w-full rounded-md border border-stone-300 bg-stone-50 px-4 py-3 font-mono text-sm leading-6 text-stone-900 focus:border-stone-500 focus:outline-none"
               spellCheck={false}
             />
-            <div className="mt-2 flex justify-end gap-2">
+            <div className="mt-2 flex justify-start gap-2">
+              {canEdit && (
               <button
                 type="button"
                 className={cn(
@@ -1015,6 +1077,8 @@ export default function Editor({
               >
                 {saveStatus === "saving" ? "Saving..." : "Save Changes"}
               </button>
+              )}
+              {canEdit && (
               <button
                 type="button"
                 className="rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-100"
@@ -1029,15 +1093,18 @@ export default function Editor({
               >
                 Apply HTML
               </button>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      <aside className="h-fit rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+      <aside className={cn("h-fit rounded-xl border border-stone-200 bg-white p-4 shadow-sm", !canEdit && "opacity-75")}>
+        {!canEdit && <p className="mb-3 text-xs text-stone-500">Read-only: you can view content but cannot modify this post.</p>}
         <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Text</div>
         <select
           value={currentBlockMode}
+          disabled={!canEdit}
           className="mt-2 w-full rounded-md border border-stone-300 bg-white px-2 py-2 text-sm"
           onChange={(e) => {
             const value = e.target.value;
@@ -1084,7 +1151,7 @@ export default function Editor({
         </div>
 
         {sidebarTab === "document" && (
-          <div className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Font</div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("bold") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleBold().run())}><strong>B</strong></button>
@@ -1146,11 +1213,11 @@ export default function Editor({
                 <Unlink2 className="h-3.5 w-3.5" />
               </button>
             </div>
-          </div>
+          </fieldset>
         )}
 
         {sidebarTab === "block" && (
-          <div className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Post Settings</div>
             <select
               value={data.layout ?? "post"}
@@ -1166,11 +1233,11 @@ export default function Editor({
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("orderedList") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleOrderedList().run())}>Numbered</button>
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("blockquote") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleBlockquote().run())}>Quote</button>
             </div>
-          </div>
+          </fieldset>
         )}
 
         {sidebarTab === "plugins" && (
-          <div className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Organize</div>
             {taxonomyOverviewRows.map((taxonomyRow) => {
               const taxonomy = taxonomyRow.taxonomy;
@@ -1444,7 +1511,7 @@ export default function Editor({
               </div>
             </div>
             )}
-          </div>
+          </fieldset>
         )}
       </aside>
 

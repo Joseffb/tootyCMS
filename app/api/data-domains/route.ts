@@ -1,9 +1,6 @@
 import { createDataDomain, getAllDataDomains } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
-import { isAdministrator } from "@/lib/rbac";
-import { users } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { userCan } from "@/lib/authorization";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -18,11 +15,8 @@ export async function POST(request: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
-  const actor = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
-  });
-  if (!actor || !isAdministrator(actor.role)) {
+  const allowed = await userCan("network.settings.write", session.user.id);
+  if (!allowed) {
     return NextResponse.json({ error: "Admin role required" }, { status: 403 });
   }
 

@@ -29,7 +29,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
     activeTheme.config.documentation_category_slug.trim().length > 0
       ? activeTheme.config.documentation_category_slug.trim().toLowerCase()
       : "documentation";
-  const themeId = activeTheme?.id || "tooty-default";
+  const themeId = activeTheme?.id || "tooty-light";
   const rootUrl = getRootSiteUrl();
   const isPrimary = Boolean(site?.isPrimary) || site?.subdomain === "main";
   const configuredRootUrl = (await getSiteUrlSettingForSite(site.id, "")).value.trim();

@@ -27,12 +27,38 @@ export const users = pgTable(tableName("users"), {
   email: text("email").notNull().unique(),
   emailVerified: timestamp("emailVerified", { mode: "date" }),
   image: text("image"),
+  authProvider: text("authProvider").notNull().default("native"),
+  passwordHash: text("passwordHash"),
   role: text("role").notNull().default("author"),
   createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { mode: "date" })
     .notNull()
     .$onUpdate(() => new Date()),
 });
+
+export const userMeta = pgTable(
+  tableName("user_meta"),
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    key: text("key").notNull(),
+    value: text("value").notNull().default(""),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => {
+    return {
+      userKeyUnique: uniqueIndex().on(table.userId, table.key),
+      userIdx: index().on(table.userId),
+      keyIdx: index().on(table.key),
+    };
+  },
+);
 
 export const sessions = pgTable(
   tableName("sessions"),
@@ -155,6 +181,23 @@ export const cmsSettings = pgTable(
   },
 );
 
+export const rbacRoles = pgTable(
+  tableName("rbac_roles"),
+  {
+    role: text("role").primaryKey(),
+    capabilities: jsonb("capabilities").notNull().default({}),
+    isSystem: boolean("isSystem").notNull().default(false),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    roleIdx: index().on(table.role),
+  }),
+);
+
 export const dataDomains = pgTable(
   tableName("data_domains"),
   {
@@ -212,6 +255,170 @@ export const siteDataDomains = pgTable(
     pk: primaryKey({ columns: [table.siteId, table.dataDomainId] }),
     siteIdIdx: index().on(table.siteId),
     dataDomainIdIdx: index().on(table.dataDomainId),
+  }),
+);
+
+export const communicationMessages = pgTable(
+  tableName("communication_messages"),
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    channel: text("channel").notNull(), // email | sms | mms | com-x
+    to: text("to").notNull(),
+    subject: text("subject"),
+    body: text("body").notNull(),
+    category: text("category").notNull().default("transactional"), // transactional | marketing
+    status: text("status").notNull().default("queued"), // queued | retrying | sent | failed | dead | logged
+    providerId: text("providerId"),
+    externalId: text("externalId"),
+    attemptCount: integer("attemptCount").notNull().default(0),
+    maxAttempts: integer("maxAttempts").notNull().default(3),
+    nextAttemptAt: timestamp("nextAttemptAt", { mode: "date" }),
+    lastError: text("lastError"),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdByUserId: text("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    siteIdx: index().on(table.siteId),
+    statusIdx: index().on(table.status),
+    nextAttemptIdx: index().on(table.nextAttemptAt),
+    createdAtIdx: index().on(table.createdAt),
+  }),
+);
+
+export const communicationAttempts = pgTable(
+  tableName("communication_attempts"),
+  {
+    id: serial("id").primaryKey(),
+    messageId: text("messageId")
+      .references(() => communicationMessages.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    providerId: text("providerId").notNull(),
+    eventId: text("eventId"),
+    status: text("status").notNull(), // sent | failed | logged
+    error: text("error"),
+    response: jsonb("response").notNull().default({}),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+  },
+  (table) => ({
+    messageIdx: index().on(table.messageId),
+    providerIdx: index().on(table.providerId),
+    providerEventIdx: uniqueIndex().on(table.providerId, table.eventId),
+    statusIdx: index().on(table.status),
+    createdAtIdx: index().on(table.createdAt),
+  }),
+);
+
+export const webcallbackEvents = pgTable(
+  tableName("webcallback_events"),
+  {
+    id: serial("id").primaryKey(),
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    handlerId: text("handlerId").notNull(),
+    pluginId: text("pluginId"),
+    status: text("status").notNull().default("received"), // received | processed | failed | ignored
+    requestBody: text("requestBody").notNull().default(""),
+    requestHeaders: jsonb("requestHeaders").notNull().default({}),
+    requestQuery: jsonb("requestQuery").notNull().default({}),
+    response: jsonb("response").notNull().default({}),
+    error: text("error"),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    siteIdx: index().on(table.siteId),
+    handlerIdx: index().on(table.handlerId),
+    statusIdx: index().on(table.status),
+    createdAtIdx: index().on(table.createdAt),
+  }),
+);
+
+export const webhookSubscriptions = pgTable(
+  tableName("webhook_subscriptions"),
+  {
+    id: serial("id").primaryKey(),
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    }),
+    eventName: text("eventName").notNull(),
+    endpointUrl: text("endpointUrl").notNull(),
+    secret: text("secret"),
+    enabled: boolean("enabled").notNull().default(true),
+    maxRetries: integer("maxRetries").notNull().default(4),
+    backoffBaseSeconds: integer("backoffBaseSeconds").notNull().default(30),
+    headers: jsonb("headers").notNull().default({}),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    siteIdx: index().on(table.siteId),
+    eventIdx: index().on(table.eventName),
+    enabledIdx: index().on(table.enabled),
+    subscriptionUnique: uniqueIndex().on(table.siteId, table.eventName, table.endpointUrl),
+  }),
+);
+
+export const webhookDeliveries = pgTable(
+  tableName("webhook_deliveries"),
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    subscriptionId: integer("subscriptionId")
+      .references(() => webhookSubscriptions.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    siteId: text("siteId").references(() => sites.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    eventId: text("eventId").notNull(),
+    eventName: text("eventName").notNull(),
+    endpointUrl: text("endpointUrl").notNull(),
+    status: text("status").notNull().default("queued"), // queued | retrying | sent | failed | dead
+    attemptCount: integer("attemptCount").notNull().default(0),
+    maxAttempts: integer("maxAttempts").notNull().default(4),
+    nextAttemptAt: timestamp("nextAttemptAt", { mode: "date" }),
+    lastError: text("lastError"),
+    requestBody: text("requestBody").notNull().default(""),
+    requestHeaders: jsonb("requestHeaders").notNull().default({}),
+    responseStatus: integer("responseStatus"),
+    responseBody: text("responseBody"),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    subscriptionIdx: index().on(table.subscriptionId),
+    siteIdx: index().on(table.siteId),
+    statusIdx: index().on(table.status),
+    dueIdx: index().on(table.nextAttemptAt),
+    eventIdx: index().on(table.eventId),
+    deliveryUnique: uniqueIndex().on(table.subscriptionId, table.eventId),
   }),
 );
 
@@ -297,6 +504,8 @@ export const domainPosts = pgTable(
     dataDomainIdIdx: index().on(table.dataDomainId),
     slugDomainIdKey: uniqueIndex().on(table.slug, table.dataDomainId),
     siteIdIdx: index().on(table.siteId),
+    siteDomainPublishedIdx: index().on(table.siteId, table.dataDomainId, table.published, table.updatedAt),
+    siteSlugIdx: index().on(table.siteId, table.slug),
   }),
 );
 
@@ -441,6 +650,16 @@ export const siteDataDomainsRelations = relations(siteDataDomains, ({ one }) => 
   dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [siteDataDomains.dataDomainId] }),
 }));
 
+export const communicationMessagesRelations = relations(communicationMessages, ({ one, many }) => ({
+  site: one(sites, { references: [sites.id], fields: [communicationMessages.siteId] }),
+  createdByUser: one(users, { references: [users.id], fields: [communicationMessages.createdByUserId] }),
+  attempts: many(communicationAttempts),
+}));
+
+export const communicationAttemptsRelations = relations(communicationAttempts, ({ one }) => ({
+  message: one(communicationMessages, { references: [communicationMessages.id], fields: [communicationAttempts.messageId] }),
+}));
+
 export const domainPostsRelations = relations(domainPosts, ({ one, many }) => ({
   dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [domainPosts.dataDomainId] }),
   site: one(sites, { references: [sites.id], fields: [domainPosts.siteId] }),
@@ -497,6 +716,24 @@ export const sites = pgTable(
   },
 );
 
+export const siteUserTableRegistry = pgTable(
+  tableName("site_user_table_registry"),
+  {
+    siteId: text("siteId")
+      .primaryKey()
+      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    tableIndex: integer("tableIndex").notNull().unique(),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    tableIndexIdx: index().on(table.tableIndex),
+  }),
+);
+
 export const sitesRelations = relations(sites, ({ one, many }) => ({
   posts: many(posts),
   user: one(users, { references: [users.id], fields: [sites.userId] }),
@@ -548,6 +785,15 @@ export const userRelations = relations(users, ({ many }) => ({
   sites: many(sites),
   posts: many(posts),
   media: many(media),
+  userMeta: many(userMeta),
+}));
+
+export const userMetaRelations = relations(userMeta, ({ one }) => ({
+  user: one(users, { references: [users.id], fields: [userMeta.userId] }),
+}));
+
+export const siteUserTableRegistryRelations = relations(siteUserTableRegistry, ({ one }) => ({
+  site: one(sites, { references: [sites.id], fields: [siteUserTableRegistry.siteId] }),
 }));
 
 export const mediaRelations = relations(media, ({ one }) => ({

@@ -2,9 +2,9 @@ import { ReactNode } from "react";
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import SiteSettingsNav from "./nav";
-import db from "@/lib/db";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSettingForSite } from "@/lib/cms-config";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -19,11 +19,8 @@ export default async function SiteAnalyticsLayout({ params, children }: Props) {
   if (!session) {
     redirect("/login");
   }
-  const data = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
-  });
-
-  if (!data || data.userId !== session.user.id) {
+  const data = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  if (!data) {
     notFound();
   }
 

@@ -1,28 +1,17 @@
-import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { inArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
-
-const OAUTH_PROVIDER_IDS = ["github", "google", "facebook", "apple"] as const;
+import { listPluginsWithState } from "@/lib/plugin-runtime";
 
 export async function GET() {
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(
-      inArray(
-        cmsSettings.key,
-        OAUTH_PROVIDER_IDS.map((id) => `oauth_provider_${id}_enabled`),
-      ),
-    );
-
-  const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-  const enabled = Object.fromEntries(
-    OAUTH_PROVIDER_IDS.map((id) => {
-      const key = `oauth_provider_${id}_enabled`;
-      return [id, values[key] ? values[key] === "true" : true];
-    }),
-  );
-
-  return NextResponse.json({ enabled });
+  const plugins = await listPluginsWithState();
+  const providers = plugins
+    .filter((plugin) => plugin.capabilities?.authExtensions && plugin.authProviderId)
+    .map((plugin) => ({
+      id: plugin.authProviderId as string,
+      name: plugin.name,
+      enabled: plugin.enabled,
+      pluginId: plugin.id,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const enabled = Object.fromEntries(providers.map((provider) => [provider.id, provider.enabled]));
+  return NextResponse.json({ enabled, providers });
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeAnalyticsEvent } from "@/lib/analytics-events";
+import { normalizeDomainEvent } from "@/lib/domain-events";
 
-describe("normalizeAnalyticsEvent", () => {
+describe("normalizeDomainEvent", () => {
   it("accepts valid page_view payload", () => {
-    const result = normalizeAnalyticsEvent({
+    const result = normalizeDomainEvent({
       version: 1,
       name: "page_view",
       timestamp: "2026-01-01T00:00:00.000Z",
@@ -20,7 +20,7 @@ describe("normalizeAnalyticsEvent", () => {
   });
 
   it("rejects unknown event names", () => {
-    const result = normalizeAnalyticsEvent({
+    const result = normalizeDomainEvent({
       version: 1,
       name: "totally_unknown_event",
       payload: {},
@@ -29,7 +29,7 @@ describe("normalizeAnalyticsEvent", () => {
   });
 
   it("rejects unknown schema versions", () => {
-    const result = normalizeAnalyticsEvent({
+    const result = normalizeDomainEvent({
       version: 2,
       name: "page_view",
       payload: {},

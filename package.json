@@ -1,6 +1,6 @@
 {
   "name": "tooty-cms",
-  "version": "0.2.2-7",
+  "version": "0.4.0",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -19,6 +19,8 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "bash ./scripts/test-integration.sh",
     "test:all": "npm run test && npm run test:integration",
+    "scan:secrets": "node ./scripts/scan-secrets.mjs --all",
+    "scan:secrets:staged": "node ./scripts/scan-secrets.mjs --staged",
     "hooks:install": "bash ./scripts/install-git-hooks.sh"
   },
   "dependencies": {

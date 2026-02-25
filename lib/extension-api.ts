@@ -4,10 +4,14 @@ import { eq, inArray } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
 import type {
+  ContentStateRegistration,
+  ContentTransitionRegistration,
   PluginAuthAdapterRegistration,
+  PluginCommunicationProviderRegistration,
   PluginContentTypeRegistration,
   PluginScheduleHandlerRegistration,
   PluginServerHandlerRegistration,
+  PluginWebcallbackHandlerRegistration,
 } from "@/lib/kernel";
 import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateScheduleEntry } from "@/lib/scheduler";
 
@@ -32,6 +36,8 @@ export type PluginCapabilities = {
   serverHandlers: boolean;
   authExtensions: boolean;
   scheduleJobs: boolean;
+  communicationProviders: boolean;
+  webCallbacks: boolean;
 };
 
 type PluginCoreRegistry = {
@@ -39,13 +45,17 @@ type PluginCoreRegistry = {
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
+  registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
+  registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
+  registerContentState: (registration: ContentStateRegistration) => void;
+  registerContentTransition: (registration: ContentTransitionRegistration) => void;
 };
 
 type PluginExtensionApiOptions = {
   capabilities?: Partial<PluginCapabilities>;
   coreRegistry?: PluginCoreRegistry;
   siteId?: string;
-  mustUse?: boolean;
+  networkRequired?: boolean;
 };
 
 export type PluginExtensionApi = BaseExtensionApi & {
@@ -55,6 +65,10 @@ export type PluginExtensionApi = BaseExtensionApi & {
   registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
+  registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
+  registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
+  registerContentState: (registration: ContentStateRegistration) => void;
+  registerContentTransition: (registration: ContentTransitionRegistration) => void;
   createSchedule: (input: {
     siteId?: string | null;
     name: string;
@@ -115,6 +129,8 @@ const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
   serverHandlers: false,
   authExtensions: false,
   scheduleJobs: false,
+  communicationProviders: false,
+  webCallbacks: false,
 };
 
 function pluginSettingKey(pluginId: string | undefined, key: string) {
@@ -133,7 +149,7 @@ function parseJsonObject<T>(raw: string | undefined, fallback: T): T {
 
 function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOptions): BaseExtensionApi {
   const boundSiteId = options?.siteId;
-  const useGlobalOnly = Boolean(options?.mustUse);
+  const useGlobalOnly = Boolean(options?.networkRequired);
   return {
     pluginId,
     async getSiteById(siteId: string) {
@@ -291,6 +307,42 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerScheduleHandler(registration);
+    },
+    registerCommunicationProvider(registration: PluginCommunicationProviderRegistration) {
+      requireCapability("communicationProviders", "registerCommunicationProvider()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerCommunicationProvider() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerCommunicationProvider(registration);
+    },
+    registerWebcallbackHandler(registration: PluginWebcallbackHandlerRegistration) {
+      requireCapability("webCallbacks", "registerWebcallbackHandler()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerWebcallbackHandler() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerWebcallbackHandler(registration);
+    },
+    registerContentState(registration: ContentStateRegistration) {
+      requireCapability("hooks", "registerContentState()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerContentState() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerContentState(registration);
+    },
+    registerContentTransition(registration: ContentTransitionRegistration) {
+      requireCapability("hooks", "registerContentTransition()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerContentTransition() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerContentTransition(registration);
     },
     async createSchedule(input) {
       requireCapability("scheduleJobs", "createSchedule()");

@@ -26,7 +26,7 @@ type PluginManifestResolved = PluginManifest & {
 
 export type PluginWithState = PluginManifest & {
   enabled: boolean;
-  mustUse: boolean;
+  networkRequired: boolean;
   config: Record<string, unknown>;
   sourceDir?: string;
 };
@@ -45,8 +45,8 @@ export function pluginConfigKey(pluginId: string) {
   return `plugin_${pluginId}_config`;
 }
 
-export function pluginMustUseKey(pluginId: string) {
-  return `plugin_${pluginId}_must_use`;
+export function pluginNetworkRequiredKey(pluginId: string) {
+  return `plugin_${pluginId}_network_required`;
 }
 
 export function sitePluginEnabledKey(siteId: string, pluginId: string) {
@@ -145,7 +145,7 @@ export async function listPluginsWithState() {
   const plugins = await getAvailablePlugins();
   if (plugins.length === 0) return [] as PluginWithState[];
 
-  const keys = plugins.flatMap((plugin) => [pluginEnabledKey(plugin.id), pluginConfigKey(plugin.id), pluginMustUseKey(plugin.id)]);
+  const keys = plugins.flatMap((plugin) => [pluginEnabledKey(plugin.id), pluginConfigKey(plugin.id), pluginNetworkRequiredKey(plugin.id)]);
   const rows = await db
     .select({ key: cmsSettings.key, value: cmsSettings.value })
     .from(cmsSettings)
@@ -156,11 +156,13 @@ export async function listPluginsWithState() {
   return plugins.map((plugin) => {
     const enabledRaw = byKey[pluginEnabledKey(plugin.id)];
     const configRaw = byKey[pluginConfigKey(plugin.id)];
-    const mustUseRaw = byKey[pluginMustUseKey(plugin.id)];
+    const networkRequiredRaw = byKey[pluginNetworkRequiredKey(plugin.id)];
+    const isNetworkScope = plugin.scope === "network";
+    const enabled = enabledRaw === "true";
     return {
       ...plugin,
-      enabled: enabledRaw === "true",
-      mustUse: mustUseRaw === "true",
+      enabled,
+      networkRequired: isNetworkScope ? enabled : networkRequiredRaw === "true",
       config: configRaw ? parseJsonObject<Record<string, unknown>>(configRaw, {}) : {},
       sourceDir: (plugin as PluginManifestResolved).sourceDir,
     } satisfies PluginWithState;
@@ -193,10 +195,11 @@ export async function listPluginsWithSiteState(siteId: string): Promise<PluginWi
     const enabledRaw = byKey[sitePluginEnabledKey(siteId, plugin.id)];
     const siteConfigRaw = byKey[sitePluginConfigKey(siteId, plugin.id)];
     const siteConfig = siteConfigRaw ? parseJsonObject<Record<string, unknown>>(siteConfigRaw, {}) : {};
-    const effectiveConfig = plugin.mustUse ? { ...plugin.config } : { ...plugin.config, ...siteConfig };
+    const effectiveConfig = plugin.networkRequired ? { ...plugin.config } : { ...plugin.config, ...siteConfig };
+    const siteEnabled = plugin.networkRequired ? enabledRaw !== "false" : enabledRaw === "true";
     return {
       ...plugin,
-      siteEnabled: plugin.mustUse ? true : enabledRaw === undefined ? true : enabledRaw === "true",
+      siteEnabled,
       siteConfig,
       effectiveConfig,
     };

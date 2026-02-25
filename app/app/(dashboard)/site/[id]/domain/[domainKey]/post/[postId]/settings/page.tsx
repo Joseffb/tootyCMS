@@ -4,6 +4,7 @@ import Form from "@/components/form";
 import { getSiteDataDomainByKey, updateDomainPostMetadata } from "@/lib/actions";
 import DeleteDomainPostForm from "@/components/form/delete-domain-post-form";
 import db from "@/lib/db";
+import { canUserMutateDomainPost } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -38,7 +39,8 @@ export default async function DomainPostSettings({ params }: Props) {
       ),
   });
 
-  if (!data || data.userId !== session.user.id) {
+  const canEdit = await canUserMutateDomainPost(session.user.id, resolvedPostId, "edit");
+  if (!data || !canEdit.allowed) {
     notFound();
   }
 

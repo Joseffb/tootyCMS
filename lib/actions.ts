@@ -1,6 +1,6 @@
 "use server";
 
-import { getSession } from "@/lib/auth";
+import { getSession, MIMIC_ACTOR_COOKIE, MIMIC_TARGET_COOKIE } from "@/lib/auth";
 import {
   addDomainToVercel,
   removeDomainFromVercelProject,
@@ -46,21 +46,44 @@ import { put } from "@vercel/blob";
 import { and, asc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { revalidatePath, revalidateTag } from "next/cache";
+import { cookies } from "next/headers";
 import { withSiteAuth } from "./auth";
 import db from "./db";
-import { SelectSite, cmsSettings, sites, users } from "./schema";
+import { SelectSite, accounts, cmsSettings, sites, users } from "./schema";
 import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
-import { USER_ROLES, type UserRole, isAdministrator } from "./rbac";
 import {
+  USER_ROLES,
+  SITE_CAPABILITIES,
+  type SiteCapability,
+  getCapabilityMatrix, listRbacRoles, saveRoleCapabilities, createRbacRole, deleteRbacRole, SYSTEM_ROLES,
+} from "./rbac";
+import {
+  acquireSchedulerLock,
   createScheduleEntry,
   deleteScheduleEntry,
   listScheduleEntries,
+  listScheduleRunAudits,
+  releaseSchedulerLock,
+  runScheduleEntryNow,
   updateScheduleEntry,
   type ScheduleEntry,
   type SchedulerOwnerType,
 } from "./scheduler";
-import { emitAnalyticsEvent } from "@/lib/analytics-dispatch";
+import { emitDomainEvent } from "@/lib/domain-dispatch";
+import { hashPassword } from "@/lib/password";
+import { AUTH_PLUGIN_PROVIDER_MAP } from "@/lib/auth-provider-plugins";
+import { listSiteUsers, upsertSiteUserRole } from "@/lib/site-user-tables";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import type { ProfileSection, ProfileSectionRow } from "@/lib/profile-contracts";
+import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
+import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import {
+  userCan,
+  canUserMutateDomainPost,
+} from "@/lib/authorization";
+import { canTransitionContentState, stateFromPublishedFlag } from "@/lib/content-state-engine";
+import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
 
 function emitCmsLifecycleEvent(input: {
   name: "content_published" | "content_deleted" | "custom_event";
@@ -68,7 +91,7 @@ function emitCmsLifecycleEvent(input: {
   payload?: Record<string, unknown>;
 }) {
   const siteId = typeof input.siteId === "string" && input.siteId.trim() ? input.siteId : undefined;
-  return emitAnalyticsEvent({
+  return emitDomainEvent({
     version: 1,
     name: input.name,
     timestamp: new Date().toISOString(),
@@ -211,32 +234,8 @@ const toDomainKey = (label: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 60) || `domain_${nanoid().toLowerCase()}`;
 
-async function ensureDefaultPostType() {
-  const [existing] = await db
-    .select({ id: dataDomains.id })
-    .from(dataDomains)
-    .where(eq(dataDomains.key, "post"))
-    .limit(1);
-  if (existing) return;
-
-  const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
-  const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-
-  await db
-    .insert(dataDomains)
-    .values({
-      key: "post",
-      label: "Post",
-      contentTable: `${normalizedPrefix}posts`,
-      metaTable: `${normalizedPrefix}post_meta`,
-      description: "Default core post type",
-      settings: { builtin: true },
-    })
-    .onConflictDoNothing();
-}
-
 export const getAllDataDomains = async (siteId?: string) => {
-  await ensureDefaultPostType();
+  await ensureDefaultCoreDataDomains();
   const rows = await db.select().from(dataDomains).orderBy(asc(dataDomains.label));
   let usageRows: Array<{ dataDomainId: number; usageCount: number }> = [];
   try {
@@ -272,16 +271,17 @@ export const getAllDataDomains = async (siteId?: string) => {
   }
 
   const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row.isActive]));
+  const defaultCoreKeys = new Set<string>(DEFAULT_CORE_DOMAIN_KEYS);
   return rows.map((row) => ({
       ...row,
-      assigned: row.key === "post" ? true : assignmentMap.has(row.id),
-      isActive: row.key === "post" ? true : assignmentMap.get(row.id) ?? false,
+      assigned: defaultCoreKeys.has(row.key) ? true : assignmentMap.has(row.id),
+      isActive: defaultCoreKeys.has(row.key) ? true : assignmentMap.get(row.id) ?? false,
       usageCount: usageMap.get(row.id) ?? 0,
   }));
 };
 
 export const getSiteDataDomainByKey = async (siteId: string, domainKey: string) => {
-  await ensureDefaultPostType();
+  await ensureDefaultCoreDataDomains();
   const [row] = await db
     .select({
       id: dataDomains.id,
@@ -298,7 +298,9 @@ export const getSiteDataDomainByKey = async (siteId: string, domainKey: string) 
     .limit(1);
 
   if (!row) return null;
-  if (row.key === "post") return { ...row, isActive: true };
+  if (DEFAULT_CORE_DOMAIN_KEYS.includes(row.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number])) {
+    return { ...row, isActive: true };
+  }
   // Allow any domain assigned to the site, even if currently inactive.
   if (row.isActive === null || row.isActive === undefined) return null;
   return row;
@@ -346,6 +348,13 @@ export const createDataDomain = async (input: {
   siteId?: string;
   activateForSite?: boolean;
 }) => {
+  const session = await getSession();
+  if (!session?.user?.id) return { error: "Not authenticated" };
+  const allowed = input.siteId
+    ? await userCan("site.datadomain.manage", session.user.id, { siteId: input.siteId })
+    : await userCan("network.settings.write", session.user.id);
+  if (!allowed) return { error: "Not authorized" };
+
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
   const canonicalLabel = singularizeLabel(trimmed);
@@ -437,6 +446,11 @@ export const updateDataDomain = async (input: {
   label: string;
   description?: string;
 }) => {
+  const session = await getSession();
+  if (!session?.user?.id) return { error: "Not authenticated" };
+  const allowed = await userCan("network.settings.write", session.user.id);
+  if (!allowed) return { error: "Not authorized" };
+
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
   const canonicalLabel = singularizeLabel(trimmed);
@@ -464,6 +478,11 @@ export const updateDataDomain = async (input: {
 const sanitizeDbIdentifier = (value: string) => value.replace(/[^a-zA-Z0-9_]/g, "_");
 
 export const deleteDataDomain = async (id: number) => {
+  const session = await getSession();
+  if (!session?.user?.id) return { error: "Not authenticated" };
+  const allowed = await userCan("network.settings.write", session.user.id);
+  if (!allowed) return { error: "Not authorized" };
+
   const [domain] = await db.select().from(dataDomains).where(eq(dataDomains.id, id)).limit(1);
   if (!domain) return { error: "Data Domain not found" };
 
@@ -500,11 +519,8 @@ export const setDataDomainActivation = async (input: {
   if (!session?.user?.id) {
     return { error: "Not authenticated" };
   }
-  const actor = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
-  });
-  if (!actor || !isAdministrator(actor.role)) {
+  const allowed = await userCan("site.datadomain.manage", session.user.id, { siteId: input.siteId });
+  if (!allowed) {
     return { error: "Admin role required" };
   }
 
@@ -1036,6 +1052,8 @@ export const createSite = async (formData: FormData) => {
       })
       .returning();
 
+    await upsertSiteUserRole(response.id, session.user.id, "administrator");
+
     revalidateTag(
       `${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-metadata`,
       "max",
@@ -1140,10 +1158,10 @@ export const updateSite = withSiteAuth(
         const value = maybeFile as string;
         if (key === "subdomain") {
           const nextSubdomain = value.trim().toLowerCase();
-          if (site.isPrimary && nextSubdomain !== "main") {
+          if ((site.subdomain || "").toLowerCase() === "main" && nextSubdomain !== "main") {
             return { error: "The Main Site subdomain must remain 'main'." };
           }
-          if (!site.isPrimary && nextSubdomain === "main") {
+          if ((site.subdomain || "").toLowerCase() !== "main" && nextSubdomain === "main") {
             return { error: "Subdomain 'main' is reserved for the Main Site." };
           }
         }
@@ -1167,7 +1185,8 @@ export const updateSite = withSiteAuth(
           : error.message,
       };
     }
-  }
+  },
+  "network.site.manage",
 );
 
 export const deleteSite = withSiteAuth(
@@ -1206,6 +1225,7 @@ export const deleteSite = withSiteAuth(
       };
     }
   },
+  "network.site.delete",
 );
 
 export const getSiteFromDomainPostId = async (postId: string) => {
@@ -1248,17 +1268,13 @@ export const createDomainPost = withSiteAuth(
         userId: session.user.id,
         dataDomainId: domain.id,
         slug: toSeoSlug(`${domain.key}-${nanoid()}`),
+        published: false,
         ...(useRandomDefaultImages ? { image: pickRandomTootyImage() } : {}),
       })
       .returning();
 
-    revalidateTag(
-      `${site.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`,
-      "max",
-    );
-    site.customDomain && revalidateTag(`${site.customDomain}-posts`, "max");
-    revalidatePublicContentCache();
-    revalidatePublicContentCache();
+    // Intentionally skip revalidateTag here: this action is invoked from a render-time
+    // create-and-redirect page, and Next.js disallows render-phase revalidation calls.
 
     await emitCmsLifecycleEvent({
       name: "custom_event",
@@ -1272,6 +1288,7 @@ export const createDomainPost = withSiteAuth(
 
     return response;
   },
+  "site.content.create",
 );
 
 export const updateDomainPost = async (
@@ -1292,11 +1309,9 @@ export const updateDomainPost = async (
     return { error: "Not authenticated" };
   }
 
-  const existing = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, data.id),
-    columns: { userId: true, siteId: true, slug: true, dataDomainId: true },
-  });
-  if (!existing || existing.userId !== session.user.id) {
+  const mutation = await canUserMutateDomainPost(session.user.id, data.id, "edit");
+  const existing = mutation.post;
+  if (!existing || !mutation.allowed) {
     return { error: "Post not found or not authorized" };
   }
 
@@ -1418,13 +1433,9 @@ export const updateDomainPostMetadata = async (
     return { error: "Not authenticated" };
   }
 
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, postId),
-    with: {
-      site: true,
-    },
-  });
-  if (!post || post.userId !== session.user.id) {
+  const mutation = await canUserMutateDomainPost(session.user.id, postId, "edit");
+  const post = mutation.post;
+  if (!post || !mutation.allowed) {
     return { error: "Post not found" };
   }
 
@@ -1470,31 +1481,57 @@ export const updateDomainPostMetadata = async (
       }
     } else {
       const value = formData.get(key) as string;
-      const nextValue =
-        key === "published"
-          ? value === "true"
-          : key === "slug"
-            ? toSeoSlug(value)
-            : value;
+      const nextValue = key === "slug" ? toSeoSlug(value) : value;
 
-      response = await db
-        .update(domainPosts)
-        .set({
-          [key]: nextValue,
-        })
-        .where(eq(domainPosts.id, post.id))
-        .returning()
-        .then((res) => res[0]);
-
-      if (key === "published" && nextValue === true && !post.published) {
-        await emitCmsLifecycleEvent({
-          name: "content_published",
-          siteId: post.siteId,
-          payload: {
-            contentType: "domain",
-            contentId: post.id,
-          },
+      if (key === "published") {
+        const canPublish = post.siteId
+          ? await userCan("site.content.publish", session.user.id, { siteId: post.siteId })
+          : false;
+        if (!canPublish) {
+          return { error: "Not authorized to change publish status" };
+        }
+        const nextPublished = value === "true";
+        const from = stateFromPublishedFlag(Boolean(post.published));
+        const to = stateFromPublishedFlag(nextPublished);
+        const canTransition = await canTransitionContentState({
+          siteId: post.siteId || null,
+          from,
+          to,
+          contentType: "domain",
+          contentId: post.id,
+          userId: session.user.id,
         });
+        if (!canTransition) {
+          return { error: `Transition blocked: ${from} -> ${to}` };
+        }
+      }
+
+      if (key === "published") {
+        const nextPublished = value === "true";
+        const result = await setDomainPostPublishedState({
+          postId: post.id,
+          nextPublished,
+          actorType: "admin",
+          actorId: session.user.id,
+          userId: session.user.id,
+        });
+        if (!result.ok) {
+          return {
+            error: result.reason === "transition_blocked"
+              ? `Transition blocked: ${result.from} -> ${result.to}`
+              : "Failed to update publish status",
+          };
+        }
+        response = result.post;
+      } else {
+        response = await db
+          .update(domainPosts)
+          .set({
+            [key]: nextValue,
+          })
+          .where(eq(domainPosts.id, post.id))
+          .returning()
+          .then((res) => res[0]);
       }
     }
 
@@ -1507,7 +1544,13 @@ export const updateDomainPostMetadata = async (
     const domain = siteRow?.customDomain;
     const subdomain = siteRow?.subdomain;
     const currentSlug = post.slug;
-    const updatedSlug = response?.slug ?? currentSlug;
+    const updatedSlug =
+      (typeof response === "object" &&
+      response !== null &&
+      "slug" in response &&
+      typeof (response as { slug?: unknown }).slug === "string")
+        ? (response as { slug: string }).slug
+        : currentSlug;
 
     revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-posts`, "max");
     revalidateTag(`${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${currentSlug}`, "max");
@@ -1544,11 +1587,9 @@ export const deleteDomainPost = async (formData: FormData, postId: string) => {
     return { error: "Not authenticated" };
   }
 
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, postId),
-    columns: { id: true, userId: true, siteId: true, slug: true },
-  });
-  if (!post || post.userId !== session.user.id) {
+  const mutation = await canUserMutateDomainPost(session.user.id, postId, "delete");
+  const post = mutation.post;
+  if (!post || !mutation.allowed) {
     return { error: "Post not found" };
   }
 
@@ -1626,72 +1667,23 @@ export const editUser = async (
   }
 };
 
-const OAUTH_PROVIDER_IDS = ["github", "google", "facebook", "apple"] as const;
-type OAuthProviderId = (typeof OAUTH_PROVIDER_IDS)[number];
-
-function parseAdminEmails() {
-  const raw = process.env.CMS_ADMIN_EMAILS || "";
-  return raw
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-}
-
 async function requireAdminSession() {
   const session = await getSession();
-  if (!session?.user?.id || !session.user.email) {
+  if (!session?.user?.id) {
     throw new Error("Not authenticated");
   }
-
-  let self = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: { role: true },
-  });
-
-  // Self-heal local sessions after fresh installs/db wipes.
-  if (!self) {
-    const anyUser = await db.query.users.findFirst({
-      columns: { id: true },
-    });
-    const roleForNewUser: UserRole = anyUser ? "author" : "administrator";
-    await db
-      .insert(users)
-      .values({
-        id: session.user.id,
-        email: session.user.email.toLowerCase(),
-        name: session.user.name ?? null,
-        image: session.user.image ?? null,
-        role: roleForNewUser,
-      })
-      .onConflictDoNothing();
-
-    self = await db.query.users.findFirst({
-      where: eq(users.id, session.user.id),
-      columns: { role: true },
-    });
-  }
-
-  // If there is no admin yet, promote current user.
-  const anyAdmin = await db.query.users.findFirst({
-    where: eq(users.role, "administrator"),
-    columns: { id: true },
-  });
-  if (!anyAdmin && self) {
-    await db
-      .update(users)
-      .set({ role: "administrator" })
-      .where(eq(users.id, session.user.id));
-    self = { role: "administrator" as UserRole };
-  }
-  if (isAdministrator(self?.role)) {
-    return session;
-  }
-
-  const admins = parseAdminEmails();
-  if (admins.length > 0 && !admins.includes(session.user.email.toLowerCase())) {
+  const allowed = await userCan("network.settings.write", session.user.id);
+  if (!allowed) {
     throw new Error("Not authorized");
   }
 
+  return session;
+}
+
+async function requireNetworkUsersManageSession() {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.users.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
   return session;
 }
 
@@ -1722,7 +1714,7 @@ function revalidatePublicContentCache() {
   revalidatePath("/robots.txt");
 }
 
-async function requireOwnedSite(siteIdRaw: string) {
+async function requireOwnedSite(siteIdRaw: string, capability: SiteCapability = "site.settings.write") {
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" as const };
   const siteId = decodeURIComponent(siteIdRaw);
@@ -1741,33 +1733,426 @@ async function requireOwnedSite(siteIdRaw: string) {
       logo: true,
     },
   });
-  if (!site || site.userId !== session.user.id) {
+  if (!site) {
+    return { error: "Not authorized" as const };
+  }
+  const allowed = await userCan(capability, session.user.id, { siteId: site.id });
+  if (!allowed) {
     return { error: "Not authorized" as const };
   }
   return { site };
 }
 
-export const listUsersAdmin = async () => {
-  await requireAdminSession();
+function parseAuthProviderAvailability(rows: Array<{ key: string; value: string }>) {
+  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
+  const providerToPlugin = Object.fromEntries(
+    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
+  ) as Record<(typeof oauthIds)[number], string>;
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return oauthIds.map((id) => {
+    const key = `plugin_${providerToPlugin[id]}_enabled`;
+    const enabled = byKey[key] ? byKey[key] === "true" : false;
+    return { id, key, enabled };
+  });
+}
 
-  return db.query.users.findMany({
+function normalizeProfileSectionRows(input: unknown): ProfileSectionRow[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const label = String((row as any).label || "").trim();
+      const value = String((row as any).value || "").trim();
+      if (!label || !value) return null;
+      return { label, value };
+    })
+    .filter(Boolean) as ProfileSectionRow[];
+}
+
+function normalizeProfileSections(input: unknown): ProfileSection[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((section) => {
+      if (!section || typeof section !== "object") return null;
+      const id = String((section as any).id || "").trim();
+      const title = String((section as any).title || "").trim();
+      if (!id || !title) return null;
+      const descriptionRaw = String((section as any).description || "").trim();
+      return {
+        id,
+        title,
+        description: descriptionRaw || undefined,
+        rows: normalizeProfileSectionRows((section as any).rows),
+      };
+    })
+    .filter(Boolean) as ProfileSection[];
+}
+
+const OAUTH_ENV_KEYS: Record<string, { id: string; secret: string }> = {
+  github: { id: "AUTH_GITHUB_ID", secret: "AUTH_GITHUB_SECRET" },
+  google: { id: "AUTH_GOOGLE_ID", secret: "AUTH_GOOGLE_SECRET" },
+  facebook: { id: "AUTH_FACEBOOK_ID", secret: "AUTH_FACEBOOK_SECRET" },
+  apple: { id: "AUTH_APPLE_ID", secret: "AUTH_APPLE_SECRET" },
+};
+
+function parseJsonObject(raw: string | undefined) {
+  if (!raw) return {} as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {} as Record<string, unknown>;
+  }
+}
+
+async function getEnabledConfiguredOauthProviders() {
+  const oauthIds = Array.from(new Set(Object.values(AUTH_PLUGIN_PROVIDER_MAP)));
+  const providerToPlugin = Object.fromEntries(
+    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
+  ) as Record<string, string>;
+  const keys = oauthIds.flatMap((id) => [
+    `plugin_${providerToPlugin[id]}_enabled`,
+    `plugin_${providerToPlugin[id]}_config`,
+  ]);
+  const rows = await db
+    .select({ key: cmsSettings.key, value: cmsSettings.value })
+    .from(cmsSettings)
+    .where(inArray(cmsSettings.key, keys));
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+
+  return oauthIds.filter((id) => {
+    const pluginId = providerToPlugin[id];
+    const enabled = byKey[`plugin_${pluginId}_enabled`] === "true";
+    if (!enabled) return false;
+    const config = parseJsonObject(byKey[`plugin_${pluginId}_config`]);
+    const dbClientId = String(config.clientId || "").trim();
+    const dbClientSecret = String(config.clientSecret || "").trim();
+    const envClientId = String(process.env[OAUTH_ENV_KEYS[id]?.id || ""] || "").trim();
+    const envClientSecret = String(process.env[OAUTH_ENV_KEYS[id]?.secret || ""] || "").trim();
+    return Boolean((dbClientId && dbClientSecret) || (envClientId && envClientSecret));
+  });
+}
+
+async function withUserAuthState<T extends { id: string; passwordHash: string | null }>(rows: T[]) {
+  if (rows.length === 0) return [] as Array<Omit<T, "passwordHash"> & { forcePasswordChange: boolean; authProviders: string[] }>;
+  const userIds = rows.map((row) => row.id);
+  const enabledOauthProviders = await getEnabledConfiguredOauthProviders();
+  const linkedAccounts = await db
+    .select({
+      userId: accounts.userId,
+      provider: accounts.provider,
+    })
+    .from(accounts)
+    .where(inArray(accounts.userId, userIds));
+  const linkedByUser = new Map<string, Set<string>>();
+  for (const account of linkedAccounts) {
+    if (!linkedByUser.has(account.userId)) linkedByUser.set(account.userId, new Set());
+    linkedByUser.get(account.userId)!.add(String(account.provider || "").trim());
+  }
+
+  return Promise.all(
+    rows.map(async (row) => {
+      const linked = linkedByUser.get(row.id) ?? new Set<string>();
+      const authProviders: string[] = [];
+      if (row.passwordHash) authProviders.push("native");
+      for (const provider of enabledOauthProviders) {
+        if (linked.has(provider)) authProviders.push(provider);
+      }
+      const { passwordHash: _passwordHash, ...rest } = row;
+      return {
+        ...rest,
+        authProviders,
+        forcePasswordChange: (await getUserMetaValue(row.id, "force_password_change")) === "true",
+      };
+    }),
+  );
+}
+
+async function getOauthProviderSettingsInternal() {
+  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
+  const providerToPlugin = Object.fromEntries(
+    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
+  ) as Record<(typeof oauthIds)[number], string>;
+  const rows = await db
+    .select({ key: cmsSettings.key, value: cmsSettings.value })
+    .from(cmsSettings)
+    .where(
+      inArray(
+        cmsSettings.key,
+        oauthIds.map((id) => `plugin_${providerToPlugin[id]}_enabled`),
+      ),
+    );
+  return parseAuthProviderAvailability(rows);
+}
+
+export const getProfile = async (siteId?: string) => {
+  const session = await getSession();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+
+  const self = await db.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+    columns: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      passwordHash: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (!self) {
+    throw new Error("User not found");
+  }
+
+  const providerFlags = await getOauthProviderSettingsInternal();
+  const linkedAccounts = await db.query.accounts.findMany({
+    where: eq(accounts.userId, self.id),
+    columns: { provider: true },
+  });
+  const linkedSet = new Set(linkedAccounts.map((account) => String(account.provider || "").trim()).filter(Boolean));
+  const forcePasswordChange = (await getUserMetaValue(self.id, "force_password_change")) === "true";
+  const kernel = await createKernelForRequest(siteId);
+  const extensionSectionsRaw = await kernel.applyFilters<ProfileSection[]>("admin:profile:sections", [], {
+    siteId: siteId || null,
+    userId: self.id,
+    role: self.role,
+  });
+
+  return {
+    user: {
+      id: self.id,
+      name: self.name ?? "",
+      email: self.email,
+      role: self.role,
+      hasNativePassword: Boolean(self.passwordHash),
+      forcePasswordChange,
+      createdAt: self.createdAt,
+      updatedAt: self.updatedAt,
+    },
+    authProviders: {
+      available: providerFlags.map((provider) => ({
+        id: provider.id,
+        enabled: provider.enabled,
+        linked: linkedSet.has(provider.id),
+      })),
+      native: {
+        enabled: true,
+        linked: Boolean(self.passwordHash),
+      },
+    },
+    extensionSections: normalizeProfileSections(extensionSectionsRaw),
+  };
+};
+
+export const updateProfile = async (formData: FormData) => {
+  const session = await getSession();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+
+  const name = normalizeOptionalString(formData.get("name"));
+  const emailRaw = formData.get("email");
+  const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
+  if (!email || !validateEmail(email)) {
+    return { error: "Valid email is required" };
+  }
+
+  try {
+    await db
+      .update(users)
+      .set({
+        name,
+        email,
+      })
+      .where(eq(users.id, session.user.id));
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      return { error: "Another account already uses that email" };
+    }
+    return { error: error?.message || "Failed to update profile" };
+  }
+
+  revalidateSettingsPath("/settings/profile");
+  return { ok: true };
+};
+
+export const updateOwnPassword = async (formData: FormData) => {
+  const session = await getSession();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+
+  const password = String(formData.get("password") || "");
+  const confirm = String(formData.get("confirmPassword") || "");
+  if (password.length < 8) {
+    return { error: "Password must be at least 8 characters" };
+  }
+  if (password !== confirm) {
+    return { error: "Passwords do not match" };
+  }
+
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(password) })
+    .where(eq(users.id, session.user.id));
+  await setUserMetaValue(session.user.id, "force_password_change", "false");
+
+  revalidateSettingsPath("/settings/profile");
+  return { ok: true };
+};
+
+export const getGlobalRbacSettingsAdmin = async () => {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.rbac.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
+  const roles = await listRbacRoles();
+  const roleIds = roles.map((row) => row.role);
+  return {
+    roles: roleIds.length > 0 ? roleIds : [...USER_ROLES],
+    systemRoles: [...SYSTEM_ROLES],
+    capabilities: SITE_CAPABILITIES,
+    matrix: await getCapabilityMatrix(),
+  };
+};
+
+export const updateGlobalRbacSettings = async (formData: FormData) => {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.rbac.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
+  const selectedRole = normalizeOptionalString(formData.get("selectedRole"));
+  if (!selectedRole) return;
+  const next = Object.fromEntries(
+    SITE_CAPABILITIES.map((capability) => {
+      const key = `cap__${selectedRole}__${capability}`;
+      return [capability, formData.get(key) === "on"];
+    }),
+  );
+  await saveRoleCapabilities(selectedRole, next);
+  revalidateSettingsPath("/settings/rbac");
+};
+
+export const updateGlobalRbacCapability = async (formData: FormData) => {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.rbac.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
+  const selectedRole = normalizeOptionalString(formData.get("selectedRole"));
+  const capabilityRaw = normalizeOptionalString(formData.get("capability")) as typeof SITE_CAPABILITIES[number] | null;
+  const enabled = formData.get("enabled") === "on";
+  if (!selectedRole || !capabilityRaw || !SITE_CAPABILITIES.includes(capabilityRaw)) return;
+
+  const matrix = await getCapabilityMatrix();
+  const current = matrix[selectedRole] || Object.fromEntries(SITE_CAPABILITIES.map((capability) => [capability, false]));
+  const next = { ...current, [capabilityRaw]: enabled };
+  await saveRoleCapabilities(selectedRole, next);
+  revalidateSettingsPath("/settings/rbac");
+};
+
+export const createGlobalRbacRole = async (formData: FormData) => {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.rbac.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
+  const roleRaw = normalizeOptionalString(formData.get("role"));
+  if (!roleRaw) return;
+  const normalized = roleRaw.toLowerCase();
+  const existing = await listRbacRoles();
+  const exists = existing.some((row) => row.role === normalized);
+  const confirmCreate = String(formData.get("confirmCreate") || "").trim().toLowerCase();
+  if (!exists && confirmCreate !== "create") {
+    throw new Error('Role creation requires confirmation: type "create".');
+  }
+  await createRbacRole(roleRaw);
+  revalidateSettingsPath("/settings/rbac");
+};
+
+export const deleteGlobalRbacRole = async (formData: FormData) => {
+  const session = await requireAdminSession();
+  const allowed = await userCan("network.rbac.manage", session.user.id);
+  if (!allowed) throw new Error("Not authorized");
+  const roleRaw = normalizeOptionalString(formData.get("role"));
+  if (!roleRaw) return;
+  const confirmDelete = String(formData.get("confirmDelete") || "").trim().toLowerCase();
+  if (confirmDelete !== "delete") {
+    throw new Error('Role delete requires confirmation: type "delete".');
+  }
+  await deleteRbacRole(roleRaw);
+  revalidateSettingsPath("/settings/rbac");
+};
+
+export const listUsersAdmin = async () => {
+  const session = await requireNetworkUsersManageSession();
+
+  const allSites = await db.query.sites.findMany({
+    columns: { id: true },
+    orderBy: (table, { asc }) => [asc(table.createdAt)],
+  });
+
+  if (allSites.length === 1) {
+    const siteId = allSites[0].id;
+    const siteUsers = await listSiteUsers(siteId);
+    const ids = Array.from(new Set(siteUsers.map((entry) => entry.user_id))).filter(Boolean);
+    if (ids.length === 0) return [];
+
+    const globalUsers = await db.query.users.findMany({
+      where: inArray(users.id, ids),
+      columns: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        image: true,
+        passwordHash: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    const globalById = new Map(globalUsers.map((entry) => [entry.id, entry]));
+
+    const scopedUsers = siteUsers
+      .map((entry) => {
+        const global = globalById.get(entry.user_id);
+        if (!global) return null;
+        return {
+          ...global,
+          role: entry.role || global.role,
+        };
+      })
+      .filter(Boolean) as Array<{
+      id: string;
+      name: string | null;
+      username: string | null;
+      email: string;
+      image: string | null;
+      passwordHash: string | null;
+      role: string;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    return withUserAuthState(scopedUsers);
+  }
+
+  const networkUsers = await db.query.users.findMany({
     columns: {
       id: true,
       name: true,
       username: true,
-      gh_username: true,
       email: true,
       image: true,
+      passwordHash: true,
       role: true,
       createdAt: true,
       updatedAt: true,
     },
     orderBy: (users, { asc }) => [asc(users.createdAt)],
   });
+  return withUserAuthState(networkUsers);
 };
 
 export const createUserAdmin = async (formData: FormData) => {
-  await requireAdminSession();
+  await requireNetworkUsersManageSession();
 
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
@@ -1780,9 +2165,11 @@ export const createUserAdmin = async (formData: FormData) => {
   const ghUsername = normalizeOptionalString(formData.get("gh_username"));
   const image = normalizeOptionalString(formData.get("image"));
   const roleRaw = normalizeOptionalString(formData.get("role"));
-  const role: UserRole = USER_ROLES.includes((roleRaw as UserRole) || "author")
-    ? ((roleRaw as UserRole) ?? "author")
-    : "author";
+  const availableRoles = await listRbacRoles();
+  const allowedRoleSet = new Set(availableRoles.map((row) => row.role));
+  const role = roleRaw && allowedRoleSet.has(roleRaw) ? roleRaw : "author";
+  const password = String(formData.get("password") || "");
+  const passwordHash = password.length >= 8 ? await hashPassword(password) : null;
 
   try {
     const [created] = await db
@@ -1793,6 +2180,7 @@ export const createUserAdmin = async (formData: FormData) => {
         username,
         gh_username: ghUsername,
         image,
+        passwordHash,
         role,
       })
       .returning({
@@ -1810,7 +2198,7 @@ export const createUserAdmin = async (formData: FormData) => {
 };
 
 export const updateUserAdmin = async (formData: FormData) => {
-  await requireAdminSession();
+  await requireNetworkUsersManageSession();
 
   const id = normalizeOptionalString(formData.get("id"));
   if (!id) return { error: "Missing user id" };
@@ -1823,28 +2211,45 @@ export const updateUserAdmin = async (formData: FormData) => {
 
   const name = normalizeOptionalString(formData.get("name"));
   const username = normalizeOptionalString(formData.get("username"));
-  const ghUsername = normalizeOptionalString(formData.get("gh_username"));
+  const ghRaw = formData.get("gh_username");
+  const ghUsername = ghRaw === null ? undefined : normalizeOptionalString(ghRaw);
   const image = normalizeOptionalString(formData.get("image"));
   const roleRaw = normalizeOptionalString(formData.get("role"));
-  if (!roleRaw || !USER_ROLES.includes(roleRaw as UserRole)) {
+  const availableRoles = await listRbacRoles();
+  const allowedRoleSet = new Set(availableRoles.map((row) => row.role));
+  if (!roleRaw || !allowedRoleSet.has(roleRaw)) {
     return { error: "Valid role is required" };
+  }
+  const password = String(formData.get("password") || "");
+  const forcePasswordChange = formData.get("force_password_change") === "on";
+  const nextPasswordHash = password.length >= 8 ? await hashPassword(password) : null;
+  const updateValues: Record<string, unknown> = {
+    email,
+    name,
+    username,
+    image,
+    role: roleRaw,
+  };
+  if (ghUsername !== undefined) {
+    updateValues.gh_username = ghUsername;
+  }
+  if (nextPasswordHash) {
+    updateValues.passwordHash = nextPasswordHash;
   }
 
   try {
     const [updated] = await db
       .update(users)
-      .set({
-        email,
-        name,
-        username,
-        gh_username: ghUsername,
-        image,
-        role: roleRaw as UserRole,
-      })
+      .set(updateValues)
       .where(eq(users.id, id))
       .returning({ id: users.id });
 
     if (!updated) return { error: "User not found" };
+
+    if (nextPasswordHash) {
+      await setUserMetaValue(id, "force_password_change", forcePasswordChange ? "true" : "false");
+    }
+
     revalidateSettingsPath("/settings/users");
     return { ok: true };
   } catch (error: any) {
@@ -1856,7 +2261,7 @@ export const updateUserAdmin = async (formData: FormData) => {
 };
 
 export const deleteUserAdmin = async (formData: FormData) => {
-  const session = await requireAdminSession();
+  const session = await requireNetworkUsersManageSession();
 
   const id = normalizeOptionalString(formData.get("id"));
   if (!id) return { error: "Missing user id" };
@@ -1880,32 +2285,66 @@ export const deleteUserAdmin = async (formData: FormData) => {
   return { ok: true };
 };
 
+function mimicCookieOptions() {
+  const secure = Boolean(process.env.VERCEL_URL);
+  return {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure,
+  };
+}
+
+export const startUserMimicAdmin = async (formData: FormData) => {
+  const session = await requireNetworkUsersManageSession();
+  const targetId = normalizeOptionalString(formData.get("targetUserId"));
+  if (!targetId) return { error: "Missing target user id" };
+  if (targetId === session.user.id) return { ok: true };
+
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetId),
+    columns: { id: true, role: true },
+  });
+  if (!target) return { error: "Target user not found" };
+
+  const store = await cookies();
+  store.set(MIMIC_ACTOR_COOKIE, session.user.id, mimicCookieOptions());
+  store.set(MIMIC_TARGET_COOKIE, targetId, mimicCookieOptions());
+  revalidatePath("/app", "layout");
+  return { ok: true };
+};
+
+export const stopUserMimic = async () => {
+  const session = await getSession();
+  if (!session?.user?.id) return { error: "Not authenticated" };
+
+  const store = await cookies();
+  const actorId = String(store.get(MIMIC_ACTOR_COOKIE)?.value || "").trim();
+  const mimicActorId = String((session.user as any).mimicActorId || "").trim();
+  if (!actorId || (actorId !== mimicActorId && actorId !== session.user.id)) {
+    return { error: "No active mimic session" };
+  }
+
+  store.delete(MIMIC_ACTOR_COOKIE);
+  store.delete(MIMIC_TARGET_COOKIE);
+  revalidatePath("/app", "layout");
+  return { ok: true };
+};
+
 export const listOauthProviderSettings = async () => {
   await requireAdminSession();
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(
-      inArray(
-        cmsSettings.key,
-        OAUTH_PROVIDER_IDS.map((id) => `oauth_provider_${id}_enabled`),
-      ),
-    );
-
-  const byId = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-  return OAUTH_PROVIDER_IDS.map((id) => {
-    const key = `oauth_provider_${id}_enabled`;
-    const enabled = byId[key] ? byId[key] === "true" : true;
-    return { id, key, enabled };
-  });
+  return getOauthProviderSettingsInternal();
 };
 
 export const updateOauthProviderSettings = async (formData: FormData) => {
   await requireAdminSession();
-
-  for (const id of OAUTH_PROVIDER_IDS) {
-    const key = `oauth_provider_${id}_enabled`;
-    const enabled = formData.get(key) === "on";
+  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
+  const providerToPlugin = Object.fromEntries(
+    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
+  ) as Record<(typeof oauthIds)[number], string>;
+  for (const id of oauthIds) {
+    const key = `plugin_${providerToPlugin[id]}_enabled`;
+    const enabled = formData.get(`oauth_provider_${id}`) === "on";
     await db
       .insert(cmsSettings)
       .values({ key, value: enabled ? "true" : "false" })
@@ -2061,7 +2500,7 @@ export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
 
 export const updateSiteReadingSettings = async (formData: FormData) => {
   const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
-  const owned = await requireOwnedSite(siteIdRaw);
+  const owned = await requireOwnedSite(siteIdRaw, "site.settings.write");
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
@@ -2098,7 +2537,7 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
 };
 
 export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
-  const owned = await requireOwnedSite(siteIdRaw);
+  const owned = await requireOwnedSite(siteIdRaw, "site.seo.manage");
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
@@ -2134,7 +2573,7 @@ export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
 
 export const updateSiteSeoSettings = async (formData: FormData) => {
   const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
-  const owned = await requireOwnedSite(siteIdRaw);
+  const owned = await requireOwnedSite(siteIdRaw, "site.seo.manage");
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
@@ -2182,7 +2621,7 @@ export const getSiteEditorSettingsAdmin = async (siteIdRaw: string) => {
 
 export const updateSiteEditorSettings = async (formData: FormData) => {
   const siteIdRaw = (formData.get("siteId") as string | null) ?? "";
-  const owned = await requireOwnedSite(siteIdRaw);
+  const owned = await requireOwnedSite(siteIdRaw, "site.settings.write");
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
@@ -2193,20 +2632,111 @@ export const updateSiteEditorSettings = async (formData: FormData) => {
   return { ok: true };
 };
 
+export type ScheduleActionOption = {
+  key: string;
+  label: string;
+  description?: string;
+};
+
+function normalizeScheduleActionOptions(input: unknown): ScheduleActionOption[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const key = String((row as any).key || "").trim();
+      const label = String((row as any).label || "").trim();
+      const descriptionRaw = String((row as any).description || "").trim();
+      if (!key || !label) return null;
+      return {
+        key,
+        label,
+        description: descriptionRaw || undefined,
+      };
+    })
+    .filter(Boolean) as ScheduleActionOption[];
+}
+
+async function getScheduleActionCatalog(): Promise<ScheduleActionOption[]> {
+  const core: ScheduleActionOption[] = [
+    {
+      key: "core.ping_sitemap",
+      label: "Ping Sitemap",
+      description: "Fetches /sitemap.xml for configured site URL.",
+    },
+    {
+      key: "core.http_ping",
+      label: "HTTP Ping",
+      description: "Requests payload.url with payload.method (default GET).",
+    },
+    {
+      key: "core.communication.retry",
+      label: "Retry Communication Queue",
+      description: "Retries pending outbound communication records.",
+    },
+    {
+      key: "core.communication.purge",
+      label: "Purge Communication Queue",
+      description: "Deletes old communication audit/queue rows.",
+    },
+    {
+      key: "core.webcallbacks.purge",
+      label: "Purge Webcallbacks",
+      description: "Deletes old webcallback delivery/audit rows.",
+    },
+    {
+      key: "core.webhooks.retry",
+      label: "Retry Webhook Deliveries",
+      description: "Retries queued/retrying outbound webhook deliveries.",
+    },
+    {
+      key: "core.content.publish",
+      label: "Publish Content",
+      description: "Publishes a domain content record from payload.domainPostId.",
+    },
+    {
+      key: "core.content.unpublish",
+      label: "Unpublish Content",
+      description: "Unpublishes a domain content record from payload.domainPostId.",
+    },
+  ];
+
+  try {
+    const kernel = await createKernelForRequest(undefined);
+    const filtered = await kernel.applyFilters<ScheduleActionOption[]>("admin:schedule-actions", core, {
+      scope: "global",
+    });
+    const normalized = normalizeScheduleActionOptions(filtered);
+    if (normalized.length === 0) return core;
+    const deduped = new Map<string, ScheduleActionOption>();
+    for (const item of normalized) deduped.set(item.key, item);
+    return Array.from(deduped.values()).sort((a, b) => a.label.localeCompare(b.label));
+  } catch {
+    return core;
+  }
+}
+
 export const getScheduleSettingsAdmin = async () => {
   await requireAdminSession();
-  const [settings, schedules, allSites] = await Promise.all([
+  const [settings, schedules, allSites, actionOptions] = await Promise.all([
     getScheduleSettings(),
     listScheduleEntries({ includeDisabled: true }),
     db.query.sites.findMany({
       columns: { id: true, name: true, subdomain: true, customDomain: true, isPrimary: true },
       orderBy: (table, { asc }) => [asc(table.name)],
     }),
+    getScheduleActionCatalog(),
   ]);
+
+  const runAuditsBySchedule = new Map(
+    await Promise.all(
+      schedules.map(async (entry: ScheduleEntry) => [entry.id, await listScheduleRunAudits(entry.id, 10)] as const),
+    ),
+  );
 
   const siteById = new Map(allSites.map((site) => [site.id, site]));
   const rows = schedules.map((entry: ScheduleEntry) => ({
     ...entry,
+    runAudits: runAuditsBySchedule.get(entry.id) ?? [],
     site:
       entry.siteId && siteById.has(entry.siteId)
         ? siteById.get(entry.siteId)
@@ -2217,6 +2747,7 @@ export const getScheduleSettingsAdmin = async () => {
     ...settings,
     schedules: rows,
     sites: allSites,
+    actionOptions,
   };
 };
 
@@ -2247,6 +2778,8 @@ export const createScheduledActionAdmin = async (formData: FormData) => {
   const name = String(formData.get("name") || "").trim();
   const actionKey = String(formData.get("actionKey") || "").trim();
   const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const maxRetries = Number(formData.get("maxRetries") || "3");
+  const backoffBaseSeconds = Number(formData.get("backoffBaseSeconds") || "60");
   const enabled = formData.get("enabled") === "on";
   const payloadRaw = String(formData.get("payload") || "").trim();
 
@@ -2268,6 +2801,8 @@ export const createScheduledActionAdmin = async (formData: FormData) => {
     payload,
     enabled,
     runEveryMinutes,
+    maxRetries,
+    backoffBaseSeconds,
   });
 
   revalidateSettingsPath("/settings/schedules");
@@ -2281,6 +2816,8 @@ export const updateScheduledActionAdmin = async (formData: FormData) => {
   const name = String(formData.get("name") || "").trim();
   const actionKey = String(formData.get("actionKey") || "").trim();
   const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const maxRetries = Number(formData.get("maxRetries") || "3");
+  const backoffBaseSeconds = Number(formData.get("backoffBaseSeconds") || "60");
   const enabled = formData.get("enabled") === "on";
   const payloadRaw = String(formData.get("payload") || "").trim();
   const payload = payloadRaw
@@ -2303,6 +2840,8 @@ export const updateScheduledActionAdmin = async (formData: FormData) => {
       payload,
       enabled,
       runEveryMinutes,
+      maxRetries,
+      backoffBaseSeconds,
     },
     { isAdmin: true },
   );
@@ -2314,5 +2853,22 @@ export const deleteScheduledActionAdmin = async (formData: FormData) => {
   const id = String(formData.get("id") || "").trim();
   if (!id) return;
   await deleteScheduleEntry(id, { isAdmin: true });
+  revalidateSettingsPath("/settings/schedules");
+};
+
+export const runScheduledActionNowAdmin = async (formData: FormData) => {
+  await requireAdminSession();
+  const id = String(formData.get("id") || "").trim();
+  if (!id) throw new Error("Missing schedule id");
+
+  const gotLock = await acquireSchedulerLock();
+  if (!gotLock) throw new Error("Scheduler runner lock busy. Try again.");
+
+  try {
+    await runScheduleEntryNow(id);
+  } finally {
+    await releaseSchedulerLock();
+  }
+
   revalidateSettingsPath("/settings/schedules");
 };

@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
 
   const siteId = await resolveAnalyticsSiteId({ headers: req.headers });
   const kernel = await createKernelForRequest(siteId);
-  const scripts = await kernel.applyFilters<AnalyticsScript[]>("analytics:scripts", [], {
+  const scripts = await kernel.applyFilters<AnalyticsScript[]>("domain:scripts", [], {
     request: req,
     siteId: siteId || null,
   });

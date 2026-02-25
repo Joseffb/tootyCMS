@@ -3,6 +3,8 @@ import SiteHomePage from "./[domain]/page";
 import { getSiteData } from "@/lib/fetchers";
 import { getThemeAssetsForSite } from "@/lib/theme-runtime";
 import Script from "next/script";
+import { getInstallState } from "@/lib/install-state";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
   title: "Tooty CMS",
@@ -10,6 +12,10 @@ export const metadata: Metadata = {
 };
 
 export default async function RootPage() {
+  const installState = await getInstallState();
+  if (installState.setupRequired) {
+    redirect("/setup");
+  }
   const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
   const rootDomain = rootDomainRaw.replace(/:\d+$/, "");
   const mainDomain = rootDomain;

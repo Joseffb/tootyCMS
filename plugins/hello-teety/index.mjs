@@ -6,14 +6,14 @@ export async function register(kernel, api) {
     "I'll notice — eventually.",
     "Actually, that happened on purpose.",
     "Bold choice — and you lived.",
-    "No panic. Just coffee. Lots of coffee",
+    "No panic. Just coffee. Lots of coffee.",
     "Looks expensive. Buy another!",
     "Ok I blinked — it passed.",
     "Nice mess. You're gonna clean it right?",
     "And... we call that progress.",
     "Accidental genius counts too.",
     "Oddly, that worked.",
-    "Surely, you are not serious. Second thought, why not.",
+    "Surely, you aren't serious. On second thought, why not.",
     "At least it broke politely.",
     "And NOW it behaves.",
     "Tiny win. I'll allow it.",
@@ -63,36 +63,36 @@ export async function register(kernel, api) {
     "I did less today. Win.",
     "Minimal effort, maximum folklore.",
     "Nobody saw that bug coming?",
-    "Chaos took lunch. Hope it hurry's back with my food.",
+    "Chaos took lunch. Hope it hurries back with my food.",
     "I squeak, then sing.",
     "Barely elegant, fully useful.",
     "Mocked my logic, yet it still works.",
     "Gracefully mediocre.",
     "I pressed save, it shrugged.",
     "Luck did overtime on this deployment.",
-    "This should be illegal — let's use 'til we can't",
+    "This should be illegal — let's use 'til we can't.",
     "Unholy, yet reliable.",
     "Odd but obedient.",
     "Duct tape... check.",
-    "Tis a slightly cursed masterpiece.",
+    "'Tis a slightly cursed masterpiece.",
     "I cannot explain success.",
     "We shipped a punchline.",
     "Are we the comedian or the heckler?",
     "I doubted, it delivered.",
     "No heroics required.",
-    "We recreate the wheel — everyone loves triangles.",
+    "We recreated the wheel — everyone loves triangles.",
     "It coughed, then sprinted, then died.",
     "Mild chaos, strong finish.",
     "Tense start, clean end.",
     "Small fix, loud results.",
-    "Nobody touch it now.",
+    "Works now. Nobody touch it!",
     "This should not work.",
     "Yet here we are.",
     "Awkward but dependable.",
     "I rolled my eyes, they shipped.",
     "More luck than skill for most of us here.",
     "Still better than expected.",
-    "Wildly accepted. Barely legit",
+    "Wildly accepted. Barely legit.",
     "Clunky, but loyal.",
     "We had a bug. The bug lost.",
     "Bare minimum, maximum outcome.",
@@ -143,7 +143,7 @@ export async function register(kernel, api) {
       const showInDebug = asBool(await api?.getPluginSetting("showInDebug", "false"), false);
       if (!showInDebug) return;
       const siteThemeId = await resolveSiteThemeId(context?.siteId);
-      const traceQuote = siteThemeId === "tooty-dark" ? pickQuote(tootyDarkQuotes) : pickQuote(defaultQuotes);
+      const traceQuote = siteThemeId === "teety-dark" || siteThemeId === "tooty-dark" ? pickQuote(tootyDarkQuotes) : pickQuote(defaultQuotes);
       context.trace = [...(context.trace || []), `hello-teety: ${traceQuote}`];
     },
     30,
@@ -153,7 +153,7 @@ export async function register(kernel, api) {
     const showWidget = asBool(await api?.getPluginSetting("showWidget", "true"), true);
     if (!showWidget) return widgets;
     const siteThemeId = await resolveSiteThemeId(context?.siteId);
-    const builtinQuotes = siteThemeId === "tooty-dark" ? [...tootyDarkQuotes, ...defaultQuotes] : defaultQuotes;
+    const builtinQuotes = siteThemeId === "teety-dark" || siteThemeId === "tooty-dark" ? [...tootyDarkQuotes, ...defaultQuotes] : defaultQuotes;
     const quote = pickQuote(builtinQuotes);
     return [
       ...widgets,

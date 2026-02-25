@@ -21,9 +21,10 @@ function getTraceTier() {
 export function traceEdge(scope: string, message: string, payload?: unknown) {
   if (!isDebugModeEdge()) return;
   const tier = getTraceTier();
+  const level: "info" | "warn" | "error" = "info";
   if (payload === undefined) {
-    console.debug(`[trace:${tier}:${scope}] ${message}`);
+    console.info(`[trace:${tier}:${level}:${scope}] ${message}`);
     return;
   }
-  console.debug(`[trace:${tier}:${scope}] ${message}`, payload);
+  console.info(`[trace:${tier}:${level}:${scope}] ${message}`, payload);
 }

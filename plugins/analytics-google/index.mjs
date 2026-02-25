@@ -9,7 +9,7 @@ function envDeveloperId() {
 }
 
 export async function register(kernel, api) {
-  kernel.addFilter("analytics:scripts", async (current = []) => {
+  kernel.addFilter("domain:scripts", async (current = []) => {
     const configuredTagId = String(
       (await api?.getPluginSetting?.("tagId", "")) ||
         (await api?.getPluginSetting?.("measurementId", "")) ||

@@ -1,0 +1,36 @@
+{
+  "kind": "plugin",
+  "id": "auth-google",
+  "name": "Admin Auth Google",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables Google OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "google",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "Google Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_GOOGLE_ID env",
+      "helpText": "Optional DB override. If set with Client Secret, this overrides AUTH_GOOGLE_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "Google Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_GOOGLE_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID, this overrides AUTH_GOOGLE_SECRET."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.3.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

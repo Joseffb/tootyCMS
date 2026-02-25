@@ -2,10 +2,10 @@
 
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import db from "@/lib/db";
 import SiteAnalyticsCharts from "@/components/site-analytics";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
 
 type PageProps = {
   // Next.js is expecting params to be a Promise here
@@ -21,10 +21,8 @@ export default async function Page({ params }: PageProps) {
     redirect("/login");
   }
 
-  const site = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
-  });
-  if (!site || site.userId !== session.user.id) {
+  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.analytics.read");
+  if (!site) {
     notFound();
   }
 

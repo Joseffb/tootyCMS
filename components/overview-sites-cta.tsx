@@ -4,17 +4,27 @@ import CreateSiteModal from "./modal/create-site";
 import Link from "next/link";
 import db from "@/lib/db";
 import { sites } from "@/lib/schema";
-import { count, eq } from "drizzle-orm";
+import { count, inArray } from "drizzle-orm";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { userCan } from "@/lib/authorization";
 
 export default async function OverviewSitesCTA() {
   const session = await getSession();
   if (!session) {
     return 0;
   }
+  const canManageNetworkSites = await userCan("network.site.manage", session.user.id);
+  const accessibleSiteIds = canManageNetworkSites ? [] : await listSiteIdsForUser(session.user.id);
   const [sitesResult] = await db
     .select({ count: count() })
     .from(sites)
-    .where(eq(sites.userId, session.user.id));
+    .where(
+      canManageNetworkSites
+        ? undefined
+        : accessibleSiteIds.length
+          ? inArray(sites.id, accessibleSiteIds)
+          : inArray(sites.id, ["__none__"]),
+    );
 
   return sitesResult.count > 0 ? (
     <Link

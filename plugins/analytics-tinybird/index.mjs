@@ -69,7 +69,7 @@ function withJsonContentType(res) {
 }
 
 export async function register(kernel, api) {
-  kernel.addFilter("analytics:query", async (current, context = {}) => {
+  kernel.addFilter("domain:query", async (current, context = {}) => {
     if (current) return current;
     if (!shouldHandleProvider(context, providerKey())) return current;
 
@@ -100,7 +100,7 @@ export async function register(kernel, api) {
     }
   });
 
-  kernel.addAction("analytics:event", async (event = {}) => {
+  kernel.addAction("domain:event", async (event = {}) => {
     if (!shouldForwardEvent(event)) return;
 
     const token = String((await api?.getPluginSetting?.("ingestToken", ingestToken())) || "").trim();

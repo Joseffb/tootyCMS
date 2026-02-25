@@ -42,7 +42,9 @@ Optional:
     "adminExtensions": true,
     "contentTypes": false,
     "serverHandlers": false,
-    "scheduleJobs": false
+    "scheduleJobs": false,
+    "communicationProviders": false,
+    "webCallbacks": false
   },
   "menu": { "label": "Dev Tools", "path": "/app/plugins/dev-tools" },
   "settingsFields": [
@@ -78,6 +80,8 @@ If `index.mjs` exports `register(kernel, api)`, it is invoked during kernel boot
 - `updateSchedule(scheduleId, input)`
 - `deleteSchedule(scheduleId)`
 - `registerScheduleHandler({ id, run })` (requires `capabilities.scheduleJobs=true`)
+- `registerCommunicationProvider({ id, channels, deliver })` (requires `capabilities.communicationProviders=true`)
+- `registerWebcallbackHandler({ id, handle })` (requires `capabilities.webCallbacks=true`)
 
 Example:
 
@@ -99,6 +103,51 @@ export async function register(kernel) {
 ## Dashboard integration
 
 Plugins with a `menu` object are surfaced in dashboard nav via `/api/plugins/menu` when enabled.
+
+## Scope + Distribution
+
+Plugin scope and origin are separate:
+
+- `scope: "network" | "site"` controls governance/activation model
+- `distribution: "core" | "community"` is metadata (origin tag only)
+
+Behavior:
+
+- `network` scope plugins are network-governed and treated as network-required when enabled.
+- `site` scope plugins are site-activatable, and may be forced network-wide via global `networkRequired`.
+
+## Global vs Site Control Surfaces
+
+Global plugin page (`/app/settings/plugins`):
+
+- network-admin surface
+- supports `Installed` and `Community` tabs
+- global enabled acts as gate/default for site plugins
+- `Network` toggle can force a site plugin across sites (`networkRequired`)
+
+Site plugin page (`/app/site/[id]/settings/plugins`):
+
+- single-site mode:
+  - acts as primary control surface
+  - supports `Active` and `Community` tabs
+  - updates global + site activation together
+- multisite mode:
+  - installed view only (community hidden)
+  - shows globally enabled plugins
+  - site admin can toggle site activation except network-required plugins
+  - network admin can disable a network-required plugin for a specific site from site plugin screen
+
+## UI Filtering
+
+Installed/active list filters:
+
+- global page: `View All`, `View Installed`, `View Uninstalled`
+- site page: `View All`, `View Active`, `View Uninstalled`
+
+Bulk actions:
+
+- `Enable All`
+- `Disable All`
 
 ## Guardrails
 
@@ -123,6 +172,8 @@ Plugin capabilities are enforced at runtime:
 - `serverHandlers`: required for `api.registerServerHandler(...)`
 - `authExtensions`: required for experimental auth extension surfaces
 - `scheduleJobs`: required for scheduler APIs and `registerScheduleHandler(...)`
+- `communicationProviders`: required for communication transport registration
+- `webCallbacks`: required for first-class callback handler registration
 
 If a plugin attempts a gated operation without declaring the capability, Core throws a `[plugin-guard]` error.
 

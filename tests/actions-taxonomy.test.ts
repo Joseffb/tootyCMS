@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { dbMock, getSessionMock } = vi.hoisted(() => {
+const { dbMock, getSessionMock, canUserMutateDomainPostMock, userCanMock } = vi.hoisted(() => {
   const selectQueue: any[] = [];
   const insertQueue: any[] = [];
   const deleteQueue: any[] = [];
@@ -51,6 +51,11 @@ const { dbMock, getSessionMock } = vi.hoisted(() => {
   return {
     dbMock,
     getSessionMock: vi.fn(async () => ({ user: { id: "user-1" } })),
+    canUserMutateDomainPostMock: vi.fn(async () => ({
+      allowed: true,
+      post: { id: "post-1", userId: "user-1", siteId: "site-1", slug: "post-1" },
+    })),
+    userCanMock: vi.fn(async () => true),
   };
 });
 
@@ -62,6 +67,11 @@ vi.mock("@/lib/auth", () => ({
   getSession: getSessionMock,
   withSiteAuth: (handler: any) => handler,
   withPostAuth: (handler: any) => handler,
+}));
+
+vi.mock("@/lib/authorization", () => ({
+  canUserMutateDomainPost: canUserMutateDomainPostMock,
+  userCan: userCanMock,
 }));
 
 vi.mock("next/cache", () => ({
@@ -90,6 +100,8 @@ describe("taxonomy actions", () => {
     dbMock.transaction.mockClear();
     dbMock.query.domainPosts.findFirst.mockClear();
     dbMock.query.sites.findFirst.mockClear();
+    canUserMutateDomainPostMock.mockClear();
+    userCanMock.mockClear();
   });
 
   it("returns category taxonomy list", async () => {

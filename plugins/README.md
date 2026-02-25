@@ -26,7 +26,8 @@ Before opening a PR, your plugin must pass CI and follow the required rules belo
 - `description`
 - `version`
 - `minCoreVersion`
-- `scope` (`core|site|network`)
+- `scope` (`site|network`)
+- `distribution` (`core|community`)
 - `developer`
 - `website`
 - `capabilities`
@@ -54,6 +55,7 @@ Before opening a PR, your plugin must pass CI and follow the required rules belo
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
   "scope": "site",
+  "distribution": "community",
   "capabilities": {
     "hooks": true,
     "adminExtensions": false,
@@ -95,4 +97,3 @@ npm run ci
 This repo runs GitHub Actions for:
 - Plugin contract validation
 - Security scan (secrets + suspicious patterns)
-

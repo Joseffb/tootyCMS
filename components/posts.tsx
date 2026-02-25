@@ -3,8 +3,9 @@ import db from "@/lib/db";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 import DomainPostCard from "./domain-post-card";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { dataDomains } from "@/lib/schema";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 
 export default async function Posts({
   siteId,
@@ -24,12 +25,14 @@ export default async function Posts({
   });
   if (!domain) return null;
 
+  const accessibleSiteIds = await listSiteIdsForUser(session.user.id);
+  if (!siteId && accessibleSiteIds.length === 0) return null;
+
   const rows = await db.query.domainPosts.findMany({
     where: (table, { and, eq }) =>
       and(
-        eq(table.userId, session.user.id),
         eq(table.dataDomainId, domain.id),
-        siteId ? eq(table.siteId, siteId) : undefined,
+        siteId ? eq(table.siteId, siteId) : inArray(table.siteId, accessibleSiteIds),
       ),
     with: {
       site: true,

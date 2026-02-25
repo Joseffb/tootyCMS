@@ -3,11 +3,18 @@ import GitHubProvider from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
 import FacebookProvider from "next-auth/providers/facebook";
 import AppleProvider from "next-auth/providers/apple";
+import CredentialsProvider from "next-auth/providers/credentials";
 import db from "./db";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { Adapter } from "next-auth/adapters";
 import { eq, inArray } from "drizzle-orm";
 import { accounts, cmsSettings, sessions, users, verificationTokens } from "./schema";
+import { verifyPassword } from "@/lib/password";
+import { AUTH_PLUGIN_PROVIDER_MAP } from "@/lib/auth-provider-plugins";
+import { NETWORK_ADMIN_ROLE, type SiteCapability } from "@/lib/rbac";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { getUserMetaValue } from "@/lib/user-meta";
+import { cookies } from "next/headers";
 import {
   DefaultPostgresAccountsTable,
   DefaultPostgresSessionsTable,
@@ -15,15 +22,85 @@ import {
 } from "@auth/drizzle-adapter/lib/pg";
 
 const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
-const providers: NextAuthOptions["providers"] = [];
+export const MIMIC_ACTOR_COOKIE = "tooty_mimic_actor";
+export const MIMIC_TARGET_COOKIE = "tooty_mimic_target";
 const SUPPORTED_OAUTH_PROVIDERS = ["github", "google", "facebook", "apple"] as const;
 type OAuthProviderId = (typeof SUPPORTED_OAUTH_PROVIDERS)[number];
+const PROVIDER_TO_PLUGIN: Record<OAuthProviderId, keyof typeof AUTH_PLUGIN_PROVIDER_MAP> = {
+  github: "auth-github",
+  google: "auth-google",
+  facebook: "auth-facebook",
+  apple: "auth-apple",
+};
 
-function isProviderConfigured(id: OAuthProviderId) {
-  if (id === "github") return !!(process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET);
-  if (id === "google") return !!(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET);
-  if (id === "facebook") return !!(process.env.AUTH_FACEBOOK_ID && process.env.AUTH_FACEBOOK_SECRET);
-  return !!(process.env.AUTH_APPLE_ID && process.env.AUTH_APPLE_SECRET);
+type OAuthProviderRuntimeConfig = {
+  clientId: string;
+  clientSecret: string;
+  source: "db" | "env" | "none";
+};
+
+const OAUTH_ENV_KEYS: Record<OAuthProviderId, { id: string; secret: string }> = {
+  github: { id: "AUTH_GITHUB_ID", secret: "AUTH_GITHUB_SECRET" },
+  google: { id: "AUTH_GOOGLE_ID", secret: "AUTH_GOOGLE_SECRET" },
+  facebook: { id: "AUTH_FACEBOOK_ID", secret: "AUTH_FACEBOOK_SECRET" },
+  apple: { id: "AUTH_APPLE_ID", secret: "AUTH_APPLE_SECRET" },
+};
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function getOauthProviderRuntimeConfig() {
+  const configKeys = SUPPORTED_OAUTH_PROVIDERS.map(
+    (id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_config`,
+  );
+  const rows = await db
+    .select({ key: cmsSettings.key, value: cmsSettings.value })
+    .from(cmsSettings)
+    .where(inArray(cmsSettings.key, configKeys));
+
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const runtime = {} as Record<OAuthProviderId, OAuthProviderRuntimeConfig>;
+
+  for (const providerId of SUPPORTED_OAUTH_PROVIDERS) {
+    const pluginId = PROVIDER_TO_PLUGIN[providerId];
+    const config = parseJsonObject(byKey[`plugin_${pluginId}_config`]);
+    const dbClientId = String(config.clientId || "").trim();
+    const dbClientSecret = String(config.clientSecret || "").trim();
+    if (dbClientId && dbClientSecret) {
+      runtime[providerId] = {
+        clientId: dbClientId,
+        clientSecret: dbClientSecret,
+        source: "db",
+      };
+      continue;
+    }
+
+    const envClientId = String(process.env[OAUTH_ENV_KEYS[providerId].id] || "").trim();
+    const envClientSecret = String(process.env[OAUTH_ENV_KEYS[providerId].secret] || "").trim();
+    if (envClientId && envClientSecret) {
+      runtime[providerId] = {
+        clientId: envClientId,
+        clientSecret: envClientSecret,
+        source: "env",
+      };
+      continue;
+    }
+
+    runtime[providerId] = {
+      clientId: "",
+      clientSecret: "",
+      source: "none",
+    };
+  }
+
+  return runtime;
 }
 
 async function getOauthProviderFlags() {
@@ -33,7 +110,7 @@ async function getOauthProviderFlags() {
     .where(
       inArray(
         cmsSettings.key,
-        SUPPORTED_OAUTH_PROVIDERS.map((id) => `oauth_provider_${id}_enabled`),
+        SUPPORTED_OAUTH_PROVIDERS.map((id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`),
       ),
     );
 
@@ -45,9 +122,11 @@ async function getOauthProviderFlags() {
   };
 
   for (const id of SUPPORTED_OAUTH_PROVIDERS) {
-    const row = rows.find((item) => item.key === `oauth_provider_${id}_enabled`);
+    const row = rows.find((item) => item.key === `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`);
     if (row) {
       result[id] = row.value === "true";
+    } else {
+      result[id] = false;
     }
   }
   return result;
@@ -61,196 +140,292 @@ async function getBootstrapAdminEmail() {
   return row?.value?.trim().toLowerCase() || "";
 }
 
-if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) {
+function fallbackOauthRuntimeConfig(): Record<OAuthProviderId, OAuthProviderRuntimeConfig> {
+  return {
+    github: {
+      clientId: String(process.env.AUTH_GITHUB_ID || ""),
+      clientSecret: String(process.env.AUTH_GITHUB_SECRET || ""),
+      source: "env",
+    },
+    google: {
+      clientId: String(process.env.AUTH_GOOGLE_ID || ""),
+      clientSecret: String(process.env.AUTH_GOOGLE_SECRET || ""),
+      source: "env",
+    },
+    facebook: {
+      clientId: String(process.env.AUTH_FACEBOOK_ID || ""),
+      clientSecret: String(process.env.AUTH_FACEBOOK_SECRET || ""),
+      source: "env",
+    },
+    apple: {
+      clientId: String(process.env.AUTH_APPLE_ID || ""),
+      clientSecret: String(process.env.AUTH_APPLE_SECRET || ""),
+      source: "env",
+    },
+  };
+}
+
+export async function enforceOauthAccountLinkingPolicy(input: {
+  providerId: OAuthProviderId;
+  providerAccountId: string;
+  oauthEmail?: string | null;
+  oauthUserId?: string | null;
+}) {
+  const providerId = input.providerId;
+  const providerAccountId = String(input.providerAccountId || "").trim();
+  const oauthEmail = String(input.oauthEmail || "").trim().toLowerCase();
+  const oauthUserId = String(input.oauthUserId || "").trim();
+
+  if (!providerAccountId) {
+    return {
+      allow: false as const,
+      error: "Missing OAuth provider account identifier.",
+    };
+  }
+
+  const linkedAccount = await db.query.accounts.findFirst({
+    where: (table, { and, eq }) =>
+      and(eq(table.provider, providerId), eq(table.providerAccountId, providerAccountId)),
+    columns: { userId: true },
+  });
+  if (linkedAccount) {
+    // Account is already linked in adapter table. Allow sign-in.
+    return { allow: true as const };
+  }
+
+  // No linked account exists yet. Refuse unsafe email auto-linking to existing users.
+  if (!oauthEmail) {
+    return {
+      allow: false as const,
+      error: "OAuth provider did not return an email for account linking.",
+    };
+  }
+
+  const existingUserByEmail = await db.query.users.findFirst({
+    where: (table, { eq }) => eq(table.email, oauthEmail),
+    columns: { id: true, authProvider: true },
+  });
+  if (existingUserByEmail) {
+    const sameUser = oauthUserId && existingUserByEmail.id === oauthUserId;
+    if (!sameUser) {
+      return {
+        allow: false as const,
+        error: "OAuth account is not linked for this email. Sign in natively first.",
+      };
+    }
+  }
+
+  return { allow: true as const };
+}
+
+function buildProviders(
+  oauthRuntime: Record<OAuthProviderId, OAuthProviderRuntimeConfig>,
+): NextAuthOptions["providers"] {
+  const providers: NextAuthOptions["providers"] = [];
+
+  if (oauthRuntime.github.clientId && oauthRuntime.github.clientSecret) {
+    providers.push(
+      GitHubProvider({
+        clientId: oauthRuntime.github.clientId,
+        clientSecret: oauthRuntime.github.clientSecret,
+        profile(profile) {
+          return {
+            id: profile.id.toString(),
+            name: profile.name || profile.login,
+            gh_username: profile.login,
+            email: profile.email,
+            image: profile.avatar_url,
+          };
+        },
+      }),
+    );
+  }
+
+  if (oauthRuntime.google.clientId && oauthRuntime.google.clientSecret) {
+    providers.push(
+      GoogleProvider({
+        clientId: oauthRuntime.google.clientId,
+        clientSecret: oauthRuntime.google.clientSecret,
+      }),
+    );
+  }
+
+  if (oauthRuntime.facebook.clientId && oauthRuntime.facebook.clientSecret) {
+    providers.push(
+      FacebookProvider({
+        clientId: oauthRuntime.facebook.clientId,
+        clientSecret: oauthRuntime.facebook.clientSecret,
+      }),
+    );
+  }
+
+  if (oauthRuntime.apple.clientId && oauthRuntime.apple.clientSecret) {
+    providers.push(
+      AppleProvider({
+        clientId: oauthRuntime.apple.clientId,
+        clientSecret: oauthRuntime.apple.clientSecret,
+      }),
+    );
+  }
+
   providers.push(
-    GitHubProvider({
-      clientId: process.env.AUTH_GITHUB_ID,
-      clientSecret: process.env.AUTH_GITHUB_SECRET,
-      profile(profile) {
+    CredentialsProvider({
+      id: "native",
+      name: "Native",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        const email = String(credentials?.email || "").trim().toLowerCase();
+        const password = String(credentials?.password || "");
+        if (!email || !password) return null;
+        const user = await db.query.users.findFirst({
+          where: (table, { eq }) => eq(table.email, email),
+          columns: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+            username: true,
+            gh_username: true,
+            passwordHash: true,
+          },
+        });
+        if (!user || !user.passwordHash) return null;
+        const valid = await verifyPassword(password, user.passwordHash);
+        if (!valid) return null;
         return {
-          id: profile.id.toString(),
-          name: profile.name || profile.login,
-          gh_username: profile.login,
-          email: profile.email,
-          image: profile.avatar_url,
+          id: user.id,
+          name: user.name ?? user.email,
+          email: user.email,
+          image: user.image ?? null,
+          username: user.username ?? user.gh_username ?? null,
         };
       },
     }),
   );
+
+  return providers;
 }
 
-if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
-  providers.push(
-    GoogleProvider({
-      clientId: process.env.AUTH_GOOGLE_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET,
-    }),
-  );
-}
+export async function getAuthOptions(): Promise<NextAuthOptions> {
+  const oauthRuntime =
+    (await getOauthProviderRuntimeConfig().catch(() => null)) ?? fallbackOauthRuntimeConfig();
 
-if (process.env.AUTH_FACEBOOK_ID && process.env.AUTH_FACEBOOK_SECRET) {
-  providers.push(
-    FacebookProvider({
-      clientId: process.env.AUTH_FACEBOOK_ID,
-      clientSecret: process.env.AUTH_FACEBOOK_SECRET,
-    }),
-  );
-}
+  return {
+    providers: buildProviders(oauthRuntime),
+    pages: {
+      signIn: `/login`,
+      verifyRequest: `/login`,
+      error: "/login", // Error code passed in query string as ?error=
+    },
 
-if (process.env.AUTH_APPLE_ID && process.env.AUTH_APPLE_SECRET) {
-  providers.push(
-    AppleProvider({
-      clientId: process.env.AUTH_APPLE_ID,
-      clientSecret: process.env.AUTH_APPLE_SECRET,
-    }),
-  );
-}
-
-export const authOptions: NextAuthOptions = {
-  providers,
-  pages: {
-    signIn: `/login`,
-    verifyRequest: `/login`,
-    error: "/login", // Error code passed in query string as ?error=
-  },
-
-  adapter: DrizzleAdapter(db, {
-    authenticatorsTable: undefined,
-    usersTable: users as unknown as DefaultPostgresUsersTable,
-    accountsTable: accounts as unknown as DefaultPostgresAccountsTable,
-    sessionsTable: sessions as unknown as DefaultPostgresSessionsTable,
-    verificationTokensTable:
-      verificationTokens as unknown as DefaultPostgresVerificationTokenTable,
-  }) as Adapter,
-  session: { strategy: "jwt" },
-  cookies: {
-    sessionToken: {
-      name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        // When working on localhost, the cookie domain must be omitted entirely (https://stackoverflow.com/a/1188145)
-        domain: VERCEL_DEPLOYMENT
-          ? `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`
-          : undefined,
-        secure: VERCEL_DEPLOYMENT,
+    adapter: DrizzleAdapter(db, {
+      authenticatorsTable: undefined,
+      usersTable: users as unknown as DefaultPostgresUsersTable,
+      accountsTable: accounts as unknown as DefaultPostgresAccountsTable,
+      sessionsTable: sessions as unknown as DefaultPostgresSessionsTable,
+      verificationTokensTable:
+        verificationTokens as unknown as DefaultPostgresVerificationTokenTable,
+    }) as Adapter,
+    session: { strategy: "jwt" },
+    cookies: {
+      sessionToken: {
+        name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
+        options: {
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/",
+          // When working on localhost, the cookie domain must be omitted entirely (https://stackoverflow.com/a/1188145)
+          domain: VERCEL_DEPLOYMENT
+            ? `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`
+            : undefined,
+          secure: VERCEL_DEPLOYMENT,
+        },
       },
     },
-  },
-  callbacks: {
-    signIn: async ({ account, user }) => {
-      const providerId = account?.provider as OAuthProviderId | undefined;
-      if (!providerId || !SUPPORTED_OAUTH_PROVIDERS.includes(providerId)) {
-        return true;
-      }
-
-      const flags = await getOauthProviderFlags();
-      if (!flags[providerId]) {
-        return "/login?error=OAuth provider disabled by admin";
-      }
-
-      const bootstrapAdminEmail = await getBootstrapAdminEmail();
-      if (bootstrapAdminEmail) {
-        const userEmail = user.email?.trim().toLowerCase() || "";
-        const anyUser = await db.query.users.findFirst({ columns: { id: true } });
-        if (!anyUser && userEmail !== bootstrapAdminEmail) {
-          return "/login?error=Use the setup admin email for first login";
+    callbacks: {
+      signIn: async ({ account, user }) => {
+        if (account?.provider === "native" && user?.id) {
+          const mustRotate = await getUserMetaValue(String(user.id), "force_password_change");
+          if (mustRotate === "true") {
+            return "/settings/profile?forcePasswordChange=1";
+          }
+          return true;
         }
-      }
-      return true;
-    },
-    jwt: async ({ token, user }) => {
-      if (user) {
-        token.user = user;
-      }
-      return token;
-    },
-    session: async ({ session, token }) => {
-      let userRole = token.sub
-        ? await db.query.users.findFirst({
-            where: (users, { eq }) => eq(users.id, token.sub!),
-            columns: { role: true },
-          })
-        : null;
+        if (account?.provider === "native") return true;
+        const providerId = account?.provider as OAuthProviderId | undefined;
+        if (!providerId || !SUPPORTED_OAUTH_PROVIDERS.includes(providerId)) {
+          return true;
+        }
 
-      if (!userRole && token.sub && session.user?.email) {
-        const anyUser = await db.query.users.findFirst({
-          columns: { id: true },
+        const flags = await getOauthProviderFlags();
+        if (!flags[providerId]) {
+          return "/login?error=OAuth provider disabled by admin";
+        }
+        const linking = await enforceOauthAccountLinkingPolicy({
+          providerId,
+          providerAccountId: String(account?.providerAccountId || ""),
+          oauthEmail: user.email,
+          oauthUserId: user.id,
         });
-        await db
-          .insert(users)
-          .values({
-            id: token.sub,
-            email: session.user.email.toLowerCase(),
-            name: session.user.name ?? null,
-            image: session.user.image ?? null,
-            role: anyUser ? "author" : "administrator",
-          })
-          .onConflictDoNothing();
-
-        userRole = await db.query.users.findFirst({
-          where: (users, { eq }) => eq(users.id, token.sub!),
-          columns: { role: true },
-        });
-      }
-
-      const anyAdmin = await db.query.users.findFirst({
-        where: (users, { eq }) => eq(users.role, "administrator"),
-        columns: { id: true },
-      });
-      if (!anyAdmin && token.sub) {
-        await db
-          .update(users)
-          .set({ role: "administrator" })
-          .where(eq(users.id, token.sub));
-        userRole = { role: "administrator" };
-      }
-
-      if (token.sub && session.user?.email) {
+        if (!linking.allow) {
+          return `/login?error=${encodeURIComponent(linking.error)}`;
+        }
         const bootstrapAdminEmail = await getBootstrapAdminEmail();
-        if (bootstrapAdminEmail && session.user.email.toLowerCase() === bootstrapAdminEmail) {
-          await db
-            .update(users)
-            .set({ role: "administrator" })
-            .where(eq(users.id, token.sub));
-          userRole = { role: "administrator" };
+        if (bootstrapAdminEmail) {
+          const userEmail = user.email?.trim().toLowerCase() || "";
+          const anyUser = await db.query.users.findFirst({ columns: { id: true } });
+          if (!anyUser && userEmail !== bootstrapAdminEmail) {
+            return "/login?error=Use the setup admin email for first login";
+          }
         }
-      }
-      session.user = {
-        ...session.user,
-        // @ts-expect-error
-        id: token.sub,
-        // @ts-expect-error
-        username: token?.user?.username || token?.user?.gh_username,
-        role: userRole?.role ?? "author",
-      };
-      return session;
+        return true;
+      },
+      jwt: async ({ token, user }) => {
+        if (user) {
+          token.user = user;
+        }
+        if (token.sub) {
+          const mustRotate = await getUserMetaValue(token.sub, "force_password_change");
+          (token as any).forcePasswordChange = mustRotate === "true";
+        } else {
+          (token as any).forcePasswordChange = false;
+        }
+        return token;
+      },
+      session: async ({ session, token }) => {
+        const userRole = token.sub
+          ? await db.query.users.findFirst({
+              where: (users, { eq }) => eq(users.id, token.sub!),
+              columns: { role: true },
+            })
+          : null;
+        session.user = {
+          ...session.user,
+          // @ts-expect-error
+          id: token.sub,
+          // @ts-expect-error
+          username: token?.user?.username || token?.user?.gh_username,
+          role: userRole?.role ?? "author",
+          forcePasswordChange: Boolean((token as any)?.forcePasswordChange),
+        };
+        return session;
+      },
     },
-  },
-  events: {
-    error: async (message: unknown) => {
-      console.error("NextAuth error event:", message);
-    },
-    createUser: async ({ user }: { user: { id?: string } }) => {
-      if (!user?.id) return;
-      const firstUser = await db.query.users.findFirst({
-        columns: { id: true },
-        orderBy: (users, { asc }) => [asc(users.createdAt)],
-      });
-      if (firstUser?.id === user.id) {
-        await db
-          .update(users)
-          .set({ role: "administrator" })
-          .where(eq(users.id, user.id));
-      }
-    },
-  } as any, // casting as any to bypass TS type checking for events
+    events: {
+      error: async (message: unknown) => {
+        console.error("NextAuth error event:", message);
+      },
+      createUser: async () => {},
+    } as any, // casting as any to bypass TS type checking for events
+  };
+}
 
-};
-
-export function getSession() {
-  return getServerSession(authOptions) as Promise<{
+export async function getSession() {
+  const authOptions = await getAuthOptions();
+  const baseSession = await (getServerSession(authOptions) as Promise<{
     user: {
       id: string;
       name: string;
@@ -259,10 +434,47 @@ export function getSession() {
       email: string;
       image: string;
     };
-  } | null>;
+  } | null>);
+  if (!baseSession?.user?.id) return baseSession;
+
+  const store = await cookies();
+  const actorId = String(store.get(MIMIC_ACTOR_COOKIE)?.value || "").trim();
+  const targetId = String(store.get(MIMIC_TARGET_COOKIE)?.value || "").trim();
+  if (!actorId || !targetId || actorId !== baseSession.user.id || targetId === actorId) {
+    return baseSession;
+  }
+
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetId),
+    columns: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+      role: true,
+    },
+  });
+  if (!target) return baseSession;
+
+  return {
+    ...baseSession,
+    user: {
+      ...baseSession.user,
+      id: target.id,
+      name: target.name ?? target.email,
+      email: target.email,
+      image: target.image ?? baseSession.user.image,
+      role: target.role ?? "author",
+      username: (baseSession.user as any).username,
+      mimicActorId: actorId,
+      mimicTargetId: target.id,
+      mimicActorName: baseSession.user.name,
+      mimicActorEmail: baseSession.user.email,
+    } as any,
+  };
 }
 
-export function withSiteAuth(action: any) {
+export function withSiteAuth(action: any, capability: SiteCapability = "network.site.manage") {
   return async (
     formData: FormData | null,
     siteId: string,
@@ -275,11 +487,8 @@ export function withSiteAuth(action: any) {
       };
     }
 
-    const site = await db.query.sites.findFirst({
-      where: (sites, { eq }) => eq(sites.id, siteId),
-    });
-
-    if (!site || site.userId !== session.user.id) {
+    const site = await getAuthorizedSiteForUser(session.user.id, siteId, capability);
+    if (!site) {
       return {
         error: "Not authorized",
       };

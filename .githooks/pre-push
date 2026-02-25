@@ -2,5 +2,6 @@
 set -euo pipefail
 
 echo "Running pre-push test gate..."
+npm run scan:secrets
 npm run test
 npm run test:integration

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
 import { and, eq } from "drizzle-orm";
-import { dataDomains, domainPosts, sites } from "../../lib/schema";
+import { dataDomains, domainPosts, sites, users } from "../../lib/schema";
 
 const db = drizzle(sql);
 const runId = `e2e-record-${Date.now()}`;
@@ -14,18 +14,60 @@ let postDomainId = 0;
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
-  const siteRows = await db
+  let siteRows = await db
     .select({ id: sites.id, subdomain: sites.subdomain, customDomain: sites.customDomain })
     .from(sites)
     .where(eq(sites.isPrimary, true))
     .limit(1);
 
   if (!siteRows[0]) {
-    throw new Error("Primary site not found for record lifecycle e2e.");
+    const userId = `${runId}-user`;
+    await db
+      .insert(users)
+      .values({
+        id: userId,
+        email: `${runId}@example.com`,
+        name: "E2E Record User",
+        role: "administrator",
+      })
+      .onConflictDoNothing();
+    await db
+      .insert(sites)
+      .values({
+        id: `${runId}-site`,
+        userId,
+        name: "Main Site",
+        subdomain: "main",
+        isPrimary: true,
+      })
+      .onConflictDoNothing();
+    siteRows = await db
+      .select({ id: sites.id, subdomain: sites.subdomain, customDomain: sites.customDomain })
+      .from(sites)
+      .where(eq(sites.isPrimary, true))
+      .limit(1);
   }
+  if (!siteRows[0]) throw new Error("Primary site not found for record lifecycle e2e.");
 
   mainSiteId = siteRows[0].id;
-  const domainRows = await db.select({ id: dataDomains.id }).from(dataDomains).where(eq(dataDomains.key, "post")).limit(1);
+  let domainRows = await db.select({ id: dataDomains.id }).from(dataDomains).where(eq(dataDomains.key, "post")).limit(1);
+  if (!domainRows[0]) {
+    await db
+      .insert(dataDomains)
+      .values({
+        key: "post",
+        label: "Post",
+        contentTable: "tooty_posts",
+        metaTable: "tooty_post_meta",
+        description: "Default core post type",
+      })
+      .onConflictDoNothing();
+    domainRows = await db
+      .select({ id: dataDomains.id })
+      .from(dataDomains)
+      .where(eq(dataDomains.key, "post"))
+      .limit(1);
+  }
   if (!domainRows[0]) throw new Error("Post data domain not found for record lifecycle e2e.");
   postDomainId = domainRows[0].id;
 });

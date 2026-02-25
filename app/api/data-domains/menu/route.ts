@@ -1,9 +1,7 @@
 import { getAllDataDomains } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
 import { pluralizeLabel, singularizeLabel } from "@/lib/data-domain-labels";
-import { sites } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { canUserCreateDomainContent } from "@/lib/authorization";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -17,11 +15,8 @@ export async function GET(request: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ items: [] });
   }
-  const site = await db.query.sites.findFirst({
-    where: eq(sites.id, siteId),
-    columns: { userId: true },
-  });
-  if (!site || site.userId !== session.user.id) {
+  const canAccess = await canUserCreateDomainContent(session.user.id, siteId);
+  if (!canAccess) {
     return NextResponse.json({ items: [] });
   }
 

@@ -1,10 +1,11 @@
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
 import { notFound, redirect } from "next/navigation";
 import CatalogTabs from "@/components/catalog-tabs";
 import {
+  getAvailablePlugins,
   listPluginsWithSiteState,
-  setPluginMustUse,
+  savePluginConfig,
+  setPluginNetworkRequired,
   saveSitePluginConfig,
   setPluginEnabled,
   setSitePluginEnabled,
@@ -16,34 +17,44 @@ import {
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
+import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
+import ConfirmSubmitButton from "@/components/confirm-submit-button";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ tab?: string; q?: string; error?: string }>;
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
 };
 
 export default async function SitePluginSettingsPage({ params, searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
+  const canManageNetworkPlugins = await userCan("network.plugins.manage", session.user.id);
   const paramsQuery = (await searchParams) || {};
   const requestedTab = paramsQuery.tab === "discover" ? "discover" : "installed";
   const query = String(paramsQuery.q || "");
   const errorCode = String(paramsQuery.error || "");
+  const view = paramsQuery.view === "installed" || paramsQuery.view === "uninstalled" ? paramsQuery.view : "all";
 
   const id = decodeURIComponent((await params).id);
-  const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
-  if (!site || site.userId !== session.user.id) notFound();
+  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
+  if (!site) notFound();
   const siteId = site.id;
-  const ownedSites = await db.query.sites.findMany({
-    where: (sites, { eq }) => eq(sites.userId, session.user.id),
-    columns: { id: true },
-  });
-  const singleSiteMode = ownedSites.length === 1;
+  const siteIds = await listSiteIdsForUser(session.user.id);
+  const singleSiteMode = siteIds.length === 1;
   const activeTab = singleSiteMode ? requestedTab : "installed";
 
-  const plugins = (await listPluginsWithSiteState(site.id)).filter(
-    (plugin) => (plugin.scope || "site") === "site",
-  );
+  const pluginsAll = await listPluginsWithSiteState(site.id);
+  const plugins = singleSiteMode
+    ? pluginsAll
+    : pluginsAll.filter((plugin) => plugin.enabled);
+  const visiblePlugins = plugins.filter((plugin) => {
+    const active = singleSiteMode ? plugin.enabled : plugin.siteEnabled;
+    if (view === "installed") return active;
+    if (view === "uninstalled") return !active;
+    return true;
+  });
+  const showNetworkColumn = visiblePlugins.some((plugin) => plugin.networkRequired);
   const installedIds = await listLocalInstalledIds("plugin");
   let discoverEntries: Awaited<ReturnType<typeof listRepoCatalog>> = [];
   let discoverError = "";
@@ -61,13 +72,29 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     const siteId = String(formData.get("siteId") || "");
     const pluginId = String(formData.get("pluginId") || "");
     const enabled = formData.get("enabled") === "on";
-    const mustUse = formData.get("mustUse") === "on";
     if (!siteId || !pluginId) return;
+    const currentPluginState = pluginsAll.find((entry) => entry.id === pluginId);
+    const mustUseInput = formData.get("networkRequired");
+    const hasNetworkRequiredInput = formData.has("networkRequired");
+    const networkRequired = currentPluginState?.scope === "network"
+      ? enabled
+      : mustUseInput === null
+        ? Boolean(currentPluginState?.networkRequired)
+        : mustUseInput === "on";
     if (singleSiteMode) {
       await setPluginEnabled(pluginId, enabled);
-      await setPluginMustUse(pluginId, mustUse);
+      await setPluginNetworkRequired(pluginId, networkRequired);
+      await setSitePluginEnabled(siteId, pluginId, enabled || networkRequired);
+    } else {
+      if (hasNetworkRequiredInput && canManageNetworkPlugins) {
+        await setPluginNetworkRequired(pluginId, networkRequired);
+      }
+      if (currentPluginState?.networkRequired && !canManageNetworkPlugins) return;
+      const effectiveNetworkRequired = hasNetworkRequiredInput && canManageNetworkPlugins
+        ? networkRequired
+        : Boolean(currentPluginState?.networkRequired);
+      await setSitePluginEnabled(siteId, pluginId, enabled || effectiveNetworkRequired);
     }
-    await setSitePluginEnabled(siteId, pluginId, enabled);
     revalidatePath(`/site/${siteId}/settings/plugins`);
     revalidatePath(`/app/site/${siteId}/settings/plugins`);
     if (singleSiteMode) {
@@ -82,16 +109,27 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     const pluginId = String(formData.get("pluginId") || "");
     if (!siteId || !pluginId) return;
     const plugin = (await listPluginsWithSiteState(siteId)).find((entry) => entry.id === pluginId);
-    if (!plugin || plugin.mustUse) return;
+    if (!plugin || plugin.networkRequired) return;
 
     const nextConfig: Record<string, unknown> = {};
     for (const field of plugin.settingsFields || []) {
       nextConfig[field.key] = field.type === "checkbox" ? formData.get(field.key) === "on" : String(formData.get(field.key) || "");
     }
 
-    await saveSitePluginConfig(siteId, pluginId, nextConfig);
+    if (singleSiteMode) {
+      await savePluginConfig(pluginId, nextConfig);
+      if ((plugin.scope || "site") === "site") {
+        await saveSitePluginConfig(siteId, pluginId, nextConfig);
+      }
+    } else {
+      await saveSitePluginConfig(siteId, pluginId, nextConfig);
+    }
     revalidatePath(`/site/${siteId}/settings/plugins`);
     revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    if (singleSiteMode) {
+      revalidatePath("/settings/plugins");
+      revalidatePath("/app/settings/plugins");
+    }
   }
 
   async function installPlugin(formData: FormData) {
@@ -109,6 +147,32 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     revalidatePath("/app/settings/plugins");
   }
 
+  async function bulkToggleForSite(formData: FormData) {
+    "use server";
+    const siteId = String(formData.get("siteId") || "");
+    const mode = String(formData.get("mode") || "");
+    const nextEnabled = mode === "enable";
+    if (!siteId) return;
+    const all = await getAvailablePlugins();
+    const byId = new Map((await listPluginsWithSiteState(siteId)).map((plugin) => [plugin.id, plugin]));
+    for (const plugin of all) {
+      if (singleSiteMode) {
+        await setPluginEnabled(plugin.id, nextEnabled);
+        await setPluginNetworkRequired(
+          plugin.id,
+          plugin.scope === "network" ? nextEnabled : Boolean(byId.get(plugin.id)?.networkRequired),
+        );
+      }
+      await setSitePluginEnabled(siteId, plugin.id, nextEnabled);
+    }
+    revalidatePath(`/site/${siteId}/settings/plugins`);
+    revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    if (singleSiteMode) {
+      revalidatePath("/settings/plugins");
+      revalidatePath("/app/settings/plugins");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
@@ -116,18 +180,27 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
         <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
           Use this page to activate plugins to add functionality to your site.
         </p>
-        {!singleSiteMode && (
+        {singleSiteMode ? (
+          <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
+            Single-site mode: this page is the plugin control surface. Changes update global plugin state and this site together.
+          </p>
+        ) : (
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
             Note: Global plugin settings controls availability and defaults. This page controls site activation and site-specific overrides.
           </p>
         )}
       </div>
 
-      <CatalogTabs basePath={`/site/${siteId}/settings/plugins`} activeTab={activeTab} enabled={singleSiteMode} />
+      <CatalogTabs
+        basePath={`/site/${siteId}/settings/plugins`}
+        activeTab={activeTab}
+        enabled={singleSiteMode}
+        installedLabel="Active"
+      />
 
       {activeTab === "discover" ? (
         <div className="space-y-4 rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
-          <form className="flex items-center gap-2">
+          <form className="flex w-full items-center justify-end gap-2">
             <input type="hidden" name="tab" value="discover" />
             <input
               name="q"
@@ -169,25 +242,78 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       ) : null}
 
       {activeTab === "installed" ? (
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <a
+            href={`/site/${siteId}/settings/plugins?tab=installed&view=all`}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "all"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View All
+          </a>
+          <a
+            href={`/site/${siteId}/settings/plugins?tab=installed&view=installed`}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "installed"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View Active
+          </a>
+          <a
+            href={`/site/${siteId}/settings/plugins?tab=installed&view=uninstalled`}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+              view === "uninstalled"
+                ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
+                : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
+            }`}
+          >
+            View Uninstalled
+          </a>
+        </div>
+        <div className="flex items-center gap-2">
+          <form action={bulkToggleForSite}>
+            <input type="hidden" name="siteId" value={siteId} />
+            <input type="hidden" name="mode" value="enable" />
+            <button className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white">Enable All</button>
+          </form>
+          <form action={bulkToggleForSite}>
+            <input type="hidden" name="siteId" value={siteId} />
+            <input type="hidden" name="mode" value="disable" />
+            <button className="rounded-md border border-stone-700 bg-stone-700 px-3 py-1 text-xs text-white">Disable All</button>
+          </form>
+        </div>
+      </div>
+      ) : null}
+
+      {activeTab === "installed" ? (
       <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
         <table className="min-w-full text-sm">
           <thead className="bg-stone-50 text-left text-stone-700 dark:bg-stone-900 dark:text-stone-200">
             <tr>
               <th className="px-4 py-3">Plugin</th>
-              <th className="px-4 py-3">Global</th>
-              <th className="px-4 py-3">Site Activation</th>
-              <th className="px-4 py-3">Site Settings</th>
+              <th className="px-4 py-3">Scope</th>
+              <th className="px-4 py-3">Version</th>
+              <th className="px-4 py-3">Enabled</th>
+              {showNetworkColumn ? <th className="px-4 py-3">Network</th> : null}
+              <th className="px-4 py-3">Settings</th>
             </tr>
           </thead>
           <tbody>
-            {plugins.map((plugin) => (
+            {visiblePlugins.map((plugin) => (
               <tr key={plugin.id} className="border-t border-stone-200 dark:border-stone-700">
                 <td className="px-4 py-3 align-top">
                   <div className="flex items-baseline gap-2">
                     <div className="font-medium text-stone-900 dark:text-white">{plugin.name}</div>
-                    <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-700 dark:bg-stone-800 dark:text-stone-200">
-                      {(plugin.scope || "site") === "core" ? "Core" : "Site"}
-                    </span>
+                    {plugin.distribution === "core" ? (
+                      <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+                        Core
+                      </span>
+                    ) : null}
                     {plugin.developer ? (
                       <div className="text-xs text-stone-500 italic">
                         by{" "}
@@ -196,7 +322,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
                             href={plugin.website}
                             target="_blank"
                             rel="noreferrer"
-                            className="underline hover:text-stone-700 dark:hover:text-stone-300"
+                            className="hover:text-stone-700 dark:hover:text-stone-300"
                           >
                             {plugin.developer}
                           </a>
@@ -210,68 +336,80 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
                   <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">{plugin.description}</div>
                 </td>
                 <td className="px-4 py-3 align-top">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`rounded-full px-2 py-1 text-xs font-medium ${
-                        plugin.enabled ? "bg-emerald-100 text-emerald-700" : "bg-stone-200 text-stone-700"
-                      }`}
-                    >
-                      {plugin.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                    {plugin.mustUse && (
-                      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">Must Use</span>
-                    )}
-                  </div>
+                  <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+                    {(plugin.scope || "site") === "network" ? "Network" : "Site"}
+                  </span>
                 </td>
                 <td className="px-4 py-3 align-top">
-                  {plugin.enabled || singleSiteMode ? (
-                    <form action={toggleForSite} className="flex items-center gap-2">
-                      <input type="hidden" name="siteId" value={siteId} />
-                      <input type="hidden" name="pluginId" value={plugin.id} />
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          name="enabled"
-                          defaultChecked={plugin.siteEnabled}
-                          disabled={plugin.mustUse && !singleSiteMode}
-                          className="h-4 w-4"
-                        />
-                        <span className="text-xs text-stone-600 dark:text-stone-300">Active</span>
-                      </label>
-                      <button
-                        disabled={plugin.mustUse && !singleSiteMode}
-                        className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Save
-                      </button>
-                      {singleSiteMode ? (
-                        <label className="ml-1 flex items-center gap-2">
-                          <input type="checkbox" name="mustUse" defaultChecked={plugin.mustUse} className="h-4 w-4" />
-                          <span className="text-xs text-stone-600 dark:text-stone-300">Must Use</span>
-                        </label>
-                      ) : null}
-                    </form>
-                  ) : (
-                    <span className="rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
-                      Inactive (global disabled)
-                    </span>
-                  )}
-                  {plugin.mustUse && !singleSiteMode && (
-                    <p className="mt-2 text-xs text-stone-500">Must Use is enabled globally. This site cannot disable it.</p>
-                  )}
-                  {!plugin.enabled && !singleSiteMode && (
-                    <p className="mt-2 text-xs text-stone-500">Enable globally first to activate on this site.</p>
+                  <span className="text-xs text-stone-700 dark:text-stone-300">{plugin.version || "n/a"}</span>
+                </td>
+                <td className="px-4 py-3 align-top">
+                  {(() => {
+                    const active = singleSiteMode ? plugin.enabled : plugin.siteEnabled;
+                    return (
+                      <form action={toggleForSite} className="flex items-center gap-2">
+                        <input type="hidden" name="siteId" value={siteId} />
+                        <input type="hidden" name="pluginId" value={plugin.id} />
+                        <input type="hidden" name="enabled" value={(!active) ? "on" : ""} />
+                        <ConfirmSubmitButton
+                          label="Enabled"
+                          disabled={plugin.networkRequired && !singleSiteMode && !canManageNetworkPlugins}
+                          confirmMessage={
+                            plugin.networkRequired && !singleSiteMode && canManageNetworkPlugins && active
+                              ? "This will only disable this on this site. Use network plugins to disable network wide."
+                              : undefined
+                          }
+                          className={`inline-flex items-center gap-2 rounded-md border px-3 py-1 text-xs font-semibold ${
+                            active
+                              ? "border-emerald-700 bg-emerald-700 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]"
+                              : "border-stone-500 bg-stone-600 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
+                          } disabled:cursor-not-allowed disabled:opacity-50`}
+                        >
+                          <>
+                            Enabled
+                            <span className="ml-1 flex h-4 w-4 items-center justify-center rounded-full border border-black/30 bg-black/20">
+                              <span className={`h-2.5 w-2.5 rounded-full ${active ? "bg-lime-300 shadow-[0_0_6px_rgba(163,230,53,0.95)]" : "bg-stone-300/70"}`} />
+                            </span>
+                          </>
+                        </ConfirmSubmitButton>
+                      </form>
+                    );
+                  })()}
+                  {plugin.networkRequired && !singleSiteMode && (
+                    <p className="mt-2 text-xs text-stone-500">
+                      {canManageNetworkPlugins
+                        ? "Disabling here only affects this site."
+                        : "This site cannot disable it."}
+                    </p>
                   )}
                 </td>
+                {showNetworkColumn ? (
+                  <td className="px-4 py-3 align-top">
+                    {plugin.networkRequired ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex cursor-not-allowed items-center gap-2 rounded-md border border-emerald-700 bg-emerald-700 px-3 py-1 text-xs font-semibold text-white opacity-90 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]"
+                      >
+                        Network
+                        <span className="ml-1 flex h-4 w-4 items-center justify-center rounded-full border border-black/30 bg-black/20">
+                          <span className="h-2.5 w-2.5 rounded-full bg-lime-300 shadow-[0_0_6px_rgba(163,230,53,0.95)]" />
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="text-xs text-stone-500">-</span>
+                    )}
+                  </td>
+                ) : null}
                 <td className="px-4 py-3 align-top">
                   {(plugin.settingsFields || []).length > 0 ? (
-                    plugin.mustUse && !singleSiteMode ? (
-                      <p className="text-xs text-stone-500">Must Use is enabled globally. Site overrides are disabled.</p>
+                    plugin.networkRequired && !singleSiteMode ? (
+                      <p className="text-xs text-stone-500">Network is enabled globally. Site overrides are disabled.</p>
                     ) : !plugin.enabled && !singleSiteMode ? (
                       <p className="text-xs text-stone-500">Enable globally to configure site-level overrides.</p>
                     ) : (
                       <details className="rounded-md border border-stone-200 p-2 dark:border-stone-700">
-                        <summary className="cursor-pointer text-xs font-medium text-stone-700 dark:text-stone-300">Configure site values</summary>
+                        <summary className="cursor-pointer text-xs font-medium text-stone-700 dark:text-stone-300">Settings</summary>
                         <form action={saveSiteConfig} className="mt-2 grid gap-2">
                           <input type="hidden" name="siteId" value={site.id} />
                           <input type="hidden" name="pluginId" value={plugin.id} />
@@ -325,10 +463,10 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
                 </td>
               </tr>
             ))}
-            {plugins.length === 0 && (
+            {visiblePlugins.length === 0 && (
               <tr className="border-t border-stone-200 dark:border-stone-700">
-                <td colSpan={4} className="px-4 py-6 text-sm text-stone-500 dark:text-stone-400">
-                  No plugins discovered. Check `PLUGINS_PATH` and ensure each plugin directory has a valid `plugin.json`.
+                <td colSpan={showNetworkColumn ? 6 : 5} className="px-4 py-6 text-sm text-stone-500 dark:text-stone-400">
+                  No plugins match this view.
                 </td>
               </tr>
             )}

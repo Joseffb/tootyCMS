@@ -1,6 +1,6 @@
 {
   "id": "analytics-tinybird",
-  "name": "Tinybird Analytics",
+  "name": "Analytics Tinybird",
   "description": "Analytics provider plugin using Tinybird pipes/events through generic analytics hooks.",
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
@@ -12,7 +12,7 @@
     "serverHandlers": false
   },
   "menu": {
-    "label": "Tinybird Analytics",
+    "label": "Analytics Tinybird",
     "path": "/app/plugins/analytics-tinybird"
   },
   "settingsFields": [
@@ -30,5 +30,6 @@
     }
   ],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 function isTruthy(value: string) {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
@@ -137,6 +138,13 @@ export default async function middleware(req: NextRequest) {
       return preserveWithTrace("/setup");
     }
     const session = hasSessionCookie(req);
+    const sessionToken = session
+      ? await getToken({
+          req,
+          secret: process.env.NEXTAUTH_SECRET,
+        })
+      : null;
+    const forcePasswordChange = Boolean((sessionToken as any)?.forcePasswordChange);
     if (!session && appPath !== "/login") {
       traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });
       return redirectWithTrace("/login");
@@ -144,6 +152,15 @@ export default async function middleware(req: NextRequest) {
     if (session && appPath === "/login") {
       traceEdge("middleware", "redirect authenticated app user", { traceId, to: "/" });
       return redirectWithTrace("/");
+    }
+    if (
+      session &&
+      forcePasswordChange &&
+      appPath !== "/settings/profile" &&
+      !appPath.startsWith("/settings/profile?")
+    ) {
+      traceEdge("middleware", "force password change redirect", { traceId, to: "/settings/profile?forcePasswordChange=1" });
+      return redirectWithTrace("/settings/profile?forcePasswordChange=1");
     }
     traceEdge("middleware", "rewrite app-domain", {
       traceId,

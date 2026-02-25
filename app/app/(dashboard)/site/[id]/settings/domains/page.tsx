@@ -1,7 +1,7 @@
 import { createDataDomain, deleteDataDomain, getAllDataDomains, setDataDomainActivation, updateDataDomain } from "@/lib/actions";
-import db from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
 type Props = {
   params: Promise<{
     id: string
@@ -13,10 +13,8 @@ export default async function SiteSettingsDomains({ params }: Props) {
     redirect("/login");
   }
   const id = (await params).id;
-  const site = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
-  });
-  if (!site || site.userId !== session.user.id) {
+  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  if (!site) {
     notFound();
   }
 

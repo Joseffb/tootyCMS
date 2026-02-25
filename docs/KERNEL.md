@@ -39,6 +39,8 @@ Actions are for side effects. They do not return values.
 - `plugins:register`
 - `themes:register`
 - `menus:register`
+- `domain:event`
+- `communication:queued`
 - `request:begin`
 - `content:load`
 - `render:before`
@@ -56,6 +58,18 @@ Filters transform and return values. They chain in priority order.
 - `theme:tokens`
 - `page:meta`
 - `render:layout`
+- `admin:environment-badge`
+- `admin:floating-widgets`
+- `admin:profile:sections`
+- `admin:schedule-actions`
+- `domain:scripts`
+- `domain:query`
+- `auth:providers`
+- `auth:adapter`
+- `auth:callbacks:signIn`
+- `auth:callbacks:jwt`
+- `auth:callbacks:session`
+- `communication:deliver`
 
 ## Priority rules
 

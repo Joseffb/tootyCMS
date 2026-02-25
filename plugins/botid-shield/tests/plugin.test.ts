@@ -3,11 +3,12 @@ import pluginManifest from "../plugin.json";
 import { validatePluginContract } from "@/lib/extension-contracts";
 
 describe("botid-shield plugin manifest", () => {
-  it("validates as a core plugin contract", () => {
+  it("validates as a network plugin contract", () => {
     const validated = validatePluginContract(pluginManifest, "botid-shield");
     expect(validated).not.toBeNull();
     expect(validated?.id).toBe("botid-shield");
-    expect(validated?.scope).toBe("core");
+    expect(validated?.scope).toBe("network");
+    expect(validated?.distribution).toBe("core");
     expect(validated?.capabilities?.adminExtensions).toBe(true);
   });
 
@@ -21,4 +22,3 @@ describe("botid-shield plugin manifest", () => {
     expect(keys.has("development_bypass")).toBe(true);
   });
 });
-

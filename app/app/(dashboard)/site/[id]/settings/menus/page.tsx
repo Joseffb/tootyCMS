@@ -1,7 +1,7 @@
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
 import { getSiteMenu, saveSiteMenuFromJson } from "@/lib/menu-system";
 import { notFound, redirect } from "next/navigation";
+import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -12,14 +12,18 @@ export default async function SiteMenuSettingsPage({ params }: Props) {
   if (!session) redirect("/login");
 
   const id = decodeURIComponent((await params).id);
-  const site = await db.query.sites.findFirst({ where: (sites, { eq }) => eq(sites.id, id) });
-  if (!site || site.userId !== session.user.id) notFound();
+  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.menus.manage");
+  if (!site) notFound();
   const siteData = site;
 
   const headerMenu = await getSiteMenu(siteData.id, "header");
 
   async function saveHeaderMenu(formData: FormData) {
     "use server";
+    const activeSession = await getSession();
+    if (!activeSession?.user?.id) redirect("/login");
+    const allowed = await userCan("site.menus.manage", activeSession.user.id, { siteId: siteData.id });
+    if (!allowed) redirect("/app");
     const raw = String(formData.get("menu_json") || "[]");
     await saveSiteMenuFromJson(siteData.id, "header", raw);
   }

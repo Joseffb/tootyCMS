@@ -1,0 +1,73 @@
+{
+  "id": "teety-dark",
+  "name": "Teety Dark",
+  "description": "Dark-mode personality satire: brooding, dry, self-aware, and still shipping.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
+  "tokens": {
+    "shellBg": "bg-[#0b111a]",
+    "shellText": "text-slate-100",
+    "topMuted": "text-slate-400",
+    "titleText": "text-slate-100",
+    "navText": "text-slate-300",
+    "navHover": "hover:text-sky-300"
+  },
+  "templates": {
+    "home": "home.html"
+  },
+  "assets": {
+    "styles": ["style.css"],
+    "scripts": ["theme.js"]
+  },
+  "settingsFields": [
+    {
+      "key": "home_hero_pill",
+      "label": "Home Hero Pill",
+      "type": "text",
+      "placeholder": "Tooty CMS",
+      "defaultValue": "Tooty CMS"
+    },
+    {
+      "key": "home_hero_title",
+      "label": "Home Hero Title",
+      "type": "text",
+      "placeholder": "Shipping, reluctantly.",
+      "defaultValue": "Shipping, reluctantly."
+    },
+    {
+      "key": "home_hero_subtitle",
+      "label": "Home Hero Subtitle",
+      "type": "text",
+      "placeholder": "A CMS for teams that prefer releases over rituals.",
+      "defaultValue": "A CMS for teams that prefer releases over rituals."
+    },
+    {
+      "key": "site_title",
+      "label": "Site Title Override",
+      "type": "text",
+      "placeholder": "Optional title shown in browser tab and header",
+      "helpText": "Leave blank to use the site name from Settings."
+    },
+    {
+      "key": "site_favicon_url",
+      "label": "Favicon URL",
+      "type": "text",
+      "placeholder": "/tooty/sprites/tooty-reading-cropped.png",
+      "helpText": "Supports absolute URLs or site-relative paths."
+    },
+    {
+      "key": "post_mascot_mode",
+      "label": "Post Mascot Mode",
+      "type": "text",
+      "placeholder": "random_non_docs | fixed_reading | none",
+      "helpText": "Theme-level behavior for post mascot rendering."
+    },
+    {
+      "key": "documentation_category_slug",
+      "label": "Documentation Category Slug",
+      "type": "text",
+      "placeholder": "documentation",
+      "helpText": "Posts in this category use the library mascot."
+    }
+  ]
+}

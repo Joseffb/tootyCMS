@@ -51,5 +51,6 @@
     }
   ],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

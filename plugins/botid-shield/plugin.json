@@ -1,10 +1,10 @@
 {
   "id": "botid-shield",
-  "name": "BotID Shield",
+  "name": "Vercel BotID",
   "description": "Vercel BotID protection for sensitive API routes with monitor or enforce mode.",
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
-  "scope": "core",
+  "scope": "network",
   "capabilities": {
     "hooks": false,
     "adminExtensions": true,
@@ -12,7 +12,7 @@
     "serverHandlers": false
   },
   "menu": {
-    "label": "BotID Shield",
+    "label": "Vercel BotID",
     "path": "/app/plugins/botid-shield"
   },
   "settingsFields": [
@@ -65,5 +65,6 @@
     }
   ],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

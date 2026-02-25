@@ -76,9 +76,9 @@ describe("hello-teety plugin", () => {
     expect(String((context.trace as string[])[0])).toContain("hello-teety:");
   });
 
-  it("uses tooty-dark specific quote pool when site theme is tooty-dark", async () => {
+  it("uses teety-dark specific quote pool when site theme is teety-dark", async () => {
     const { kernel, filters } = createKernel();
-    getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "tooty-dark" : ""));
+    getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "teety-dark" : ""));
     await register(kernel as any, { getPluginSetting, getSetting });
 
     const widgetFilter = filters.get("admin:floating-widgets")?.[0];

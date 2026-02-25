@@ -1,12 +1,13 @@
 import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import db from "@/lib/db";
-import { media } from "@/lib/schema";
+import { media, sites } from "@/lib/schema";
 import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
 import { and, eq, inArray } from "drizzle-orm";
 import { buildMediaVariants } from "@/lib/media-variants";
 import { evaluateBotIdRoute } from "@/lib/botid";
+import { userCan } from "@/lib/authorization";
 
 const MAX_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 
@@ -73,6 +74,23 @@ export async function POST(req: Request) {
       session = await getSession();
     } catch {
       session = null;
+    }
+    if (!session?.user?.id) {
+      trace("upload.api.blob", "unauthorized", { traceId, siteId });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const site = await db.query.sites.findFirst({
+      where: eq(sites.id, siteId),
+      columns: { id: true },
+    });
+    if (!site) {
+      trace("upload.api.blob", "site not found", { traceId, siteId });
+      return NextResponse.json({ error: "Site not found" }, { status: 404 });
+    }
+    const canUpload = await userCan("site.media.create", session.user.id, { siteId: site.id });
+    if (!canUpload) {
+      trace("upload.api.blob", "forbidden", { traceId, siteId, userId: session.user.id });
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const { hash, variants, extension, mimeType } = await buildMediaVariants(file);
     const siteSegment = safeSegment(siteId);

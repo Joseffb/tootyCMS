@@ -10,11 +10,13 @@ import {
   Globe,
   LayoutDashboard,
   Menu,
+  Monitor,
   Newspaper,
   Settings,
+  User,
 } from "lucide-react";
 import { useParams, usePathname, useSelectedLayoutSegments } from "next/navigation";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { getSitePublicUrl } from "@/lib/site-url";
 
@@ -32,9 +34,11 @@ const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }>
   { name: "Sites", href: "/settings/sites", match: "/settings/sites" },
   { name: "Themes", href: "/settings/themes", match: "/settings/themes" },
   { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
+  { name: "Messages", href: "/settings/messages", match: "/settings/messages" },
   { name: "Database", href: "/settings/database", match: "/settings/database" },
   { name: "Schedules", href: "/settings/schedules", match: "/settings/schedules" },
   { name: "Users", href: "/settings/users", match: "/settings/users" },
+  { name: "User Roles", href: "/settings/rbac", match: "/settings/rbac" },
 ];
 
 export default function Nav({ children }: { children: ReactNode }) {
@@ -50,10 +54,22 @@ export default function Nav({ children }: { children: ReactNode }) {
   const [navContext, setNavContext] = useState<{
     siteCount: number;
     mainSiteId: string | null;
+    migrationRequired: boolean;
+    canManageNetworkSettings: boolean;
+    canManageNetworkPlugins: boolean;
+    canManageSiteSettings: boolean;
+    canReadSiteAnalytics: boolean;
+    canCreateSiteContent: boolean;
     sites: Array<{ id: string; name: string }>;
   }>({
     siteCount: 0,
     mainSiteId: null,
+    migrationRequired: false,
+    canManageNetworkSettings: false,
+    canManageNetworkPlugins: false,
+    canManageSiteSettings: false,
+    canReadSiteAnalytics: false,
+    canCreateSiteContent: false,
     sites: [],
   });
   const [environmentBadge, setEnvironmentBadge] = useState<{
@@ -69,9 +85,18 @@ export default function Nav({ children }: { children: ReactNode }) {
     Array<{ id: string; title: string; content: string; position: "bottom-right" }>
   >([]);
   const [hasAnalyticsProviders, setHasAnalyticsProviders] = useState(false);
+  const [teetyAnimatedQuote, setTeetyAnimatedQuote] = useState("");
+  const [teetyAnimationPhase, setTeetyAnimationPhase] = useState<"dots" | "typing" | "done">("done");
+  const [teetyImageLoaded, setTeetyImageLoaded] = useState(false);
+  const [teetyAnimationRun, setTeetyAnimationRun] = useState(0);
+  const adminUiRequestRef = useRef(0);
   const currentSiteId = segments[0] === "site" && id ? id : null;
   const singleSiteMode = navContext.siteCount === 1 && Boolean(navContext.mainSiteId);
   const effectiveSiteId = currentSiteId || (singleSiteMode ? navContext.mainSiteId : null);
+  const teetyQuote = useMemo(
+    () => floatingWidgets.find((widget) => widget.id === "hello-teety-quote")?.content || "",
+    [floatingWidgets],
+  );
 
   useEffect(() => {
     const query = !singleSiteMode && effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
@@ -101,12 +126,20 @@ export default function Nav({ children }: { children: ReactNode }) {
   }, [effectiveSiteId, singleSiteMode]);
 
   useEffect(() => {
-    fetch("/api/nav/context", { cache: "no-store" })
+    const querySiteId = segments[0] === "site" && id ? id : navContext.mainSiteId || "";
+    const query = querySiteId ? `?siteId=${encodeURIComponent(querySiteId)}` : "";
+    fetch(`/api/nav/context${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { siteCount: 0, mainSiteId: null, sites: [] }))
       .then((json) => {
         setNavContext({
           siteCount: Number(json?.siteCount || 0),
           mainSiteId: json?.mainSiteId ? String(json.mainSiteId) : null,
+          migrationRequired: Boolean(json?.migrationRequired),
+          canManageNetworkSettings: Boolean(json?.canManageNetworkSettings),
+          canManageNetworkPlugins: Boolean(json?.canManageNetworkPlugins),
+          canManageSiteSettings: Boolean(json?.canManageSiteSettings),
+          canReadSiteAnalytics: Boolean(json?.canReadSiteAnalytics),
+          canCreateSiteContent: Boolean(json?.canCreateSiteContent),
           sites: Array.isArray(json?.sites)
             ? json.sites
                 .map((site: any) => ({
@@ -117,8 +150,20 @@ export default function Nav({ children }: { children: ReactNode }) {
             : [],
         });
       })
-      .catch(() => setNavContext({ siteCount: 0, mainSiteId: null, sites: [] }));
-  }, []);
+      .catch(() =>
+        setNavContext({
+          siteCount: 0,
+          mainSiteId: null,
+          migrationRequired: false,
+          canManageNetworkSettings: false,
+          canManageNetworkPlugins: false,
+          canManageSiteSettings: false,
+          canReadSiteAnalytics: false,
+          canCreateSiteContent: false,
+          sites: [],
+        }),
+      );
+  }, [pathname, id, navContext.mainSiteId]);
 
   useEffect(() => {
     if (!effectiveSiteId) {
@@ -148,9 +193,13 @@ export default function Nav({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
-    fetch(`/api/plugins/admin-ui${query}`, { cache: "no-store" })
+    const separator = query ? "&" : "?";
+    const requestId = ++adminUiRequestRef.current;
+    const controller = new AbortController();
+    fetch(`/api/plugins/admin-ui${query}${separator}r=${Date.now()}`, { cache: "no-store", signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
+        if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
         if (!json) return;
         setHasAnalyticsProviders(Boolean(json.hasAnalyticsProviders));
         setEnvironmentBadge({
@@ -170,8 +219,10 @@ export default function Nav({ children }: { children: ReactNode }) {
                 .filter((widget: any) => widget.id && widget.content)
             : [],
         );
+        setTeetyAnimationRun((value) => value + 1);
       })
       .catch(() => {
+        if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
         setHasAnalyticsProviders(false);
         setEnvironmentBadge({
           show: false,
@@ -179,17 +230,77 @@ export default function Nav({ children }: { children: ReactNode }) {
           environment: "production",
         });
         setFloatingWidgets([]);
+        setTeetyAnimationRun((value) => value + 1);
       });
-  }, [effectiveSiteId]);
+    return () => {
+      controller.abort();
+    };
+  }, [effectiveSiteId, pathname]);
+
+  useEffect(() => {
+    if (!teetyQuote) {
+      setTeetyAnimatedQuote("");
+      setTeetyAnimationPhase("done");
+      return;
+    }
+    if (!teetyImageLoaded) {
+      setTeetyAnimatedQuote("");
+      setTeetyAnimationPhase("done");
+      return;
+    }
+
+    const dotFrames = [".", ". .", ". . ."];
+    const totalDotCycles = 3;
+    let dotStep = 0;
+    let cycleCount = 0;
+    let idx = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    setTeetyAnimationPhase("dots");
+    setTeetyAnimatedQuote(dotFrames[0]);
+
+    const typeTick = () => {
+      idx += 1;
+      setTeetyAnimatedQuote(teetyQuote.slice(0, idx));
+      if (idx < teetyQuote.length) {
+        timer = setTimeout(typeTick, 50);
+      } else {
+        setTeetyAnimationPhase("done");
+      }
+    };
+
+    const dotTick = () => {
+      setTeetyAnimatedQuote(dotFrames[dotStep]);
+      dotStep = (dotStep + 1) % dotFrames.length;
+      if (dotStep === 0) cycleCount += 1;
+      if (cycleCount < totalDotCycles) {
+        timer = setTimeout(dotTick, 400);
+        return;
+      }
+      setTeetyAnimationPhase("typing");
+      setTeetyAnimatedQuote("");
+      timer = setTimeout(typeTick, 90);
+    };
+
+    timer = setTimeout(dotTick, 120);
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [teetyQuote, teetyImageLoaded, teetyAnimationRun]);
 
   const globalSettingsWithChildren = useMemo<NavTab[]>(() => {
     const parent: NavTab = {
       name: "Settings",
       href: "/settings",
       isActive: segments[0] === "settings",
-      icon: <Settings width={18} />,
+      icon: <Globe width={18} />,
     };
-    const settingsChildren: NavTab[] = GLOBAL_SETTINGS_TABS.flatMap((item) => {
+    const filteredTabs = GLOBAL_SETTINGS_TABS.filter((item) => {
+      if (singleSiteMode && item.name === "Sites") return false;
+      if (!navContext.migrationRequired && item.name === "Database") return false;
+      if (!navContext.canManageNetworkPlugins && item.name === "Messages") return false;
+      return true;
+    });
+    const settingsChildren: NavTab[] = filteredTabs.flatMap((item) => {
       const base: NavTab = {
         name: item.name,
         href: item.href,
@@ -210,7 +321,7 @@ export default function Nav({ children }: { children: ReactNode }) {
       return [base, ...pluginChildren];
     });
     return [parent, ...settingsChildren];
-  }, [pathname, pluginTabs, segments]);
+  }, [pathname, pluginTabs, segments, singleSiteMode, navContext.migrationRequired, navContext.canManageNetworkPlugins]);
 
   const tabs = useMemo<NavTab[]>(() => {
     const domainPostMatch = pathname?.match(
@@ -236,7 +347,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           name: "Settings",
           href: `${baseHref}/settings`,
           isActive: pathname === `${baseHref}/settings`,
-          icon: <Settings width={18} />,
+          icon: <Monitor width={18} />,
         },
       ];
     }
@@ -255,6 +366,11 @@ export default function Nav({ children }: { children: ReactNode }) {
           name: "Plugins",
           href: `/site/${id}/settings/plugins`,
           match: `/site/${id}/settings/plugins`,
+        },
+        {
+          name: "Users",
+          href: `/site/${id}/settings/users`,
+          match: `/site/${id}/settings/users`,
         },
       ].flatMap((item) => {
         const base: NavTab = {
@@ -279,28 +395,38 @@ export default function Nav({ children }: { children: ReactNode }) {
 
       const siteTabs: NavTab[] = [
         {
-          name: "Posts",
-          href: `/site/${id}`,
-          isActive: segments.length === 2,
-          icon: <Newspaper width={18} />,
+          name: "Profile",
+          href: "/profile",
+          isActive: pathname?.startsWith("/profile"),
+          icon: <User width={18} />,
         },
-        {
-          name: "List Posts",
-          href: `/site/${id}`,
-          isActive: segments.length === 2,
-          icon: <Newspaper width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-        {
-          name: "Add Post",
-          href: `/site/${id}/domain/post/create`,
-          isActive: pathname?.includes(`/site/${id}/domain/post/create`),
-          icon: <Newspaper width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-        ...(hasAnalyticsProviders
+        ...(navContext.canCreateSiteContent
+          ? [
+              {
+                name: "Posts",
+                href: `/site/${id}/domain/post`,
+                isActive: pathname?.includes(`/site/${id}/domain/post`) && !pathname?.includes(`/site/${id}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+              },
+              {
+                name: "List Posts",
+                href: `/site/${id}/domain/post`,
+                isActive: pathname?.includes(`/site/${id}/domain/post`) && !pathname?.includes(`/site/${id}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+                isChild: true as const,
+                childLevel: 1 as const,
+              },
+              {
+                name: "Add Post",
+                href: `/site/${id}/domain/post/create`,
+                isActive: pathname?.includes(`/site/${id}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+                isChild: true as const,
+                childLevel: 1 as const,
+              },
+            ]
+          : []),
+        ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
           ? [
               {
                 name: "Analytics",
@@ -310,13 +436,17 @@ export default function Nav({ children }: { children: ReactNode }) {
               },
             ]
           : []),
-        {
-          name: "Settings",
-          href: `/site/${id}/settings`,
-          isActive: segments.includes("settings"),
-          icon: <Settings width={18} />,
-        },
-        ...siteSettingsChildren,
+        ...(navContext.canManageSiteSettings
+          ? [
+              {
+                name: "Settings",
+                href: `/site/${id}/settings`,
+                isActive: segments.includes("settings"),
+                icon: <Monitor width={18} />,
+              },
+              ...siteSettingsChildren,
+            ]
+          : []),
         ...dataDomainTabs.flatMap((item) => ([
           {
             name: item.name,
@@ -351,28 +481,38 @@ export default function Nav({ children }: { children: ReactNode }) {
     if (singleSiteMode && navContext.mainSiteId) {
       const singleSiteTabs: NavTab[] = [
         {
-          name: "Posts",
-          href: `/site/${navContext.mainSiteId}`,
-          isActive: pathname === `/site/${navContext.mainSiteId}` || segments.length === 0,
-          icon: <Newspaper width={18} />,
+          name: "Profile",
+          href: "/profile",
+          isActive: pathname?.startsWith("/profile"),
+          icon: <User width={18} />,
         },
-        {
-          name: "List Posts",
-          href: `/site/${navContext.mainSiteId}`,
-          isActive: pathname === `/site/${navContext.mainSiteId}` || segments.length === 0,
-          icon: <Newspaper width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-        {
-          name: "Add Post",
-          href: `/site/${navContext.mainSiteId}/domain/post/create`,
-          isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
-          icon: <Newspaper width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-        ...(hasAnalyticsProviders
+        ...(navContext.canCreateSiteContent
+          ? [
+              {
+                name: "Posts",
+                href: `/site/${navContext.mainSiteId}/domain/post`,
+                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post`) && !pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+              },
+              {
+                name: "List Posts",
+                href: `/site/${navContext.mainSiteId}/domain/post`,
+                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post`) && !pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+                isChild: true as const,
+                childLevel: 1 as const,
+              },
+              {
+                name: "Add Post",
+                href: `/site/${navContext.mainSiteId}/domain/post/create`,
+                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
+                icon: <Newspaper width={18} />,
+                isChild: true as const,
+                childLevel: 1 as const,
+              },
+            ]
+          : []),
+        ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
           ? [
               {
                 name: "Analytics",
@@ -382,13 +522,15 @@ export default function Nav({ children }: { children: ReactNode }) {
               } as NavTab,
             ]
           : []),
-        {
-          name: "Settings",
-          href: `/site/${navContext.mainSiteId}/settings`,
-          isActive: pathname?.includes(`/site/${navContext.mainSiteId}/settings`),
-          icon: <Settings width={18} />,
-        },
-        ...[
+        ...(navContext.canManageSiteSettings
+          ? [
+              {
+                name: "System",
+                href: `/site/${navContext.mainSiteId}/settings`,
+                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/settings`),
+                icon: <Monitor width={18} />,
+              },
+              ...[
           { name: "General", href: `/site/${navContext.mainSiteId}/settings`, match: `/site/${navContext.mainSiteId}/settings` },
           { name: "Categories", href: `/site/${navContext.mainSiteId}/settings/categories`, match: `/site/${navContext.mainSiteId}/settings/categories` },
           { name: "Post-Types", href: `/site/${navContext.mainSiteId}/settings/domains`, match: `/site/${navContext.mainSiteId}/settings/domains` },
@@ -397,7 +539,11 @@ export default function Nav({ children }: { children: ReactNode }) {
           { name: "Writing", href: `/site/${navContext.mainSiteId}/settings/writing`, match: `/site/${navContext.mainSiteId}/settings/writing` },
           { name: "Menus", href: `/site/${navContext.mainSiteId}/settings/menus`, match: `/site/${navContext.mainSiteId}/settings/menus` },
           { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
-          { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
+          { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
+          { name: "Users", href: `/site/${navContext.mainSiteId}/settings/users`, match: `/site/${navContext.mainSiteId}/settings/users` },
+          { name: "Database", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
+          { name: "RBAC", href: `/site/${navContext.mainSiteId}/settings/rbac`, match: `/site/${navContext.mainSiteId}/settings/rbac` },
+          { name: "Schedules", href: `/site/${navContext.mainSiteId}/settings/schedules`, match: `/site/${navContext.mainSiteId}/settings/schedules` },
         ].flatMap((item) => {
           const base: NavTab = {
             name: item.name,
@@ -418,6 +564,8 @@ export default function Nav({ children }: { children: ReactNode }) {
           }));
           return [base, ...pluginChildren];
         }),
+            ]
+          : []),
         ...dataDomainTabs.flatMap((item) => ([
           {
             name: item.name,
@@ -448,6 +596,12 @@ export default function Nav({ children }: { children: ReactNode }) {
 
     return [
       {
+        name: "Profile",
+        href: "/profile",
+        isActive: pathname?.startsWith("/profile"),
+        icon: <User width={18} />,
+      },
+      {
         name: "Overview",
         href: "/",
         isActive: segments.length === 0,
@@ -469,9 +623,9 @@ export default function Nav({ children }: { children: ReactNode }) {
         isChild: true,
         childLevel: 1 as const,
       })),
-      ...globalSettingsWithChildren,
+      ...(navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
     ];
-  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, singleSiteMode, pluginTabs, globalSettingsWithChildren]);
+  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, navContext.canManageNetworkSettings, navContext.canManageSiteSettings, navContext.canReadSiteAnalytics, navContext.canCreateSiteContent, singleSiteMode, pluginTabs, globalSettingsWithChildren]);
 
   const [showSidebar, setShowSidebar] = useState(false);
   const [collapsedByHref, setCollapsedByHref] = useState<Record<string, boolean>>({});
@@ -528,7 +682,7 @@ export default function Nav({ children }: { children: ReactNode }) {
       <div
         className={`transform ${
           showSidebar ? "w-full translate-x-0" : "-translate-x-full"
-        } fixed z-10 flex h-full flex-col justify-between border-r border-stone-200 bg-stone-100 p-4 transition-all sm:w-60 sm:translate-x-0 dark:border-stone-700 dark:bg-stone-900`}
+        } fixed z-10 flex h-full flex-col justify-between border-r border-stone-200 bg-stone-100 p-4 transition-all sm:w-60 sm:translate-x-0 dark:border-stone-700 dark:bg-stone-900 [&_a]:no-underline`}
       >
         <div className="grid gap-2">
           <div className="rounded-lg px-2 py-1.5">
@@ -667,14 +821,36 @@ export default function Nav({ children }: { children: ReactNode }) {
       {floatingWidgets
         .filter((widget) => widget.position === "bottom-right")
         .map((widget, idx) => (
-          <div
-            key={widget.id}
-            className="pointer-events-none fixed right-4 z-20 max-w-xs rounded-lg border border-stone-300 bg-white/95 px-3 py-2 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200"
-            style={{ bottom: `${1 + idx * 5.5}rem` }}
-          >
-            <p className="font-semibold">{widget.title || "Plugin Widget"}</p>
-            <p className="mt-1 italic">"{widget.content}"</p>
-          </div>
+          (() => {
+            const isTeety = widget.id === "hello-teety-quote";
+            const bottom = `${1 + idx * 5.5}rem`;
+            return (
+              <div key={widget.id} className="pointer-events-none fixed right-4 z-20 max-w-xs" style={{ bottom }}>
+                {isTeety ? (
+                  <div className="relative overflow-visible rounded-lg border border-stone-600 bg-stone-800 px-3 py-2 pr-14 text-xs text-stone-100 shadow-lg">
+                    <p className="italic">
+                      {teetyImageLoaded ? (teetyAnimatedQuote || (teetyAnimationPhase === "done" ? widget.content : "")) : ""}
+                      {teetyAnimationPhase === "typing" && teetyAnimatedQuote.length < widget.content.length ? <span className="ml-0.5 animate-pulse">|</span> : null}
+                    </p>
+                    <Image
+                      src="/plugin-assets/hello-teety/teety.png"
+                      alt="Teety"
+                      width={72}
+                      height={72}
+                      onLoadingComplete={() => setTeetyImageLoaded(true)}
+                      unoptimized
+                      className="absolute -bottom-4 -right-5 h-[72px] w-[72px] object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-stone-300 bg-white/95 px-3 py-2 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200">
+                    <p className="font-semibold">{widget.title || "Plugin Widget"}</p>
+                    <p className="mt-1 italic">{widget.content}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })()
         ))}
     </>
   );

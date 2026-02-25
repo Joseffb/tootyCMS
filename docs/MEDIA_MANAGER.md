@@ -16,7 +16,7 @@ Tracks:
 
 - `siteId`
 - `userId`
-- `provider` (`blob` or `s3`)
+- `provider` (`blob` or `s3` or `dbblob`)
 - `bucket`
 - `objectKey`
 - `url`
@@ -31,9 +31,12 @@ Client upload flow:
 
 1. `uploadSmart` tries `/api/uploadImage` (Vercel Blob)
 2. Fallback to `/api/uploadImageLocal` (AWS S3)
-3. Upload route writes/updates row in `tooty_media`
+3. Final fallback to `/api/uploadImageDb` (DB blob data URL, intended for low-volume/dev fallback)
+4. Upload route writes/updates row in `tooty_media`
 
-Both providers are traced in debug mode.
+All provider routes are traced in debug mode.
+
+Provider mode can be forced with env `MEDIA_UPLOAD_PROVIDER=auto|blob|s3|dbblob`.
 
 ## Editor integration
 

@@ -1,7 +1,7 @@
 import { createDomainPost, getSiteDataDomainByKey } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
-import db from "@/lib/db";
 import { notFound, redirect } from "next/navigation";
+import { canUserCreateDomainContent } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -18,11 +18,8 @@ export default async function CreateDomainEntryPage({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
 
-  const site = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, siteId),
-    columns: { id: true, userId: true },
-  });
-  if (!site || site.userId !== session.user.id) notFound();
+  const canCreate = await canUserCreateDomainContent(session.user.id, siteId);
+  if (!canCreate) notFound();
 
   const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
   if (!domain) notFound();

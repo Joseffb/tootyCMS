@@ -9,7 +9,7 @@ import LoadingDots from "@/components/icons/loading-dots";
 import { useModal } from "./provider";
 import { useEffect, useState } from "react";
 
-export default function CreateSiteModal() {
+export default function CreateSiteModal({ successRedirectPath }: { successRedirectPath?: string }) {
   const router = useRouter();
   const modal = useModal();
 
@@ -37,8 +37,9 @@ export default function CreateSiteModal() {
             toast.error(res.error);
           } else {
             const { id } = res;
+            const redirectPath = successRedirectPath || `/site/${id}`;
             router.refresh();
-            router.push(`/site/${id}`);
+            router.push(redirectPath);
             modal?.hide();
             toast.success(`Successfully created site!`);
           }

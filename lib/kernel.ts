@@ -5,7 +5,8 @@ export type KernelActionName =
   | "plugins:register"
   | "themes:register"
   | "menus:register"
-  | "analytics:event"
+  | "domain:event"
+  | "communication:queued"
   | "request:begin"
   | "content:load"
   | "render:before"
@@ -20,13 +21,20 @@ export type KernelFilterName =
   | "render:layout"
   | "admin:environment-badge"
   | "admin:floating-widgets"
-  | "analytics:scripts"
-  | "analytics:query"
+  | "admin:profile:sections"
+  | "admin:schedule-actions"
+  | "admin:editor:footer-panels"
+  | "domain:scripts"
+  | "domain:query"
   | "auth:providers"
   | "auth:adapter"
   | "auth:callbacks:signIn"
   | "auth:callbacks:jwt"
-  | "auth:callbacks:session";
+  | "auth:callbacks:session"
+  | "communication:deliver"
+  | "content:states"
+  | "content:transitions"
+  | "content:transition:decision";
 
 export type MenuLocation = "header" | "footer" | "dashboard";
 
@@ -56,7 +64,114 @@ export type PluginAuthAdapterRegistration = {
 
 export type PluginScheduleHandlerRegistration = {
   id: string;
-  run: (input: { siteId?: string | null; payload?: Record<string, unknown> }) => unknown | Promise<unknown>;
+  description?: string;
+  validate?: (
+    input: { siteId?: string | null; payload?: Record<string, unknown> },
+  ) =>
+    | { ok: boolean; error?: string }
+    | Promise<{ ok: boolean; error?: string }>;
+  run: (
+    input: { siteId?: string | null; payload?: Record<string, unknown> },
+  ) =>
+    | unknown
+    | {
+      status: "success" | "blocked" | "skipped" | "error";
+      error?: string;
+    }
+    | Promise<
+      | unknown
+      | {
+        status: "success" | "blocked" | "skipped" | "error";
+        error?: string;
+      }
+    >;
+};
+
+export type CommunicationChannel = "email" | "sms" | "mms" | "com-x";
+
+export type CommunicationMessagePayload = {
+  id: string;
+  siteId?: string | null;
+  channel: CommunicationChannel;
+  to: string;
+  subject?: string | null;
+  body: string;
+  category?: "transactional" | "marketing";
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginCommunicationProviderRegistration = {
+  id: string;
+  channels: CommunicationChannel[];
+  deliver: (
+    message: CommunicationMessagePayload,
+  ) => Promise<{
+    ok: boolean;
+    externalId?: string;
+    response?: Record<string, unknown>;
+    error?: string;
+  }> | {
+    ok: boolean;
+    externalId?: string;
+    response?: Record<string, unknown>;
+    error?: string;
+  };
+  handleCallback?: (
+    input: {
+      body: string;
+      headers: Record<string, string>;
+      query: Record<string, string | string[]>;
+    },
+  ) => Promise<{
+    ok: boolean;
+    eventType?: string;
+    messageId?: string;
+    externalId?: string;
+    status?: "sent" | "failed" | "dead" | "logged";
+    error?: string;
+    metadata?: Record<string, unknown>;
+  }> | {
+    ok: boolean;
+    eventType?: string;
+    messageId?: string;
+    externalId?: string;
+    status?: "sent" | "failed" | "dead" | "logged";
+    error?: string;
+    metadata?: Record<string, unknown>;
+  };
+};
+
+export type PluginWebcallbackHandlerRegistration = {
+  id: string;
+  handle: (
+    input: {
+      body: string;
+      headers: Record<string, string>;
+      query: Record<string, string | string[]>;
+    },
+  ) => Promise<{
+    ok: boolean;
+    status?: "processed" | "failed" | "ignored";
+    response?: Record<string, unknown>;
+    error?: string;
+  }> | {
+    ok: boolean;
+    status?: "processed" | "failed" | "ignored";
+    response?: Record<string, unknown>;
+    error?: string;
+  };
+};
+
+export type ContentStateRegistration = {
+  key: string;
+  label: string;
+  transitions: string[];
+};
+
+export type ContentTransitionRegistration = {
+  key: string;
+  label: string;
+  to: string;
 };
 
 type ActionCallback = (payload?: unknown) => void | Promise<void>;
@@ -74,6 +189,10 @@ export class Kernel {
   private pluginServerHandlers = new Map<string, PluginServerHandlerRegistration[]>();
   private pluginAuthAdapters = new Map<string, PluginAuthAdapterRegistration[]>();
   private pluginScheduleHandlers = new Map<string, PluginScheduleHandlerRegistration[]>();
+  private pluginCommunicationProviders = new Map<string, PluginCommunicationProviderRegistration[]>();
+  private pluginWebcallbackHandlers = new Map<string, PluginWebcallbackHandlerRegistration[]>();
+  private contentStates = new Map<string, ContentStateRegistration>();
+  private contentTransitions = new Map<string, ContentTransitionRegistration>();
 
   addAction(name: KernelActionName, callback: ActionCallback, priority = 10) {
     const existing = this.actions.get(name) ?? [];
@@ -192,6 +311,79 @@ export class Kernel {
 
   getPluginScheduleHandlers(pluginId: string) {
     return [...(this.pluginScheduleHandlers.get(pluginId) ?? [])];
+  }
+
+  registerPluginCommunicationProvider(pluginId: string, registration: PluginCommunicationProviderRegistration) {
+    const list = this.pluginCommunicationProviders.get(pluginId) ?? [];
+    list.push(registration);
+    this.pluginCommunicationProviders.set(pluginId, list);
+    trace("kernel", "plugin communication provider registered", {
+      pluginId,
+      id: registration.id,
+      channels: registration.channels,
+    });
+  }
+
+  getPluginCommunicationProviders(pluginId: string) {
+    return [...(this.pluginCommunicationProviders.get(pluginId) ?? [])];
+  }
+
+  getAllPluginCommunicationProviders() {
+    const rows: Array<PluginCommunicationProviderRegistration & { pluginId: string }> = [];
+    for (const [pluginId, regs] of this.pluginCommunicationProviders.entries()) {
+      for (const reg of regs) rows.push({ pluginId, ...reg });
+    }
+    return rows;
+  }
+
+  registerPluginWebcallbackHandler(pluginId: string, registration: PluginWebcallbackHandlerRegistration) {
+    const list = this.pluginWebcallbackHandlers.get(pluginId) ?? [];
+    list.push(registration);
+    this.pluginWebcallbackHandlers.set(pluginId, list);
+    trace("kernel", "plugin webcallback handler registered", {
+      pluginId,
+      id: registration.id,
+    });
+  }
+
+  getPluginWebcallbackHandlers(pluginId: string) {
+    return [...(this.pluginWebcallbackHandlers.get(pluginId) ?? [])];
+  }
+
+  getAllPluginWebcallbackHandlers() {
+    const rows: Array<PluginWebcallbackHandlerRegistration & { pluginId: string }> = [];
+    for (const [pluginId, regs] of this.pluginWebcallbackHandlers.entries()) {
+      for (const reg of regs) rows.push({ pluginId, ...reg });
+    }
+    return rows;
+  }
+
+  registerContentState(registration: ContentStateRegistration) {
+    const key = String(registration?.key || "").trim().toLowerCase();
+    const label = String(registration?.label || "").trim();
+    const transitions = Array.isArray(registration?.transitions)
+      ? Array.from(new Set(registration.transitions.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)))
+      : [];
+    if (!key || !label) return;
+    this.contentStates.set(key, { key, label, transitions });
+    trace("kernel", "content state registered", { key, label, transitionsCount: transitions.length });
+  }
+
+  getContentStates() {
+    return Array.from(this.contentStates.values());
+  }
+
+  registerContentTransition(registration: ContentTransitionRegistration) {
+    const key = String(registration?.key || "").trim().toLowerCase();
+    const label = String(registration?.label || "").trim();
+    const to = String(registration?.to || "").trim().toLowerCase();
+    if (!key || !label || !to) return;
+    this.contentTransitions.set(key, { key, label, to });
+    trace("kernel", "content transition registered", { key, to });
+  }
+
+  getContentTransitions() {
+    return Array.from(this.contentTransitions.values());
   }
 }
 

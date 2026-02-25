@@ -5,6 +5,7 @@ const cards = [
   { title: "Themes", href: "/settings/themes", desc: "Enable themes and manage theme-level options." },
   { title: "Plugins", href: "/settings/plugins", desc: "Enable plugins and configure plugin settings." },
   { title: "Database", href: "/settings/database", desc: "Check schema compatibility and run safe update fixes." },
+  { title: "User Roles", href: "/settings/rbac", desc: "Edit role capability matrix for site/network authorization." },
   { title: "Schedules", href: "/settings/schedules", desc: "Manage cron-like toggles and automation intent." },
   { title: "Users", href: "/settings/users", desc: "CRUD users and roles, plus OAuth provider toggles." },
 ];

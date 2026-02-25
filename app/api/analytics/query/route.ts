@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { resolveAnalyticsSiteId } from "@/lib/analytics-site";
+import { ensureDomainQueueTable } from "@/lib/domain-queue";
 import db from "@/lib/db";
 import { sql } from "drizzle-orm";
 
@@ -12,7 +13,7 @@ function prefix() {
 }
 
 function quotedQueueTable() {
-  return `"${`${prefix()}analytics_events_queue`.replace(/"/g, "\"\"")}"`;
+  return `"${`${prefix()}domain_events_queue`.replace(/"/g, "\"\"")}"`;
 }
 
 function normalizeDomain(input: string) {
@@ -262,6 +263,7 @@ async function fallbackForQuery(name: string, siteId?: string | null, domain?: s
 }
 
 export async function GET(req: NextRequest) {
+  await ensureDomainQueueTable();
   const incoming = new URL(req.url);
   const name = incoming.searchParams.get("name");
   if (!name) return new NextResponse("Missing ?name=", { status: 400 });
@@ -272,7 +274,7 @@ export async function GET(req: NextRequest) {
   const kernel = await createKernelForRequest(siteId);
 
   const response = await kernel.applyFilters<Response | NextResponse | null>(
-    "analytics:query",
+    "domain:query",
     null,
     {
       request: req,

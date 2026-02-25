@@ -1,10 +1,10 @@
 {
   "id": "hello-teety",
   "name": "Hello Teety",
-  "description": "A Teety quote plugin that surfaces broody rockstar energy in admin.",
+  "description": "Hear wisdom from Tooty’s one-minute-younger brother, Teety. Broody. Brilliant. Occasionally dramatic.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
-  "scope": "core",
+  "scope": "network",
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -39,5 +39,6 @@
     ]
   },
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

@@ -32,7 +32,6 @@ export default async function DomainPosts({
   const rows = await db.query.domainPosts.findMany({
     where: (table, { and, eq }) =>
       and(
-        eq(table.userId, session.user.id),
         eq(table.siteId, siteId),
         eq(table.dataDomainId, domain.id),
       ),

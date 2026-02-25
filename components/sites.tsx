@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 import SiteCard from "./site-card";
@@ -13,18 +14,21 @@ export default async function Sites({ limit }: { limit?: number }) {
     redirect("/login");
   }
 
-  const sites = await db.query.sites.findMany({
-    where: (sites, { eq }) => eq(sites.userId, session.user.id),
-    orderBy: (sites, { asc }) => asc(sites.createdAt),
-    ...(limit ? { limit } : {}),
-  });
+  const siteIds = await listSiteIdsForUser(session.user.id);
+  const allSites = siteIds.length > 0
+    ? await db.query.sites.findMany({
+        where: (sites, { inArray }) => inArray(sites.id, siteIds),
+        orderBy: (sites, { asc }) => asc(sites.createdAt),
+      })
+    : [];
+  const sites = limit ? allSites.slice(0, limit) : allSites;
 
   const siteUrlSetting = await getSiteUrlSetting();
   const rootUrl = siteUrlSetting.value.trim() || getRootSiteUrl();
   const siteCards = await Promise.all(
     sites.map(async (site) => {
       const kernel = await createKernelForRequest(site.id);
-      const hasAnalytics = kernel.hasFilter("analytics:query");
+      const hasAnalytics = kernel.hasFilter("domain:query");
       return { site, hasAnalytics };
     }),
   );

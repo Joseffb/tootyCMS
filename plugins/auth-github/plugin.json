@@ -1,0 +1,36 @@
+{
+  "kind": "plugin",
+  "id": "auth-github",
+  "name": "Admin Auth GitHub",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables GitHub OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "github",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "GitHub Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_GITHUB_ID env",
+      "helpText": "Optional DB override. If set with Client Secret, this overrides AUTH_GITHUB_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "GitHub Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_GITHUB_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID, this overrides AUTH_GITHUB_SECRET."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.3.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

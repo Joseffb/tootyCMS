@@ -95,8 +95,12 @@ async function validatePlugin(pluginDir) {
     fail(`${pluginDir}: minCoreVersion '${manifest.minCoreVersion}' must look like 0.2.x or 0.2.3`);
   }
 
-  if (typeof manifest.scope === "string" && !["core", "site", "network"].includes(manifest.scope)) {
-    fail(`${pluginDir}: scope must be one of core|site|network`);
+  if (typeof manifest.scope === "string" && !["site", "network"].includes(manifest.scope)) {
+    fail(`${pluginDir}: scope must be one of site|network`);
+  }
+
+  if (typeof manifest.distribution !== "string" || !["core", "community"].includes(manifest.distribution)) {
+    fail(`${pluginDir}: distribution must be one of core|community`);
   }
 
   if (manifest.website && !/^https?:\/\//.test(manifest.website)) {

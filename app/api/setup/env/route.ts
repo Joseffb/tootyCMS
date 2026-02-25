@@ -2,11 +2,20 @@ import { NextResponse } from "next/server";
 import { getInstallState } from "@/lib/install-state";
 import { saveSetupEnvValues } from "@/lib/setup-env";
 import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
+import { cmsSettings, users } from "@/lib/schema";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { trace } from "@/lib/debug";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { hashPassword } from "@/lib/password";
+import { NETWORK_ADMIN_ROLE } from "@/lib/rbac";
+import { advanceSetupLifecycleTo } from "@/lib/setup-lifecycle";
+import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import {
+  applyPendingDatabaseMigrations,
+  getDatabaseHealthReport,
+  markDatabaseSchemaCurrent,
+} from "@/lib/db-health";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,18 +67,6 @@ async function initializeDbSchema(values: Record<string, string>) {
   return runCommandDbInit(values);
 }
 
-function hasOAuthProvider(values: Record<string, string>) {
-  const pairs: Array<[string, string]> = [
-    ["AUTH_GITHUB_ID", "AUTH_GITHUB_SECRET"],
-    ["AUTH_GOOGLE_ID", "AUTH_GOOGLE_SECRET"],
-    ["AUTH_FACEBOOK_ID", "AUTH_FACEBOOK_SECRET"],
-    ["AUTH_APPLE_ID", "AUTH_APPLE_SECRET"],
-  ];
-  return pairs.some(([idKey, secretKey]) => {
-    return Boolean((values[idKey] || "").trim() && (values[secretKey] || "").trim());
-  });
-}
-
 function normalizedPrefixFromValues(values: Record<string, string>) {
   const raw = (values.CMS_DB_PREFIX || process.env.CMS_DB_PREFIX || "tooty_").trim();
   return raw.endsWith("_") ? raw : `${raw}_`;
@@ -93,8 +90,46 @@ function inferSiteUrl(values: Record<string, string>) {
 }
 
 const REQUIRED_TABLE_SUFFIXES = [
+  "communication_attempts",
+  "communication_messages",
+  "cms_settings",
+  "data_domains",
+  "domain_post_meta",
+  "domain_posts",
+  "media",
+  "rbac_roles",
+  "sessions",
+  "site_data_domains",
+  "sites",
+  "site_user_table_registry",
+  "term_relationships",
+  "term_taxonomies",
+  "term_taxonomy_domains",
+  "terms",
+  "users",
+  "user_meta",
+  "verificationTokens",
+  "accounts",
+  "webcallback_events",
+  "webhook_subscriptions",
+  "webhook_deliveries",
+] as const;
+
+const OPTIONAL_LEGACY_TABLE_SUFFIXES = [
+  "categories",
+  "examples",
+  "post_categories",
+  "post_meta",
+  "post_tags",
+  "posts",
+  "tags",
+] as const;
+
+const ALL_EXPECTED_TABLE_SUFFIXES = [
   "accounts",
   "categories",
+  "communication_attempts",
+  "communication_messages",
   "cms_settings",
   "data_domains",
   "domain_post_meta",
@@ -105,16 +140,22 @@ const REQUIRED_TABLE_SUFFIXES = [
   "post_meta",
   "post_tags",
   "posts",
+  "rbac_roles",
   "sessions",
   "site_data_domains",
   "sites",
+  "site_user_table_registry",
   "tags",
   "term_relationships",
   "term_taxonomies",
   "term_taxonomy_domains",
   "terms",
   "users",
+  "user_meta",
   "verificationTokens",
+  "webcallback_events",
+  "webhook_subscriptions",
+  "webhook_deliveries",
 ] as const;
 
 const DEFAULT_ENABLED_PLUGINS = ["hello-teety"] as const;
@@ -131,15 +172,20 @@ async function tableExists(tableName: string) {
   return existsValue === true || existsValue === "t" || existsValue === "true" || existsValue === 1;
 }
 
-async function getMissingTables(values: Record<string, string>) {
+async function getMissingTableSets(values: Record<string, string>) {
   const prefix = normalizedPrefixFromValues(values);
   const missing: string[] = [];
-  for (const suffix of REQUIRED_TABLE_SUFFIXES) {
+  for (const suffix of ALL_EXPECTED_TABLE_SUFFIXES) {
     const fullName = `${prefix}${suffix}`;
     const exists = await tableExists(fullName);
     if (!exists) missing.push(fullName);
   }
-  return missing;
+  const requiredSet = new Set(REQUIRED_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
+  const optionalSet = new Set(OPTIONAL_LEGACY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
+
+  const missingRequired = missing.filter((tableName) => requiredSet.has(tableName));
+  const missingOptional = missing.filter((tableName) => optionalSet.has(tableName));
+  return { missingRequired, missingOptional };
 }
 
 export async function POST(req: Request) {
@@ -164,6 +210,9 @@ export async function POST(req: Request) {
     | null;
   const adminName = typeof payload?.adminName === "string" ? payload.adminName.trim() : "";
   const adminEmail = typeof payload?.adminEmail === "string" ? payload.adminEmail.trim().toLowerCase() : "";
+  const adminPhone = typeof payload?.adminPhone === "string" ? payload.adminPhone.trim() : "";
+  const adminPassword = typeof payload?.adminPassword === "string" ? payload.adminPassword : "";
+  const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail);
 
   if (!values || typeof values !== "object") {
     trace("setup", "setup save rejected: missing values payload");
@@ -173,28 +222,32 @@ export async function POST(req: Request) {
     trace("setup", "setup save rejected: missing admin email");
     return NextResponse.json({ error: "Admin email is required." }, { status: 400 });
   }
+  if (!emailLooksValid) {
+    trace("setup", "setup save rejected: invalid admin email");
+    return NextResponse.json({ error: "Admin email must be a valid email address." }, { status: 400 });
+  }
   if (!adminName) {
     trace("setup", "setup save rejected: missing admin name");
     return NextResponse.json({ error: "Admin name is required." }, { status: 400 });
+  }
+  if (!adminPassword || adminPassword.length < 8) {
+    trace("setup", "setup save rejected: weak admin password");
+    return NextResponse.json({ error: "Admin password must be at least 8 characters." }, { status: 400 });
   }
 
   const normalized = Object.fromEntries(
     Object.entries(values).map(([key, value]) => [key, String(value ?? "")]),
   );
-  if (!hasOAuthProvider(normalized)) {
-    trace("setup", "setup save rejected: no oauth provider configured");
-    return NextResponse.json(
-      { error: "At least one OAuth provider must be configured (ID + Secret)." },
-      { status: 400 },
-    );
-  }
-
   trace("setup", "saving setup env values");
   await saveSetupEnvValues(normalized);
+  await advanceSetupLifecycleTo("configured");
   try {
-    const missingTables = await getMissingTables(normalized);
-    trace("setup", "required table existence check", { missingCount: missingTables.length });
-    if (missingTables.length > 0) {
+    const missingTables = await getMissingTableSets(normalized);
+    trace("setup", "required table existence check", {
+      missingRequiredCount: missingTables.missingRequired.length,
+      missingOptionalCount: missingTables.missingOptional.length,
+    });
+    if (missingTables.missingRequired.length > 0) {
       trace("setup", "initializing db schema");
       await initializeDbSchema(normalized);
     } else {
@@ -205,10 +258,11 @@ export async function POST(req: Request) {
     // Continue to DB probe below; if schema is still missing we return a clear error.
   }
 
-  const missingAfterInit = await getMissingTables(normalized);
-  if (missingAfterInit.length > 0) {
+  const missingAfterInit = await getMissingTableSets(normalized);
+  if (missingAfterInit.missingRequired.length > 0) {
     trace("setup", "setup save incomplete: missing tables after init", {
-      missingCount: missingAfterInit.length,
+      missingRequiredCount: missingAfterInit.missingRequired.length,
+      missingOptionalCount: missingAfterInit.missingOptional.length,
     });
     return NextResponse.json(
       {
@@ -216,15 +270,50 @@ export async function POST(req: Request) {
         envSaved: true,
         requiresDbInit: true,
         error:
-          "Environment was saved, but DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Save Setup again.",
+          "Environment was saved, but required DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Finish Setup again.",
       },
       { status: 409 },
     );
   }
 
-  trace("setup", "storing setup metadata only; user is created on first OAuth login", {
+  const dbHealth = await getDatabaseHealthReport();
+  if (dbHealth.migrationRequired) {
+    trace("setup", "applying pending database migrations during setup", {
+      pendingCount: dbHealth.pending.length,
+    });
+    await applyPendingDatabaseMigrations();
+  } else {
+    await markDatabaseSchemaCurrent();
+  }
+  await advanceSetupLifecycleTo("migrated");
+
+  trace("setup", "storing setup metadata and creating native admin user", {
     adminEmail,
   });
+  const passwordHash = await hashPassword(adminPassword);
+  const existingUser = await db.query.users.findFirst({
+    where: (table, { eq }) => eq(table.email, adminEmail),
+    columns: { id: true },
+  });
+  if (!existingUser) {
+    await db.insert(users).values({
+      email: adminEmail,
+      name: adminName,
+      role: NETWORK_ADMIN_ROLE,
+      authProvider: "native",
+      passwordHash,
+    });
+  } else {
+    await db
+      .update(users)
+      .set({
+        name: adminName,
+        role: NETWORK_ADMIN_ROLE,
+        authProvider: "native",
+        passwordHash,
+      })
+      .where(eq(users.id, existingUser.id));
+  }
   await db
     .insert(cmsSettings)
     .values({ key: "bootstrap_admin_name", value: adminName })
@@ -238,6 +327,13 @@ export async function POST(req: Request) {
     .onConflictDoUpdate({
       target: cmsSettings.key,
       set: { value: adminEmail, updatedAt: new Date() },
+    });
+  await db
+    .insert(cmsSettings)
+    .values({ key: "bootstrap_admin_phone", value: adminPhone })
+    .onConflictDoUpdate({
+      target: cmsSettings.key,
+      set: { value: adminPhone, updatedAt: new Date() },
     });
   await db
     .insert(cmsSettings)
@@ -268,6 +364,9 @@ export async function POST(req: Request) {
       .onConflictDoNothing();
   }
 
+  await ensureDefaultCoreDataDomains();
+
+  await advanceSetupLifecycleTo("ready");
   trace("setup", "setup save completed successfully");
-  return NextResponse.json({ ok: true, envSaved: true, dbInitialized: true, userCreated: false });
+  return NextResponse.json({ ok: true, envSaved: true, dbInitialized: true, userCreated: true });
 }

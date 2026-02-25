@@ -26,6 +26,9 @@ export const SCHEDULES_ENABLED_KEY = "schedules_enabled";
 export const SCHEDULES_PING_SITEMAP_KEY = "schedules_ping_sitemap";
 export const THEME_QUERY_NETWORK_ENABLED_KEY = "theme_query_network_enabled";
 export const THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY = "theme_query_network_allowed_site_ids";
+export const COMMUNICATION_ENABLED_KEY = "communication_enabled";
+export const COMMUNICATION_RATE_LIMIT_MAX_KEY = "communication_rate_limit_max";
+export const COMMUNICATION_RATE_LIMIT_WINDOW_SECONDS_KEY = "communication_rate_limit_window_seconds";
 
 function siteScopedSettingKey(siteId: string, key: string) {
   return `site_${siteId}_${key}`;
@@ -84,6 +87,47 @@ export async function getSiteBooleanSetting(siteId: string, key: string, fallbac
 
 export async function setSiteBooleanSetting(siteId: string, key: string, value: boolean) {
   return setBooleanSetting(siteScopedSettingKey(siteId, key), value);
+}
+
+function normalizePositiveInt(input: string, fallback: number) {
+  const value = Number.parseInt(String(input || "").trim(), 10);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return value;
+}
+
+export type SiteCommunicationGovernance = {
+  enabled: boolean;
+  rateLimitMax: number;
+  rateLimitWindowSeconds: number;
+};
+
+export async function getSiteCommunicationGovernance(siteId?: string | null): Promise<SiteCommunicationGovernance> {
+  const globalEnabled = await getBooleanSetting(COMMUNICATION_ENABLED_KEY, true);
+  const globalRateLimitMax = normalizePositiveInt(await getTextSetting(COMMUNICATION_RATE_LIMIT_MAX_KEY, "60"), 60);
+  const globalRateLimitWindowSeconds = normalizePositiveInt(
+    await getTextSetting(COMMUNICATION_RATE_LIMIT_WINDOW_SECONDS_KEY, "60"),
+    60,
+  );
+
+  if (!siteId) {
+    return {
+      enabled: globalEnabled,
+      rateLimitMax: globalRateLimitMax,
+      rateLimitWindowSeconds: globalRateLimitWindowSeconds,
+    };
+  }
+
+  const [enabled, rateLimitMaxRaw, rateLimitWindowRaw] = await Promise.all([
+    getSiteBooleanSetting(siteId, COMMUNICATION_ENABLED_KEY, globalEnabled),
+    getSiteTextSetting(siteId, COMMUNICATION_RATE_LIMIT_MAX_KEY, String(globalRateLimitMax)),
+    getSiteTextSetting(siteId, COMMUNICATION_RATE_LIMIT_WINDOW_SECONDS_KEY, String(globalRateLimitWindowSeconds)),
+  ]);
+
+  return {
+    enabled,
+    rateLimitMax: normalizePositiveInt(rateLimitMaxRaw, globalRateLimitMax),
+    rateLimitWindowSeconds: normalizePositiveInt(rateLimitWindowRaw, globalRateLimitWindowSeconds),
+  };
 }
 
 function normalizeSiteUrl(input: string) {

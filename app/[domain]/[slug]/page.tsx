@@ -207,7 +207,7 @@ export default async function SitePostPage({
   const categorySlugs = categoryRows
     .map((row) => row.slug)
     .filter((slug): slug is string => typeof slug === "string");
-  const themeId = activeTheme?.id || "tooty-default";
+  const themeId = activeTheme?.id || "tooty-light";
   const isPrimary = Boolean((data as any)?.site?.isPrimary) || (data as any)?.site?.subdomain === "main";
   const configuredRootUrl = siteId ? (await getSiteUrlSettingForSite(siteId, "")).value.trim() : "";
   const derivedSiteUrl = getSitePublicUrl({

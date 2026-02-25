@@ -24,7 +24,7 @@ Theme root path:
 
 ```json
 {
-  "id": "tooty-default",
+  "id": "tooty-light",
   "name": "Tooty Light",
   "description": "Warm pastel beige defaults",
   "version": "1.0.0",
@@ -217,6 +217,6 @@ Theme authors should rely on the core fallback contract when naming templates.
 - Taxonomy: `taxonomy-<taxonomy>-<term>.html` -> `taxonomy-<taxonomy>.html` -> `taxonomy.html` -> `archive.html` -> `index.html`
 
 Guidance:
-- Prefer route-specific files (`archive-projects.html`, `single-project.html`) for precise control.
+- Prefer route-specific files (`archive-posts.html`, `single-post.html`, `archive-pages.html`, `single-page.html`) for precise control.
 - Provide `single.html` and `archive.html` as broad fallbacks for all content domains.
-- Keep data-domain identity singular (`project`) while route/archive naming is plural (`projects`), including `post` -> `posts`.
+- Keep data-domain identity singular while route/archive naming is plural (for example `post` -> `posts`, `page` -> `pages`).

@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import middleware from "@/proxy";
+
+let mockedToken: Record<string, unknown> | null = null;
+vi.mock("next-auth/jwt", () => ({
+  getToken: vi.fn(async () => mockedToken),
+}));
 
 function makeRequest(url: string, host: string, cookie?: string) {
   const headers: Record<string, string> = { host };
@@ -15,6 +20,7 @@ describe("middleware routing", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "example.com";
     process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX = "vercel.app";
+    mockedToken = null;
   });
 
   it("redirects unauthenticated app users to login", async () => {
@@ -63,6 +69,33 @@ describe("middleware routing", () => {
     const response = await middleware(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://app.example.com/app");
+  });
+
+  it("redirects authenticated users to profile when password change is required", async () => {
+    mockedToken = { forcePasswordChange: true };
+    const req = makeRequest(
+      "http://app.example.com/settings/users",
+      "app.example.com",
+      "next-auth.session-token=fake-token",
+    );
+
+    const response = await middleware(req);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://app.example.com/settings/profile?forcePasswordChange=1");
+  });
+
+  it("allows profile page when password change is required", async () => {
+    mockedToken = { forcePasswordChange: true };
+    const req = makeRequest(
+      "http://app.example.com/settings/profile",
+      "app.example.com",
+      "next-auth.session-token=fake-token",
+    );
+
+    const response = await middleware(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://app.example.com/app/settings/profile");
   });
 
   it("rewrites root about path to shared /about page", async () => {

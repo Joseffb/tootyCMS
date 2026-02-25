@@ -40,7 +40,7 @@ describe("analytics-tinybird plugin", () => {
     });
     await register(kernel as any, { getPluginSetting });
 
-    const queryFilter = filters.get("analytics:query")?.[0];
+    const queryFilter = filters.get("domain:query")?.[0];
     const response = await queryFilter!(null, { name: "top_pages", params: { provider: "tinybird" } });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -58,7 +58,7 @@ describe("analytics-tinybird plugin", () => {
     });
     await register(kernel as any, { getPluginSetting });
 
-    const eventAction = actions.get("analytics:event")?.[0];
+    const eventAction = actions.get("domain:event")?.[0];
     await eventAction!({ name: "page_view", actorType: "admin" });
     expect(fetchMock).not.toHaveBeenCalled();
   });

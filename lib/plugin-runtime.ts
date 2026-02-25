@@ -5,6 +5,7 @@ import { createKernel, type MenuItem } from "@/lib/kernel";
 import { createPluginExtensionApi, type PluginCapabilities } from "@/lib/extension-api";
 import {
   type PluginWithState,
+  type PluginWithSiteState,
   getAvailablePlugins,
   getPluginById,
   getPluginEntryPath,
@@ -12,7 +13,7 @@ import {
   listPluginsWithSiteState,
   pluginConfigKey,
   pluginEnabledKey,
-  pluginMustUseKey,
+  pluginNetworkRequiredKey,
   sitePluginConfigKey,
   sitePluginEnabledKey,
 } from "@/lib/plugins";
@@ -48,13 +49,13 @@ export async function setPluginEnabled(pluginId: string, enabled: boolean) {
     });
 }
 
-export async function setPluginMustUse(pluginId: string, mustUse: boolean) {
+export async function setPluginNetworkRequired(pluginId: string, networkRequired: boolean) {
   await db
     .insert(cmsSettings)
-    .values({ key: pluginMustUseKey(pluginId), value: mustUse ? "true" : "false" })
+    .values({ key: pluginNetworkRequiredKey(pluginId), value: networkRequired ? "true" : "false" })
     .onConflictDoUpdate({
       target: cmsSettings.key,
-      set: { value: mustUse ? "true" : "false" },
+      set: { value: networkRequired ? "true" : "false" },
     });
 }
 
@@ -105,6 +106,8 @@ function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
     serverHandlers: Boolean(caps.serverHandlers ?? false),
     authExtensions: Boolean(caps.authExtensions ?? false),
     scheduleJobs: Boolean(caps.scheduleJobs ?? false),
+    communicationProviders: Boolean(caps.communicationProviders ?? false),
+    webCallbacks: Boolean(caps.webCallbacks ?? false),
   };
 }
 
@@ -149,7 +152,7 @@ function createGuardedKernelView(
 async function maybeRegisterPluginHooks(
   plugin: PluginWithState,
   kernel: ReturnType<typeof createKernel>,
-  options?: { siteId?: string; mustUse?: boolean },
+  options?: { siteId?: string; networkRequired?: boolean },
 ) {
   const pluginId = plugin.id;
   const capabilities = toRuntimeCapabilities(plugin);
@@ -173,7 +176,7 @@ async function maybeRegisterPluginHooks(
       const guardedKernel = createGuardedKernelView(plugin, kernel, capabilities);
       const guardedApi = createPluginExtensionApi(pluginId, {
         siteId: options?.siteId,
-        mustUse: Boolean(options?.mustUse),
+        networkRequired: Boolean(options?.networkRequired),
         capabilities,
         coreRegistry: {
           registerContentType(registration) {
@@ -188,6 +191,18 @@ async function maybeRegisterPluginHooks(
           registerScheduleHandler(registration) {
             kernel.registerPluginScheduleHandler(pluginId, registration);
           },
+          registerCommunicationProvider(registration) {
+            kernel.registerPluginCommunicationProvider(pluginId, registration);
+          },
+          registerWebcallbackHandler(registration) {
+            kernel.registerPluginWebcallbackHandler(pluginId, registration);
+          },
+          registerContentState(registration) {
+            kernel.registerContentState(registration);
+          },
+          registerContentTransition(registration) {
+            kernel.registerContentTransition(registration);
+          },
         },
       });
       await mod.register(guardedKernel, guardedApi);
@@ -197,12 +212,16 @@ async function maybeRegisterPluginHooks(
       trace("plugins", "plugin runtime entry not found", { pluginId, entry: absEntry });
       return;
     }
-    trace("plugins", "plugin runtime registration failed", {
+  trace("plugins", "plugin runtime registration failed", {
       pluginId,
       entry: absEntry,
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function hasSiteState(plugin: PluginWithState): plugin is PluginWithSiteState {
+  return "siteEnabled" in plugin;
 }
 
 export async function createKernelForRequest(siteId?: string) {
@@ -218,9 +237,8 @@ export async function createKernelForRequest(siteId?: string) {
   const plugins = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
   for (const plugin of plugins) {
     if (!plugin.enabled) continue;
-    const scope = plugin.scope || "site";
-    const sitePlugin = siteId && scope !== "core" && "siteEnabled" in plugin;
-    if (sitePlugin && !plugin.mustUse && !plugin.siteEnabled) continue;
+    const siteScopedRun = Boolean(siteId && hasSiteState(plugin));
+    if (siteScopedRun && hasSiteState(plugin) && !plugin.siteEnabled) continue;
     const capabilities = toRuntimeCapabilities(plugin);
 
     if (plugin.menu) {
@@ -241,7 +259,7 @@ export async function createKernelForRequest(siteId?: string) {
 
     await maybeRegisterPluginHooks(plugin, kernel, {
       siteId,
-      mustUse: sitePlugin ? plugin.mustUse : false,
+      networkRequired: siteScopedRun ? plugin.networkRequired : false,
     });
   }
 
@@ -254,9 +272,8 @@ export async function getDashboardPluginMenuItems(siteId?: string): Promise<Menu
     .filter((plugin) => {
       if (!plugin.enabled || !plugin.menu) return false;
       if (!siteId) return true;
-      const isCore = (plugin.scope || "site") === "core";
       const siteEnabled = "siteEnabled" in plugin ? Boolean(plugin.siteEnabled) : true;
-      return isCore || plugin.mustUse || siteEnabled;
+      return siteEnabled;
     })
     .map((plugin) => ({
       label: plugin.menu?.label || plugin.name,

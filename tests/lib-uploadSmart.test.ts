@@ -6,6 +6,7 @@ describe("uploadSmart", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     delete process.env.BLOB_READ_WRITE_TOKEN;
+    delete process.env.NEXT_PUBLIC_MEDIA_UPLOAD_PROVIDER;
   });
 
   afterEach(() => {
@@ -63,7 +64,8 @@ describe("uploadSmart", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("blob failed", { status: 500 }))
-      .mockResolvedValueOnce(new Response("local failed", { status: 500 }));
+      .mockResolvedValueOnce(new Response("local failed", { status: 500 }))
+      .mockResolvedValueOnce(new Response("db failed", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -72,6 +74,27 @@ describe("uploadSmart", () => {
         name: "heroImage",
         siteId: "site-1",
       }),
-    ).rejects.toThrow("Local image upload failed");
+    ).rejects.toThrow("/api/uploadImageDb failed (500)");
+  });
+
+  it("uses db blob endpoint when mode is dbblob", async () => {
+    process.env.NEXT_PUBLIC_MEDIA_UPLOAD_PROVIDER = "dbblob";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ url: "data:image/png;base64,abc123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await uploadSmart({
+      file: new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" }),
+      name: "heroImage",
+      siteId: "site-1",
+    });
+
+    expect(response.url).toContain("data:image/png");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/uploadImageDb");
   });
 });

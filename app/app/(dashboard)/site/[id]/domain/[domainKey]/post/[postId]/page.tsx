@@ -11,6 +11,7 @@ import db from "@/lib/db";
 import { domainPostMeta, domainPosts, termRelationships, termTaxonomies, terms } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
+import { canUserMutateDomainPost, userCan } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -51,7 +52,17 @@ export default async function DomainPostPage({ params }: Props) {
       },
     },
   });
-  if (!data || data.userId !== session.user.id) {
+  if (!data) {
+    notFound();
+  }
+  const canEdit = await canUserMutateDomainPost(session.user.id, resolvedPostId, "edit");
+  const canRead = data.siteId
+    ? await userCan("site.content.read", session.user.id, { siteId: data.siteId })
+    : false;
+  const canPublish = data.siteId
+    ? await userCan("site.content.publish", session.user.id, { siteId: data.siteId })
+    : false;
+  if (!canEdit.allowed && !canRead) {
     notFound();
   }
 
@@ -99,6 +110,8 @@ export default async function DomainPostPage({ params }: Props) {
       defaultEditorMode="rich-text"
       onSave={updateDomainPost}
       onUpdateMetadata={updateDomainPostMetadata}
+      canEdit={canEdit.allowed}
+      canPublish={canPublish}
     />
   );
 }

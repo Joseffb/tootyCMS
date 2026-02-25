@@ -30,12 +30,14 @@ export type PluginContract = {
   kind: "plugin";
   id: string;
   name: string;
+  distribution?: "core" | "community";
   developer?: string;
   website?: string;
   description?: string;
   version?: string;
   minCoreVersion?: string;
-  scope?: "core" | "site";
+  authProviderId?: string;
+  scope?: "site" | "network";
   capabilities?: {
     hooks?: boolean;
     adminExtensions?: boolean;
@@ -43,6 +45,8 @@ export type PluginContract = {
     serverHandlers?: boolean;
     authExtensions?: boolean;
     scheduleJobs?: boolean;
+    communicationProviders?: boolean;
+    webCallbacks?: boolean;
   };
   menu?: {
     label?: string;
@@ -143,17 +147,22 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
   const snippetsRaw = Array.isArray(editor?.snippets) ? editor?.snippets : [];
   const settingsRaw = Array.isArray(candidate.settingsFields) ? candidate.settingsFields : [];
   const scopeRaw = String(candidate.scope ?? "").trim().toLowerCase();
-  const scope: "core" | "site" = scopeRaw === "core" ? "core" : "site";
+  // Backward-compat: legacy "core" scope is normalized to "network".
+  const scope: "site" | "network" = scopeRaw === "network" || scopeRaw === "core" ? "network" : "site";
+  const distributionRaw = String(candidate.distribution ?? "").trim().toLowerCase();
+  const distribution: "core" | "community" = distributionRaw === "core" ? "core" : "community";
 
   return {
     kind: "plugin",
     id,
     name,
+    distribution,
     developer: String(candidate.developer ?? "").trim(),
     website: String(candidate.website ?? "").trim(),
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
     minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
+    authProviderId: String(candidate.authProviderId ?? "").trim().toLowerCase(),
     scope,
     capabilities: {
       hooks: candidate.capabilities ? Boolean(asRecord(candidate.capabilities).hooks ?? true) : true,
@@ -171,6 +180,12 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
         : false,
       scheduleJobs: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).scheduleJobs ?? false)
+        : false,
+      communicationProviders: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).communicationProviders ?? false)
+        : false,
+      webCallbacks: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).webCallbacks ?? false)
         : false,
     },
     menu: menu

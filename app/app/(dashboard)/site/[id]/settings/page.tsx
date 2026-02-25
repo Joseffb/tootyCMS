@@ -6,9 +6,11 @@ import CreateSiteButton from "@/components/create-site-button";
 import CreateSiteModal from "@/components/modal/create-site";
 import db from "@/lib/db";
 import { sites } from "@/lib/schema";
-import { count, eq } from "drizzle-orm";
+import { count, inArray } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -20,19 +22,20 @@ export default async function SiteSettingsIndex({ params }: Props) {
     redirect("/login");
   }
   const { id } = await params;
-  const data = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, decodeURIComponent(id)),
-  });
+  const data = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  if (!data) {
+    notFound();
+    return null;
+  }
+  const accessibleSiteIds = await listSiteIdsForUser(session.user.id);
   const [ownedSiteCount] = await db
     .select({ count: count() })
     .from(sites)
-    .where(eq(sites.userId, session.user.id));
-
-  // Handle case if no data is found
-  if (!data) {
-    notFound();
-    return null; // Return nothing to avoid rendering issues
-  }
+    .where(
+      accessibleSiteIds.length
+        ? inArray(sites.id, accessibleSiteIds)
+        : inArray(sites.id, ["__none__"]),
+    );
 
   return (
     <>
@@ -129,7 +132,7 @@ export default async function SiteSettingsIndex({ params }: Props) {
               </p>
               <div className="w-fit">
                 <CreateSiteButton label="Add New Site">
-                  <CreateSiteModal />
+                  <CreateSiteModal successRedirectPath="/" />
                 </CreateSiteButton>
               </div>
             </div>

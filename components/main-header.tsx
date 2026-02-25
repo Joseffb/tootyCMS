@@ -70,9 +70,8 @@ export default function Main({
         const res = await fetch("/api/auth/session", { cache: "no-store" });
         if (!res.ok) return;
         const session = await res.json();
-        const role = session?.user?.role as string | undefined;
         if (isMounted) {
-          setCanOpenDashboard(role === "administrator" || role === "editor");
+          setCanOpenDashboard(Boolean(session?.user?.id));
         }
       } catch {
         if (isMounted) {

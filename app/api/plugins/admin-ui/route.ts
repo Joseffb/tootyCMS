@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   const siteId = url.searchParams.get("siteId")?.trim() || "";
   const environment = process.env.NODE_ENV === "development" ? "development" : "production";
   const kernel = await createKernelForRequest(siteId || undefined);
-  const hasAnalyticsProviders = kernel.hasFilter("analytics:query");
+  const hasAnalyticsProviders = kernel.hasFilter("domain:query");
 
   const badge = await kernel.applyFilters<EnvironmentBadge | null>("admin:environment-badge", null, {
     siteId: siteId || null,

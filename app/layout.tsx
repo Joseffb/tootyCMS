@@ -67,6 +67,8 @@ export default function RootLayout({
           protect={[
             { path: "/api/generate", method: "POST" },
             { path: "/api/uploadImage", method: "POST" },
+            { path: "/api/uploadImageLocal", method: "POST" },
+            { path: "/api/uploadImageDb", method: "POST" },
           ]}
         />
         <AnalyticsConditional />

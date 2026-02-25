@@ -20,7 +20,7 @@ describe("gdpr-consent plugin", () => {
     const { kernel, filters } = createKernel();
     await register(kernel as any);
 
-    const scriptFilter = filters.get("analytics:scripts")?.[0];
+    const scriptFilter = filters.get("domain:scripts")?.[0];
     const existing = [{ id: "existing", src: "/existing.js" }];
     const scripts = await scriptFilter!(existing);
     expect(scripts).toEqual(existing);

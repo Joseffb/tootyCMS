@@ -46,6 +46,14 @@ const fallbackTokens: ThemeTokens = {
 const siteThemeKey = (siteId: string) => `site_${siteId}_theme`;
 const themeEnabledKey = (themeId: string) => `theme_${themeId}_enabled`;
 const themeConfigKey = (themeId: string) => `theme_${themeId}_config`;
+const DEFAULT_SITE_THEME_ID = "tooty-light";
+const LEGACY_THEME_ID_ALIASES: Record<string, string> = {
+  "tooty-dark": "teety-dark",
+};
+
+function resolveThemeIdAlias(themeId: string) {
+  return LEGACY_THEME_ID_ALIASES[themeId] || themeId;
+}
 
 export const SYSTEM_THEME_PRIMARIES: ThemeSystemPrimaries = {
   documentation_category_slug: "documentation",
@@ -142,7 +150,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
     return [
       {
         kind: "theme",
-        id: "tooty-default",
+        id: DEFAULT_SITE_THEME_ID,
         name: "Tooty Light",
         description: "Built-in fallback theme",
         version: CORE_VERSION,
@@ -155,14 +163,20 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
     ];
   }
 
-  const keys = themes.flatMap((theme) => [themeEnabledKey(theme.id), themeConfigKey(theme.id)]);
+  const keys = themes.flatMap((theme) => {
+    const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
+    return legacyId
+      ? [themeEnabledKey(theme.id), themeConfigKey(theme.id), themeEnabledKey(legacyId), themeConfigKey(legacyId)]
+      : [themeEnabledKey(theme.id), themeConfigKey(theme.id)];
+  });
   const rows = await db.select({ key: cmsSettings.key, value: cmsSettings.value }).from(cmsSettings).where(inArray(cmsSettings.key, keys));
   const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
 
   return themes.map((theme) => {
-    const storedConfig = byKey[themeConfigKey(theme.id)]
-      ? parseJson<Record<string, unknown>>(byKey[themeConfigKey(theme.id)], {})
-      : {};
+    const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
+    const storedConfigRaw = byKey[themeConfigKey(theme.id)] ?? (legacyId ? byKey[themeConfigKey(legacyId)] : undefined);
+    const storedConfig = storedConfigRaw ? parseJson<Record<string, unknown>>(storedConfigRaw, {}) : {};
+    const enabledRaw = byKey[themeEnabledKey(theme.id)] ?? (legacyId ? byKey[themeEnabledKey(legacyId)] : undefined);
     const fieldDefaults = Object.fromEntries(
       (theme.settingsFields || [])
         .filter((field) => typeof field.defaultValue === "string")
@@ -171,7 +185,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
 
     return {
       ...theme,
-      enabled: byKey[themeEnabledKey(theme.id)] ? byKey[themeEnabledKey(theme.id)] === "true" : true,
+      enabled: enabledRaw ? enabledRaw === "true" : true,
       config: normalizeThemeConfig({
         ...fieldDefaults,
         ...storedConfig,
@@ -182,24 +196,27 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
 }
 
 export async function setThemeEnabled(themeId: string, enabled: boolean) {
+  const resolvedThemeId = resolveThemeIdAlias(themeId);
   await db
     .insert(cmsSettings)
-    .values({ key: themeEnabledKey(themeId), value: enabled ? "true" : "false" })
+    .values({ key: themeEnabledKey(resolvedThemeId), value: enabled ? "true" : "false" })
     .onConflictDoUpdate({ target: cmsSettings.key, set: { value: enabled ? "true" : "false" } });
 }
 
 export async function saveThemeConfig(themeId: string, config: Record<string, unknown>) {
+  const resolvedThemeId = resolveThemeIdAlias(themeId);
   await db
     .insert(cmsSettings)
-    .values({ key: themeConfigKey(themeId), value: JSON.stringify(config) })
+    .values({ key: themeConfigKey(resolvedThemeId), value: JSON.stringify(config) })
     .onConflictDoUpdate({ target: cmsSettings.key, set: { value: JSON.stringify(config) } });
 }
 
 export async function setSiteTheme(siteId: string, themeId: string) {
+  const resolvedThemeId = resolveThemeIdAlias(themeId);
   await db
     .insert(cmsSettings)
-    .values({ key: siteThemeKey(siteId), value: themeId })
-    .onConflictDoUpdate({ target: cmsSettings.key, set: { value: themeId } });
+    .values({ key: siteThemeKey(siteId), value: resolvedThemeId })
+    .onConflictDoUpdate({ target: cmsSettings.key, set: { value: resolvedThemeId } });
 }
 
 export async function getSiteThemeId(siteId: string) {
@@ -207,13 +224,19 @@ export async function getSiteThemeId(siteId: string) {
     where: eq(cmsSettings.key, siteThemeKey(siteId)),
     columns: { value: true },
   });
-  return row?.value || "tooty-default";
+  const stored = String(row?.value || "").trim();
+  if (!stored) return DEFAULT_SITE_THEME_ID;
+  return resolveThemeIdAlias(stored);
 }
 
 export async function getSiteThemeTokens(siteId: string): Promise<ThemeTokens> {
   const [themes, selectedId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteId)]);
   const enabledThemes = themes.filter((theme) => theme.enabled);
-  const chosen = enabledThemes.find((theme) => theme.id === selectedId) || enabledThemes[0] || themes[0];
+  const chosen =
+    enabledThemes.find((theme) => theme.id === selectedId) ||
+    enabledThemes.find((theme) => theme.id === DEFAULT_SITE_THEME_ID) ||
+    enabledThemes[0] ||
+    themes[0];
   return {
     ...fallbackTokens,
     ...(chosen?.tokens || {}),

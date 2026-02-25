@@ -7,17 +7,21 @@ import OverviewSitesCTA from "@/components/overview-sites-cta";
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import { redirect } from "next/navigation";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { inArray } from "drizzle-orm";
+import { sites } from "@/lib/schema";
 
 export default async function Overview() {
   const session = await getSession();
   if (session) {
-    const ownedSites = await db.query.sites.findMany({
-      where: (sites, { eq }) => eq(sites.userId, session.user.id),
+    const siteIds = await listSiteIdsForUser(session.user.id);
+    const memberSites = siteIds.length > 0 ? await db.query.sites.findMany({
+      where: inArray(sites.id, siteIds),
       columns: { id: true, isPrimary: true, subdomain: true },
-    });
-    if (ownedSites.length === 1) {
+    }) : [];
+    if (memberSites.length === 1) {
       const primary =
-        ownedSites.find((site) => site.isPrimary || site.subdomain === "main") || ownedSites[0];
+        memberSites.find((site) => site.isPrimary || site.subdomain === "main") || memberSites[0];
       redirect(`/site/${primary.id}`);
     }
   }

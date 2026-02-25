@@ -31,6 +31,34 @@ vi.mock("@/lib/media-variants", () => ({
   })),
 }));
 
+vi.mock("@/lib/auth", () => ({
+  getSession: vi.fn(async () => ({ user: { id: "user-1" } })),
+}));
+
+vi.mock("@/lib/authorization", () => ({
+  userCan: vi.fn(async () => true),
+}));
+
+vi.mock("@/lib/db", () => ({
+  default: {
+    query: {
+      sites: {
+        findFirst: vi.fn(async () => ({ id: "site-1" })),
+      },
+    },
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(async () => []),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(async () => undefined),
+      })),
+    })),
+  },
+}));
+
 import { POST } from "@/app/api/uploadImage/route";
 
 function makeRequest(formData: FormData) {

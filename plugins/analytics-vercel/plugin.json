@@ -1,6 +1,6 @@
 {
   "id": "analytics-vercel",
-  "name": "Vercel Analytics",
+  "name": "Analytics Vercel",
   "description": "Site-level provider plugin slot for Vercel analytics integration.",
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
@@ -12,10 +12,11 @@
     "serverHandlers": false
   },
   "menu": {
-    "label": "Vercel Analytics",
+    "label": "Analytics Vercel",
     "path": "/app/plugins/analytics-vercel"
   },
   "settingsFields": [],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

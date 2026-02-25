@@ -17,7 +17,7 @@ Core is the only authority for:
 
 - Canonical data-domain type names are singular (for key and DB table identity).
 - Admin/UI menu labels are pluralized for collection/listing navigation.
-- Example: type `project` maps to table/key identity; UI shows `Projects`.
+- Example: type `post` maps to table/key identity; UI shows `Posts`.
 
 ### API Route Naming
 
@@ -55,16 +55,28 @@ Plugins may:
 - Register content-type and server behavior only through Core contract surfaces
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
-- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`)
+- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`, `communicationProviders`, `webCallbacks`)
+- Extend admin profile UI through filter hooks (for example `admin:profile:sections`)
 - Declare plugin scope explicitly:
-  - `scope: "core"` = MU-style plugin. When globally enabled, it runs across all sites.
-  - `scope: "site"` = site plugin. It must be globally enabled; by default it is enabled/disabled per site, and may be forced network-wide with global `Must Use`.
+  - `scope: "network"` = network-governed plugin. Network enablement is global and treated as network-required for sites.
+  - `scope: "site"` = site plugin. It must be globally enabled; by default it is enabled/disabled per site, and may be forced network-wide with global `networkRequired`.
+  - `distribution: "core" | "community"` is metadata (origin tag), not activation scope.
 
 Scope governance:
 
-- Core (MU-style) plugins are for network-wide behavior and platform operations.
+- Network plugins are for network-wide behavior and platform operations.
 - Site plugins are for tenant/site-owned behavior, integrations, and content features.
-- Analytics providers and consent/GDPR behavior should be implemented as `scope: "site"` plugins.
+- Analytics providers and consent/GDPR behavior are typically `scope: "site"` plugins unless a network policy explicitly requires forced rollout.
+
+### Auth Provider Plugin Contract (MUST)
+
+- Native auth is core baseline and always available.
+- OAuth providers are plugin-backed and must declare:
+  - `capabilities.authExtensions: true`
+  - `authProviderId` (for example: `github`, `google`, `facebook`, `apple`)
+- Global plugin enabled state controls provider availability at login.
+- Multiple auth provider plugins may be enabled at the same time.
+- Core user records are global and are not site-bound in current contract.
 
 ### Analytics Contract (MUST)
 
@@ -77,12 +89,12 @@ Core owns analytics event semantics and dispatch:
 
 Analytics plugins are transport adapters only:
 
-- Subscribe to `analytics:event` to forward events to a provider.
-- Optionally expose query adapters via `analytics:query`.
-- Optionally expose script adapters via `analytics:scripts`.
+- Subscribe to `domain:event` to forward events to a provider.
+- Optionally expose query adapters via `domain:query`.
+- Optionally expose script adapters via `domain:scripts`.
 - Must not redefine core event names or schema semantics.
 
-Canonical analytics envelope (`analytics:event` payload):
+Canonical analytics envelope (`domain:event` payload):
 
 - `version: 1` (required)
 - `name: "page_view" | "content_published" | "content_deleted" | "custom_event"` (required)
@@ -95,13 +107,13 @@ Canonical analytics envelope (`analytics:event` payload):
 - `actorId?: string`
 - `meta?: Record<string, unknown>` (reserved extensibility bag)
 
-Analytics query contract (`analytics:query`):
+Analytics query contract (`domain:query`):
 
 - Input context includes `name` and `params`.
 - Plugin returns an HTTP `Response`/`NextResponse` or `null` (no-op).
 - Core keeps provider-neutral fallback when no plugin handles a query.
 
-Analytics scripts contract (`analytics:scripts`):
+Analytics scripts contract (`domain:scripts`):
 
 - Plugin returns script descriptors only (transport layer), not event semantics.
 - Descriptor shape:
@@ -110,6 +122,55 @@ Analytics scripts contract (`analytics:scripts`):
   - `inline?: string`
   - `strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive"`
   - `attrs?: Record<string, string>`
+
+### Communication Contract (MUST)
+
+Core owns communication semantics and dispatch:
+
+- canonical message schema (`channel`, recipients, content, metadata)
+- queue + attempt audit records
+- retry/failure policy ownership
+- consent/policy checks before provider delivery
+
+Communication provider plugins are transport adapters only:
+
+- register channel handlers through core communication registration
+- map canonical payload to provider API payload
+- return normalized provider response/error data
+- do not define canonical communication business semantics
+
+Canonical channels:
+
+- `email`
+- `sms`
+- `mms`
+- `com-x`
+
+Provider registration contract:
+
+- plugin declares `capabilities.communicationProviders: true`
+- provider registration includes:
+  - `id`
+  - `channels: string[]`
+  - `deliver(message) => { ok: boolean; externalId?: string; response?: Record<string, unknown>; error?: string }`
+
+If no provider is available for a channel, core uses null-provider behavior (audit/log only, no external send).
+
+### Webcallback Contract (MUST)
+
+Core owns callback ingestion and audit:
+
+- callback ingress routes
+- request audit rows
+- handler dispatch and failure recording
+
+Plugin handlers are adapter surfaces only:
+
+- declare `capabilities.webCallbacks: true`
+- register `id` + `handle({ body, headers, query })`
+- return normalized processing result
+
+Callback handlers must not bypass core auth/routing/schema protections.
 
 Plugins may not:
 

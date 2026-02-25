@@ -1,12 +1,12 @@
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import db from "@/lib/db";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteDataDomainByKey } from "@/lib/actions";
 import { getSiteUrlSetting } from "@/lib/cms-config";
 import CreateDomainPostButton from "@/components/create-domain-post-button";
 import DomainPosts from "@/components/domain-posts";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
+import { getAuthorizedSiteForAnyCapability } from "@/lib/authorization";
 
 type Props = {
   params: Promise<{
@@ -25,10 +25,15 @@ export default async function SiteDomainPosts({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
 
-  const site = await db.query.sites.findFirst({
-    where: (sites, { eq }) => eq(sites.id, siteId),
-  });
-  if (!site || site.userId !== session.user.id) {
+  const site = await getAuthorizedSiteForAnyCapability(session.user.id, siteId, [
+    "site.domain.list",
+    "site.content.read",
+    "site.content.create",
+    "site.content.edit.own",
+    "site.content.edit.any",
+    "site.content.publish",
+  ]);
+  if (!site) {
     notFound();
   }
 

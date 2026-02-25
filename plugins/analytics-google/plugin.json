@@ -1,6 +1,6 @@
 {
   "id": "analytics-google",
-  "name": "Google Analytics",
+  "name": "Analytics Google",
   "description": "Site-level provider plugin slot for Google Analytics integration.",
   "version": "0.1.0",
   "minCoreVersion": "0.2.x",
@@ -12,7 +12,7 @@
     "serverHandlers": false
   },
   "menu": {
-    "label": "Google Analytics",
+    "label": "Analytics Google",
     "path": "/app/plugins/analytics-google"
   },
   "settingsFields": [
@@ -36,5 +36,6 @@
     }
   ],
   "developer": "Fernain Betancourt",
-  "website": "https://fernain.com"
+  "website": "https://fernain.com",
+  "distribution": "core"
 }

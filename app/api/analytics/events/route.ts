@@ -7,8 +7,8 @@ import {
   shouldCollectAnalytics,
 } from "@/lib/privacy-consent";
 import { resolveAnalyticsSiteId } from "@/lib/analytics-site";
-import { normalizeAnalyticsEvent } from "@/lib/analytics-events";
-import { emitAnalyticsEvent } from "@/lib/analytics-dispatch";
+import { normalizeDomainEvent } from "@/lib/domain-events";
+import { emitDomainEvent } from "@/lib/domain-dispatch";
 import { isLocalHostLike } from "@/lib/site-url";
 
 export const runtime = "nodejs";
@@ -36,12 +36,12 @@ export async function POST(req: NextRequest) {
 
   const siteId = await resolveAnalyticsSiteId({ headers: req.headers });
   const raw = await req.json().catch(() => null);
-  const normalized = normalizeAnalyticsEvent(raw);
+  const normalized = normalizeDomainEvent(raw);
   if (!normalized) {
     return new NextResponse("Invalid analytics event payload", { status: 400 });
   }
 
-  await emitAnalyticsEvent({
+  await emitDomainEvent({
     ...normalized,
     siteId: normalized.siteId || siteId,
   });
