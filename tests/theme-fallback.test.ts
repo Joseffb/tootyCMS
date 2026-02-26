@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { domainArchiveTemplateCandidates, domainDetailTemplateCandidates } from "@/lib/theme-fallback";
+import {
+  domainArchiveTemplateCandidates,
+  domainDetailTemplateCandidates,
+  taxonomyArchiveTemplateCandidates,
+} from "@/lib/theme-fallback";
 
 describe("theme fallback contract", () => {
   it("resolves domain detail templates without post-specific fallback", () => {
@@ -26,6 +30,22 @@ describe("theme fallback contract", () => {
       "archive.html",
       "projects.html",
       "project.html",
+      "index.html",
+    ]);
+  });
+
+  it("resolves taxonomy templates with deterministic fallback to index", () => {
+    const categoryCandidates = taxonomyArchiveTemplateCandidates("category", "documentation");
+    expect(categoryCandidates).toEqual([
+      "taxonomy-category-documentation.html",
+      "taxonomy-category.html",
+      "tax_documentation.html",
+      "tax_category_documentation.html",
+      "category-documentation.html",
+      "category.html",
+      "taxonomy.html",
+      "archive.html",
+      "index.html",
     ]);
   });
 

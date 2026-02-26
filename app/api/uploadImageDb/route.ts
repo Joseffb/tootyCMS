@@ -7,6 +7,7 @@ import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
 import { eq } from "drizzle-orm";
 import { userCan } from "@/lib/authorization";
+import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
@@ -58,6 +59,17 @@ export async function POST(req: Request) {
   const canUpload = await userCan("site.media.create", session.user.id, { siteId: site.id });
   if (!canUpload) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const quota = await assertSiteMediaQuotaAvailable(site.id);
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: "Media library limit reached for this site.",
+        code: "media_quota_exceeded",
+        details: { maxItems: quota.maxItems, currentItems: quota.currentItems },
+      },
+      { status: 429 },
+    );
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());

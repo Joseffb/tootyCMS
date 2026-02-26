@@ -39,6 +39,18 @@ vi.mock("@/lib/authorization", () => ({
   userCan: vi.fn(async () => true),
 }));
 
+const { assertSiteMediaQuotaAvailableMock } = vi.hoisted(() => ({
+  assertSiteMediaQuotaAvailableMock: vi.fn(async () => ({
+    allowed: true,
+    maxItems: 0,
+    currentItems: 0,
+  })),
+}));
+
+vi.mock("@/lib/media-governance", () => ({
+  assertSiteMediaQuotaAvailable: assertSiteMediaQuotaAvailableMock,
+}));
+
 vi.mock("@/lib/db", () => ({
   default: {
     query: {
@@ -71,6 +83,12 @@ function makeRequest(formData: FormData) {
 describe("POST /api/uploadImage", () => {
   beforeEach(() => {
     putMock.mockReset();
+    assertSiteMediaQuotaAvailableMock.mockClear();
+    assertSiteMediaQuotaAvailableMock.mockResolvedValue({
+      allowed: true,
+      maxItems: 0,
+      currentItems: 0,
+    });
     process.env.BLOB_READ_WRITE_TOKEN = "token";
   });
 
@@ -228,5 +246,28 @@ describe("POST /api/uploadImage", () => {
 
     expect(response.status).toBe(500);
     expect(json.error).toContain("Upload failed");
+  });
+
+  it("returns 429 when site media quota is exceeded", async () => {
+    assertSiteMediaQuotaAvailableMock.mockResolvedValue({
+      allowed: false,
+      maxItems: 1,
+      currentItems: 1,
+    });
+
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(json.code).toBe("media_quota_exceeded");
+    expect(putMock).not.toHaveBeenCalled();
   });
 });

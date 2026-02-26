@@ -45,6 +45,7 @@ export function domainArchiveTemplateCandidates(domainKey: string, domainPluralS
     "archive.html",
     `${plural}.html`,
     `${key}.html`,
+    "index.html",
   ]);
 }
 
@@ -59,6 +60,7 @@ export function taxonomyArchiveTemplateCandidates(taxonomy: "category" | "tag", 
     `${taxonomy}.html`,
     "taxonomy.html",
     "archive.html",
+    "index.html",
   ]);
 }
 

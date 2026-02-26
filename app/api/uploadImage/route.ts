@@ -8,6 +8,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { buildMediaVariants } from "@/lib/media-variants";
 import { evaluateBotIdRoute } from "@/lib/botid";
 import { userCan } from "@/lib/authorization";
+import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
 
 const MAX_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
 
@@ -91,6 +92,23 @@ export async function POST(req: Request) {
     if (!canUpload) {
       trace("upload.api.blob", "forbidden", { traceId, siteId, userId: session.user.id });
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const quota = await assertSiteMediaQuotaAvailable(site.id);
+    if (!quota.allowed) {
+      trace("upload.api.blob", "media quota exceeded", {
+        traceId,
+        siteId: site.id,
+        currentItems: quota.currentItems,
+        maxItems: quota.maxItems,
+      });
+      return NextResponse.json(
+        {
+          error: "Media library limit reached for this site.",
+          code: "media_quota_exceeded",
+          details: { maxItems: quota.maxItems, currentItems: quota.currentItems },
+        },
+        { status: 429 },
+      );
     }
     const { hash, variants, extension, mimeType } = await buildMediaVariants(file);
     const siteSegment = safeSegment(siteId);
