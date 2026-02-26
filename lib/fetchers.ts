@@ -481,6 +481,7 @@ export async function getTaxonomyArchiveData(
   domain: string,
   taxonomy: "category" | "tag",
   termSlug: string,
+  dataDomainKey = "post",
 ) {
   const normalizedDomain = normalizeDomainForLookup(domain);
   const subdomain = parseSubdomainFromDomain(normalizedDomain);
@@ -506,7 +507,7 @@ export async function getTaxonomyArchiveData(
             eq(termTaxonomies.taxonomy, taxonomy),
             eq(terms.slug, termSlug),
             eq(domainPosts.published, true),
-            eq(dataDomains.key, "post"),
+            eq(dataDomains.key, dataDomainKey),
             subdomain
               ? eq(sites.subdomain, subdomain)
               : eq(sites.customDomain, normalizedDomain),
@@ -566,6 +567,8 @@ export async function getMdxSource(postContents: string) {
 
 export type SitemapPost = {
   slug: string;
+  dataDomain: string;
+  siteId: string;
   domain: string;
   updatedAt: Date | null;
 };
@@ -573,6 +576,8 @@ export type SitemapPost = {
 export async function getAllPosts(): Promise<SitemapPost[]> {
   let results: Array<{
     slug: string;
+    dataDomain: string;
+    siteId: string;
     subdomain: string | null;
     customDomain: string | null;
     updatedAt: Date | null;
@@ -582,6 +587,8 @@ export async function getAllPosts(): Promise<SitemapPost[]> {
     results = await db
       .select({
         slug: domainPosts.slug,
+        dataDomain: dataDomains.key,
+        siteId: domainPosts.siteId,
         subdomain: sites.subdomain,
         customDomain: sites.customDomain,
         updatedAt: domainPosts.updatedAt,
@@ -589,7 +596,7 @@ export async function getAllPosts(): Promise<SitemapPost[]> {
       .from(domainPosts)
       .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
       .innerJoin(sites, eq(domainPosts.siteId, sites.id))
-      .where(and(eq(domainPosts.published, true), eq(dataDomains.key, "post")));
+      .where(eq(domainPosts.published, true));
   } catch (error) {
     // Fresh installs can build before migrations create CMS tables.
     if (isMissingRelationError(error)) return [];
@@ -598,8 +605,13 @@ export async function getAllPosts(): Promise<SitemapPost[]> {
 
   return results.map((row) => ({
     slug: row.slug,
+    dataDomain: row.dataDomain || "post",
+    siteId: row.siteId,
     domain:
-      row.customDomain || `${row.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`,
+      row.customDomain ||
+      (row.subdomain === "main"
+        ? String(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost")
+        : `${row.subdomain || "main"}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost"}`),
     updatedAt: row.updatedAt,
   }));
 }

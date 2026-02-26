@@ -14,15 +14,17 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   const { domain, slug } = await params;
   const decodedDomain = decodeURIComponent(domain);
   const decodedSlug = decodeURIComponent(slug);
+  const site = await getSiteData(decodedDomain);
+  if (!site) notFound();
+  const writing = await getSiteWritingSettings(site.id);
+  const taxonomyDomainKey = writing.noDomainDataDomain || "post";
   const data = await getTaxonomyArchiveData(
     decodedDomain,
     "tag",
     decodedSlug,
+    taxonomyDomainKey,
   );
   if (!data) notFound();
-  const site = await getSiteData(decodedDomain);
-  if (!site) notFound();
-  const writing = await getSiteWritingSettings(site.id);
   const activeTheme = site?.id ? await getActiveThemeForSite(site.id) : null;
   const documentationCategorySlug =
     typeof activeTheme?.config?.documentation_category_slug === "string" &&
@@ -42,10 +44,10 @@ export default async function TagArchivePage({ params }: { params: Params }) {
 
   if (site?.id) {
     const tagTemplate = await getThemeTemplateByHierarchy(site.id, {
-      taxonomy: "tag",
-      slug: decodedSlug,
-      dataDomain: "post",
-    });
+        taxonomy: "tag",
+        slug: decodedSlug,
+        dataDomain: taxonomyDomainKey,
+      });
     if (tagTemplate) {
       const html = renderThemeTemplate(tagTemplate.template, {
         theme_header: tagTemplate.partials?.header || "",
@@ -64,7 +66,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         posts: data.posts.map((post) => ({
           title: post.title,
           description: post.description || "",
-          href: `${siteUrl}${buildDetailPath("post", post.slug, writing)}`,
+          href: `${siteUrl}${buildDetailPath(taxonomyDomainKey, post.slug, writing)}`,
           created_at: toDateString(post.createdAt),
         })),
         links: {
@@ -128,7 +130,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         <div className="grid gap-4">
           {data.posts.map((post) => (
             <article key={post.slug} className="tooty-archive-card rounded-xl border p-4">
-              <Link href={buildDetailPath("post", post.slug, writing)} className="tooty-post-title font-semibold hover:underline">
+              <Link href={buildDetailPath(taxonomyDomainKey, post.slug, writing)} className="tooty-post-title font-semibold hover:underline">
                 {post.title}
               </Link>
               <p className="tooty-post-meta mt-1 text-sm">{toDateString(post.createdAt)}</p>

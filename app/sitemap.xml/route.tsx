@@ -1,6 +1,7 @@
 import { getAllPosts } from "@/lib/fetchers";
-import { getSiteUrlSetting } from "@/lib/cms-config";
+import { getSiteUrlSetting, getSiteWritingSettings } from "@/lib/cms-config";
 import { isMissingRelationError } from "@/lib/db-errors";
+import { buildDetailPath } from "@/lib/permalink";
 import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 import { NextResponse } from "next/server";
 
@@ -23,6 +24,12 @@ function buildPostUrl(domain: string, slug: string) {
   return `${protocol}://${domain}/${cleanSlug}`;
 }
 
+function buildDetailUrl(domain: string, detailPath: string) {
+  const protocol = isLocalHostLike(domain) ? "http" : "https";
+  const cleanPath = detailPath.startsWith("/") ? detailPath : `/${detailPath}`;
+  return `${protocol}://${domain}${cleanPath}`;
+}
+
 export async function GET() {
   let posts = await getAllPosts();
   let baseUrl = getRootSiteUrl();
@@ -36,8 +43,19 @@ export async function GET() {
 
   const homepage = `<url><loc>${escapeXml(baseUrl)}</loc><lastmod>${new Date().toISOString()}</lastmod></url>`;
 
+  const writingBySiteId = new Map<string, Awaited<ReturnType<typeof getSiteWritingSettings>>>();
+  await Promise.all(
+    [...new Set(posts.map((post) => post.siteId).filter(Boolean))].map(async (siteId) => {
+      writingBySiteId.set(siteId, await getSiteWritingSettings(siteId));
+    }),
+  );
+
   const postEntries = posts.map((post) => {
-    const loc = buildPostUrl(post.domain, post.slug);
+    const writing = writingBySiteId.get(post.siteId);
+    const detailPath = writing
+      ? buildDetailPath(post.dataDomain || "post", post.slug, writing)
+      : `/${(post.dataDomain || "post").replace(/^\/+|\/+$/g, "")}/${post.slug.replace(/^\/+/, "")}`;
+    const loc = writing ? buildDetailUrl(post.domain, detailPath) : buildPostUrl(post.domain, post.slug);
     const lastmod = (post.updatedAt || new Date()).toISOString();
     return `<url><loc>${escapeXml(loc)}</loc><lastmod>${lastmod}</lastmod></url>`;
   });
