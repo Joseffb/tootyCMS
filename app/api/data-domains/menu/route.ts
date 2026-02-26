@@ -4,6 +4,8 @@ import { pluralizeLabel, singularizeLabel } from "@/lib/data-domain-labels";
 import { canUserCreateDomainContent } from "@/lib/authorization";
 import { NextResponse } from "next/server";
 
+const CORE_MENU_DOMAIN_KEYS = new Set(["post", "page"]);
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const siteId = searchParams.get("siteId");
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
 
   const domains = await getAllDataDomains(siteId);
   const items = domains
-    .filter((domain: any) => domain.assigned)
+    .filter((domain: any) => domain.assigned && domain.isActive && CORE_MENU_DOMAIN_KEYS.has(String(domain.key || "")))
     .map((domain: any) => ({
       id: domain.id,
       label: pluralizeLabel(domain.label),
@@ -48,7 +50,7 @@ export async function GET(request: Request) {
     .sort((a, b) => {
       const aHasOrder = Number.isFinite(a.order);
       const bHasOrder = Number.isFinite(b.order);
-      if (aHasOrder && bHasOrder && a.order !== b.order) return a.order - b.order;
+      if (aHasOrder && bHasOrder && a.order !== b.order) return (a.order ?? 0) - (b.order ?? 0);
       if (aHasOrder && !bHasOrder) return -1;
       if (!aHasOrder && bHasOrder) return 1;
       return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });

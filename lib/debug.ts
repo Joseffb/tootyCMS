@@ -152,9 +152,14 @@ export function trace(scope: string, message: string, payload?: unknown, levelIn
 }
 
 async function getFsPromises() {
-  if (process.env.NEXT_RUNTIME === "edge") return null;
   if (!fsPromisesLoader) {
-    fsPromisesLoader = import("fs/promises");
+    fsPromisesLoader = (async () => {
+      try {
+        return await import("node:fs/promises");
+      } catch {
+        return import("fs/promises");
+      }
+    })();
   }
   return fsPromisesLoader;
 }
