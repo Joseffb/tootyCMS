@@ -151,6 +151,7 @@ export async function applyDatabaseCompatibilityFixes() {
   const webhookSubscriptionsTable = `${prefix}webhook_subscriptions`;
   const webhookDeliveriesTable = `${prefix}webhook_deliveries`;
   const domainEventsQueueTable = `${prefix}domain_events_queue`;
+  const mediaTable = `${prefix}media`;
 
   await db.execute(
     sql.raw(
@@ -452,6 +453,16 @@ export async function applyDatabaseCompatibilityFixes() {
   );
   await db.execute(
     sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${domainPostsTable}_site_domain_slug_idx" ON ${quoteIdentifier(domainPostsTable)} ("siteId", "dataDomainId", "slug")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${mediaTable}_site_createdAt_idx" ON ${quoteIdentifier(mediaTable)} ("siteId", "createdAt")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
       `CREATE INDEX IF NOT EXISTS "${prefix}term_relationships_object_id_idx" ON ${quoteIdentifier(`${prefix}term_relationships`)} ("objectId")`,
     ),
   );
@@ -466,6 +477,7 @@ export async function applyDatabaseCompatibilityFixes() {
       webhookSubscriptionsTable,
       webhookDeliveriesTable,
       domainEventsQueueTable,
+      mediaTable,
     ],
   });
 

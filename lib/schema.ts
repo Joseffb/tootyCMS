@@ -506,6 +506,7 @@ export const domainPosts = pgTable(
     siteIdIdx: index().on(table.siteId),
     siteDomainPublishedIdx: index().on(table.siteId, table.dataDomainId, table.published, table.updatedAt),
     siteSlugIdx: index().on(table.siteId, table.slug),
+    siteDomainSlugIdx: index().on(table.siteId, table.dataDomainId, table.slug),
   }),
 );
 
@@ -560,6 +561,7 @@ export const media = pgTable(
     userIdx: index().on(table.userId),
     objectKeyIdx: uniqueIndex().on(table.objectKey),
     createdAtIdx: index().on(table.createdAt),
+    siteCreatedAtIdx: index().on(table.siteId, table.createdAt),
   }),
 );
 

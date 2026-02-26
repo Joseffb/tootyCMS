@@ -22,7 +22,7 @@ export async function GET(request: Request) {
 
   const domains = await getAllDataDomains(siteId);
   const items = domains
-    .filter((domain: any) => domain.key !== "post" && domain.assigned)
+    .filter((domain: any) => domain.assigned)
     .map((domain: any) => ({
       id: domain.id,
       label: pluralizeLabel(domain.label),
@@ -45,7 +45,14 @@ export async function GET(request: Request) {
       listHref: `/site/${siteId}/domain/${domain.key}`,
       addHref: `/site/${siteId}/domain/${domain.key}/create`,
     }))
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+    .sort((a, b) => {
+      const aHasOrder = Number.isFinite(a.order);
+      const bHasOrder = Number.isFinite(b.order);
+      if (aHasOrder && bHasOrder && a.order !== b.order) return a.order - b.order;
+      if (aHasOrder && !bHasOrder) return -1;
+      if (!aHasOrder && bHasOrder) return 1;
+      return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+    });
 
   return NextResponse.json({ items });
 }

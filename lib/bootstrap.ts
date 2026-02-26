@@ -373,11 +373,15 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
 export async function ensureMainSiteForCurrentUser() {
   const session = await getSession();
   if (!session?.user?.id) return;
-  await ensureMainSiteForUser(session.user.id);
+  await ensureMainSiteForUser(session.user.id, { seedStarterContent: false });
 }
 
-export async function ensureMainSiteForUser(userId: string) {
+export async function ensureMainSiteForUser(
+  userId: string,
+  options?: { seedStarterContent?: boolean },
+) {
   if (!userId) return;
+  const seedStarterContent = options?.seedStarterContent === true;
   const globalMain = await getGlobalMainSite();
   const memberSiteIds = await listSiteIdsForUser(userId);
 
@@ -468,10 +472,12 @@ export async function ensureMainSiteForUser(userId: string) {
     return;
   }
 
-  const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
   const siteId = await createPrimarySiteForUser(userId);
   await upsertSiteUserRole(siteId, userId, await getDefaultSiteRoleForUser(userId));
   await ensureDefaultSiteDataDomains(siteId);
-  await ensureDefaultStarterPosts(siteId, userId, useRandomDefaultImages);
-  await removeLegacyDocumentationPost(siteId);
+  if (seedStarterContent) {
+    const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
+    await ensureDefaultStarterPosts(siteId, userId, useRandomDefaultImages);
+    await removeLegacyDocumentationPost(siteId);
+  }
 }

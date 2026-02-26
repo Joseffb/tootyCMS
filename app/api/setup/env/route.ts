@@ -377,7 +377,7 @@ export async function POST(req: Request) {
   }
 
   await ensureDefaultCoreDataDomains();
-  await ensureMainSiteForUser(ensuredUserId);
+  await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
   const siteIds = await listSiteIdsForUser(ensuredUserId);
   const memberSites = siteIds.length > 0
     ? await db.query.sites.findMany({

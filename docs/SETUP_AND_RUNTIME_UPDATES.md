@@ -49,6 +49,10 @@ Bootstrap flow:
 OAuth providers are plugin-backed and controlled by auth plugins at runtime.
 Current setup gate still requires one OAuth provider pair to complete setup.
 
+Starter content seeding safety:
+- starter pages/posts are only seeded during explicit setup completion flow
+- normal dashboard/runtime requests do not implicitly seed starter content
+
 ## Database Version Tracking + Explicit Apply Flow
 
 Database update flow now tracks schema version in CMS settings:
