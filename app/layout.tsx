@@ -69,6 +69,7 @@ export default function RootLayout({
             { path: "/api/uploadImage", method: "POST" },
             { path: "/api/uploadImageLocal", method: "POST" },
             { path: "/api/uploadImageDb", method: "POST" },
+            { path: "/api/media/upload-file", method: "POST" },
           ]}
         />
         <AnalyticsConditional />

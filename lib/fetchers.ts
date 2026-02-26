@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import db from "./db";
 import { isMissingRelationError } from "./db-errors";
 import { and, desc, eq, inArray, not } from "drizzle-orm";
-import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationships, termTaxonomies, terms, users } from "./schema";
+import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationships, termTaxonomies, termTaxonomyDomains, terms, users } from "./schema";
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
 import { serialize } from "next-mdx-remote/serialize";
 
@@ -389,7 +389,7 @@ export async function getFeaturedProjectsForSite(domain: string) {
         .where(
           and(
             eq(domainPosts.published, true),
-            eq(dataDomains.key, "project"),
+            eq(dataDomains.key, "showcase"),
             subdomain
               ? eq(sites.subdomain, subdomain)
               : eq(sites.customDomain, normalizedDomain),
@@ -458,8 +458,8 @@ export async function getFeaturedProjectsForSite(domain: string) {
           const link = meta.link || meta.url || meta.external_url || "";
 
           return {
-            title: row.title || "Untitled Project",
-            description: row.description || "Project entry",
+            title: row.title || "Untitled Showcase",
+            description: row.description || "Showcase entry",
             href: link || `/${domain}/${row.domainKey}/${row.slug}`,
             thumbnail,
             technologies: technologyTerms,
@@ -469,7 +469,7 @@ export async function getFeaturedProjectsForSite(domain: string) {
 
       return featured;
     },
-    [`${domain}-featured-projects-v1`],
+    [`${domain}-featured-showcases-v1`],
     {
       revalidate: 900,
       tags: [`${domain}-posts`],
@@ -481,7 +481,6 @@ export async function getTaxonomyArchiveData(
   domain: string,
   taxonomy: "category" | "tag",
   termSlug: string,
-  dataDomainKey = "post",
 ) {
   const normalizedDomain = normalizeDomainForLookup(domain);
   const subdomain = parseSubdomainFromDomain(normalizedDomain);
@@ -495,11 +494,19 @@ export async function getTaxonomyArchiveData(
           postDescription: domainPosts.description,
           postSlug: domainPosts.slug,
           postCreatedAt: domainPosts.createdAt,
+          postDataDomain: dataDomains.key,
         })
         .from(termRelationships)
         .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
         .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
         .innerJoin(domainPosts, eq(domainPosts.id, termRelationships.objectId))
+        .innerJoin(
+          termTaxonomyDomains,
+          and(
+            eq(termTaxonomyDomains.termTaxonomyId, termTaxonomies.id),
+            eq(termTaxonomyDomains.dataDomainId, domainPosts.dataDomainId),
+          ),
+        )
         .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
         .innerJoin(sites, eq(sites.id, domainPosts.siteId))
         .where(
@@ -507,13 +514,12 @@ export async function getTaxonomyArchiveData(
             eq(termTaxonomies.taxonomy, taxonomy),
             eq(terms.slug, termSlug),
             eq(domainPosts.published, true),
-            eq(dataDomains.key, dataDomainKey),
             subdomain
               ? eq(sites.subdomain, subdomain)
               : eq(sites.customDomain, normalizedDomain),
           ),
         ),
-    [`${domain}-${taxonomy}-${termSlug}-v1`],
+    [`${domain}-${taxonomy}-${termSlug}-v2`],
     {
       revalidate: 900,
       tags: [`${domain}-posts`],
@@ -531,6 +537,7 @@ export async function getTaxonomyArchiveData(
       title: row.postTitle,
       description: row.postDescription,
       slug: row.postSlug,
+      dataDomain: row.postDataDomain,
       createdAt: row.postCreatedAt,
     })),
   };
@@ -577,7 +584,7 @@ export async function getAllPosts(): Promise<SitemapPost[]> {
   let results: Array<{
     slug: string;
     dataDomain: string;
-    siteId: string;
+    siteId: string | null;
     subdomain: string | null;
     customDomain: string | null;
     updatedAt: Date | null;
@@ -603,15 +610,17 @@ export async function getAllPosts(): Promise<SitemapPost[]> {
     throw error;
   }
 
-  return results.map((row) => ({
+  return results
+    .filter((row) => typeof row.siteId === "string" && row.siteId.length > 0)
+    .map((row) => ({
     slug: row.slug,
     dataDomain: row.dataDomain || "post",
-    siteId: row.siteId,
+    siteId: row.siteId as string,
     domain:
       row.customDomain ||
       (row.subdomain === "main"
         ? String(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost")
         : `${row.subdomain || "main"}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost"}`),
     updatedAt: row.updatedAt,
-  }));
+    }));
 }

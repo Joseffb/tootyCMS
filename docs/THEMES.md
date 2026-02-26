@@ -28,6 +28,7 @@ Theme root path:
   "name": "Tooty Light",
   "description": "Warm pastel beige defaults",
   "version": "1.0.0",
+  "tags": ["theme", "teety"],
   "tokens": {
     "shellBg": "bg-[#f3e8d0]",
     "shellText": "text-stone-900",
@@ -55,6 +56,10 @@ Supported field types:
 These fields are optional and theme-specific. Values are persisted in:
 
 - `theme_<themeId>_config`
+
+Theme tags:
+- `tags: string[]` is optional and supports multiple labels per theme.
+- Tags are normalized to lowercase slug format and deduplicated.
 
 ## System Primaries (Decision Keys)
 

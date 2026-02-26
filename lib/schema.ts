@@ -235,6 +235,27 @@ export const termTaxonomyDomains = pgTable(
   }),
 );
 
+export const termTaxonomyMeta = pgTable(
+  tableName("term_taxonomy_meta"),
+  {
+    id: serial("id").primaryKey(),
+    termTaxonomyId: integer("termTaxonomyId")
+      .references(() => termTaxonomies.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull().default(""),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    taxonomyIdx: index().on(table.termTaxonomyId),
+    taxonomyKeyUnique: uniqueIndex().on(table.termTaxonomyId, table.key),
+  }),
+);
+
 export const siteDataDomains = pgTable(
   tableName("site_data_domains"),
   {
@@ -629,6 +650,7 @@ export const termTaxonomiesRelations = relations(termTaxonomies, ({ one, many })
   term: one(terms, { references: [terms.id], fields: [termTaxonomies.termId] }),
   relationships: many(termRelationships),
   domains: many(termTaxonomyDomains),
+  meta: many(termTaxonomyMeta),
 }));
 
 export const termRelationshipsRelations = relations(termRelationships, ({ one }) => ({
@@ -645,6 +667,10 @@ export const dataDomainsRelations = relations(dataDomains, ({ many }) => ({
 export const termTaxonomyDomainsRelations = relations(termTaxonomyDomains, ({ one }) => ({
   dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [termTaxonomyDomains.dataDomainId] }),
   taxonomy: one(termTaxonomies, { references: [termTaxonomies.id], fields: [termTaxonomyDomains.termTaxonomyId] }),
+}));
+
+export const termTaxonomyMetaRelations = relations(termTaxonomyMeta, ({ one }) => ({
+  taxonomy: one(termTaxonomies, { references: [termTaxonomies.id], fields: [termTaxonomyMeta.termTaxonomyId] }),
 }));
 
 export const siteDataDomainsRelations = relations(siteDataDomains, ({ one }) => ({

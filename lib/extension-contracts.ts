@@ -1,4 +1,5 @@
 import type { ThemeTokens } from "@/lib/theme-system";
+import { normalizeExtensionTags } from "@/lib/extension-tags";
 
 export type ExtensionKind = "plugin" | "theme";
 
@@ -36,6 +37,7 @@ export type PluginContract = {
   description?: string;
   version?: string;
   minCoreVersion?: string;
+  tags?: string[];
   authProviderId?: string;
   scope?: "site" | "network";
   capabilities?: {
@@ -66,6 +68,7 @@ export type ThemeContract = {
   description?: string;
   version?: string;
   minCoreVersion?: string;
+  tags?: string[];
   capabilities?: {
     layouts?: boolean;
     components?: boolean;
@@ -162,6 +165,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
     minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
+    tags: normalizeExtensionTags(candidate.tags),
     authProviderId: String(candidate.authProviderId ?? "").trim().toLowerCase(),
     scope,
     capabilities: {
@@ -236,6 +240,7 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
     description: String(candidate.description ?? "").trim(),
     version: String(candidate.version ?? "").trim(),
     minCoreVersion: String(candidate.minCoreVersion ?? "").trim(),
+    tags: normalizeExtensionTags(candidate.tags),
     capabilities: {
       layouts: Boolean(caps.layouts ?? true),
       components: Boolean(caps.components ?? true),

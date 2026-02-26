@@ -11,27 +11,27 @@ import {
 
 describe("theme fallback contract", () => {
   it("resolves domain detail templates without post-specific fallback", () => {
-    const candidates = domainDetailTemplateCandidates("project", "fernain-jobs");
+    const candidates = domainDetailTemplateCandidates("showcase", "fernain-jobs");
     expect(candidates).toEqual([
-      "single-projects-fernain-jobs.html",
-      "single-project-fernain-jobs.html",
-      "single-projects.html",
-      "single-project.html",
-      "projects-fernain-jobs.html",
-      "project-fernain-jobs.html",
+      "single-showcases-fernain-jobs.html",
+      "single-showcase-fernain-jobs.html",
+      "single-showcases.html",
+      "single-showcase.html",
+      "showcases-fernain-jobs.html",
+      "showcase-fernain-jobs.html",
       "single.html",
       "index.html",
     ]);
   });
 
   it("resolves domain archive templates with plural and singular keys", () => {
-    const candidates = domainArchiveTemplateCandidates("project", "projects");
+    const candidates = domainArchiveTemplateCandidates("showcase", "showcases");
     expect(candidates).toEqual([
-      "archive-projects.html",
-      "archive-project.html",
+      "archive-showcases.html",
+      "archive-showcase.html",
       "archive.html",
-      "projects.html",
-      "project.html",
+      "showcases.html",
+      "showcase.html",
       "index.html",
     ]);
   });

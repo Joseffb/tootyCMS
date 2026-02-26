@@ -4,6 +4,7 @@
   "description": "Dark-mode personality satire: brooding, dry, self-aware, and still shipping.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "tags": ["theme", "teety", "dark"],
   "tokens": {
     "shellBg": "bg-[#0b111a]",
     "shellText": "text-slate-100",

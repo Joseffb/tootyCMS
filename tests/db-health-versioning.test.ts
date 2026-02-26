@@ -39,6 +39,7 @@ const REQUIRED_TABLES = [
   { table_name: "tooty_webhook_subscriptions" },
   { table_name: "tooty_webhook_deliveries" },
   { table_name: "tooty_domain_events_queue" },
+  { table_name: "tooty_term_taxonomy_meta" },
 ];
 
 describe("db health version tracking", () => {
@@ -85,7 +86,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.02.25.2-version")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.02.26.1-version")).toBe(true);
   });
 
   it("applyPendingDatabaseMigrations updates tracked schema version", async () => {

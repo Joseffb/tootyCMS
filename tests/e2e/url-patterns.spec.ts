@@ -17,14 +17,14 @@ import {
 const db = drizzle(sql);
 const runId = `e2e-url-${Date.now()}`;
 const postSlug = `${runId}-post`;
-const projectSlug = `${runId}-project`;
+const showcaseSlug = `${runId}-showcase`;
 const categorySlug = `${runId}-category`;
 
 let mainSiteId = "";
 let mainUserId = "";
 let postId = "";
 let postDomainId = 0;
-let projectDomainId = 0;
+let showcaseDomainId = 0;
 let categoryTaxonomyId = 0;
 let siteHost = "main.localhost";
 const previousSettings = new Map<string, string | null>();
@@ -189,30 +189,30 @@ test.beforeAll(async () => {
     await db.update(sites).set({ userId: mainUserId }).where(eq(sites.id, mainSiteId));
   }
 
-  let projectDomainRows = await db
+  let showcaseDomainRows = await db
     .select({ id: dataDomains.id })
     .from(dataDomains)
-    .where(eq(dataDomains.key, "project"))
+    .where(eq(dataDomains.key, "showcase"))
     .limit(1);
-  if (!projectDomainRows[0]) {
+  if (!showcaseDomainRows[0]) {
     await db
       .insert(dataDomains)
       .values({
-        key: "project",
-        label: "Project",
-        contentTable: "tooty_projects",
-        metaTable: "tooty_project_meta",
-        description: "Project domain",
+        key: "showcase",
+        label: "Showcase",
+        contentTable: "tooty_showcases",
+        metaTable: "tooty_showcase_meta",
+        description: "Showcase domain",
       })
       .onConflictDoNothing();
-    projectDomainRows = await db
+    showcaseDomainRows = await db
       .select({ id: dataDomains.id })
       .from(dataDomains)
-      .where(eq(dataDomains.key, "project"))
+      .where(eq(dataDomains.key, "showcase"))
       .limit(1);
   }
-  if (!projectDomainRows[0]) throw new Error("Data domain `project` not found.");
-  projectDomainId = projectDomainRows[0].id;
+  if (!showcaseDomainRows[0]) throw new Error("Data domain `showcase` not found.");
+  showcaseDomainId = showcaseDomainRows[0].id;
   let postDomainRows = await db
     .select({ id: dataDomains.id })
     .from(dataDomains)
@@ -240,7 +240,7 @@ test.beforeAll(async () => {
 
   await db
     .insert(siteDataDomains)
-    .values({ siteId: mainSiteId, dataDomainId: projectDomainId, isActive: true })
+    .values({ siteId: mainSiteId, dataDomainId: showcaseDomainId, isActive: true })
     .onConflictDoUpdate({
       target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
       set: { isActive: true },
@@ -261,10 +261,10 @@ test.beforeAll(async () => {
   postId = postRows[0].id;
 
   await db.insert(domainPosts).values({
-    dataDomainId: projectDomainId,
-    title: `URL Pattern Project ${runId}`,
-    slug: projectSlug,
-    content: tiptapDoc(`URL Pattern Project ${runId}`),
+    dataDomainId: showcaseDomainId,
+    title: `URL Pattern Showcase ${runId}`,
+    slug: showcaseSlug,
+    content: tiptapDoc(`URL Pattern Showcase ${runId}`),
     published: true,
     siteId: mainSiteId,
     userId: mainUserId,
@@ -314,7 +314,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await restoreSettings(mainSiteId);
   await db.delete(termRelationships).where(and(eq(termRelationships.objectId, postId), eq(termRelationships.termTaxonomyId, categoryTaxonomyId)));
-  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.slug, projectSlug)));
+  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.slug, showcaseSlug)));
   await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
   await db.delete(termTaxonomies).where(eq(termTaxonomies.id, categoryTaxonomyId));
   await db.delete(terms).where(eq(terms.slug, categorySlug));
@@ -345,12 +345,12 @@ test("default mode: canonical post/domain routes resolve and taxonomy shortcuts 
   const postArchive = await request.get(`${origin}/posts`);
   expect(postArchive.status()).toBe(200);
 
-  const projectDetail = await request.get(`${origin}/project/${projectSlug}`);
-  expect(projectDetail.status()).toBe(200);
-  expect(await projectDetail.text()).toContain(`URL Pattern Project ${runId}`);
+  const showcaseDetail = await request.get(`${origin}/showcase/${showcaseSlug}`);
+  expect(showcaseDetail.status()).toBe(200);
+  expect(await showcaseDetail.text()).toContain(`URL Pattern Showcase ${runId}`);
 
-  const projectArchive = await request.get(`${origin}/projects`);
-  expect(projectArchive.status()).toBe(200);
+  const showcaseArchive = await request.get(`${origin}/showcases`);
+  expect(showcaseArchive.status()).toBe(200);
 
   const legacyFlat = await request.get(`${origin}/${postSlug}`, { maxRedirects: 0 });
   expect([307, 308, 404]).toContain(legacyFlat.status());

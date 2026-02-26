@@ -61,6 +61,7 @@ Plugins may:
   - `scope: "network"` = network-governed plugin. Network enablement is global and treated as network-required for sites.
   - `scope: "site"` = site plugin. It must be globally enabled; by default it is enabled/disabled per site, and may be forced network-wide with global `networkRequired`.
   - `distribution: "core" | "community"` is metadata (origin tag), not activation scope.
+- Declare plugin/theme `tags: string[]` for multi-label classification (for example `utility`, `auth`, `teety`, `theme`).
 
 Scope governance:
 
@@ -177,6 +178,19 @@ Plugins may not:
 - Bypass auth checks
 - Write raw DB tables directly as an extension contract
 - Mutate routing/auth/schema outside Core
+
+## Spine Provider Pattern (MUST)
+
+All spine systems follow one model:
+
+- plugin-provider registration contract for extension providers
+- built-in native core provider as baseline/default implementation
+
+Implications:
+
+- plugin providers extend or replace delivery/query behavior through declared contracts
+- core baseline behavior remains available even when no plugin provider is enabled
+- new spine systems (for example search, comments, messaging, analytics adapters) must adopt this same pattern
 
 ## Theme Contract
 

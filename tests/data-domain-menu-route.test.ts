@@ -30,16 +30,16 @@ describe("GET /api/data-domains/menu", () => {
 
   it("includes post domain and sorts by explicit order then label", async () => {
     mocks.getAllDataDomains.mockResolvedValue([
-      { id: 1, key: "page", label: "Page", assigned: true, settings: { menuOrder: 20 } },
-      { id: 2, key: "post", label: "Post", assigned: true, settings: { menuOrder: 10 } },
-      { id: 3, key: "project", label: "Project", assigned: true, settings: {} },
+      { id: 1, key: "page", label: "Page", assigned: true, isActive: true, settings: { menuOrder: 20 } },
+      { id: 2, key: "post", label: "Post", assigned: true, isActive: true, settings: { menuOrder: 10 } },
+      { id: 3, key: "showcase", label: "Showcase", assigned: true, isActive: true, settings: {} },
     ]);
 
     const { GET } = await import("@/app/api/data-domains/menu/route");
     const res = await GET(new Request("http://localhost/api/data-domains/menu?siteId=site-1"));
     const json = await res.json();
 
-    expect(json.items.map((item: any) => item.singular)).toEqual(["Post", "Page", "Project"]);
+    expect(json.items.map((item: any) => item.singular)).toEqual(["Post", "Page", "Showcase"]);
     expect(json.items[0].listHref).toBe("/site/site-1/domain/post");
   });
 });

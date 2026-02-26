@@ -31,6 +31,28 @@ describe("extension contracts", () => {
     expect(plugin?.website).toBe("https://github.com/Joseffb/tootyCMS");
   });
 
+  it("normalizes plugin and theme tags", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "tagged-plugin",
+        name: "Tagged Plugin",
+        tags: [" Utility ", "Auth", "custom tag", "auth"],
+      },
+      "tagged-plugin",
+    );
+    expect(plugin?.tags).toEqual(["utility", "auth", "custom-tag"]);
+
+    const theme = validateThemeContract(
+      {
+        id: "tagged-theme",
+        name: "Tagged Theme",
+        tags: ["Theme", " Teety "],
+      },
+      "tagged-theme",
+    );
+    expect(theme?.tags).toEqual(["theme", "teety"]);
+  });
+
   it("preserves theme minimum core version field", () => {
     const theme = validateThemeContract(
       {
@@ -52,12 +74,12 @@ describe("extension contracts", () => {
         name: "Query Theme",
         queries: [
           {
-            key: "featured_projects",
+            key: "featured_showcases",
             source: "content.list",
             scope: "site",
             route: "home",
             params: {
-              dataDomain: "project",
+              dataDomain: "showcase",
               taxonomy: "category",
               withTerm: "featured",
               limit: 4,
@@ -69,7 +91,7 @@ describe("extension contracts", () => {
     );
     expect(theme).not.toBeNull();
     expect(theme?.queries).toHaveLength(1);
-    expect(theme?.queries?.[0]?.key).toBe("featured_projects");
+    expect(theme?.queries?.[0]?.key).toBe("featured_showcases");
     expect(theme?.queries?.[0]?.route).toBe("home");
   });
 });

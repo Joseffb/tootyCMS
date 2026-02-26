@@ -4,6 +4,7 @@
   "description": "Warm pastel beige with playful orange hover accents.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "tags": ["theme", "light"],
   "tokens": {
     "shellBg": "bg-[#f3e8d0]",
     "shellText": "text-stone-900",

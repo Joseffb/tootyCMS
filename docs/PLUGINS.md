@@ -37,6 +37,7 @@ Optional:
   "description": "Trace and diagnostics helpers",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "tags": ["utility", "developer"],
   "capabilities": {
     "hooks": true,
     "adminExtensions": true,
@@ -83,6 +84,36 @@ If `index.mjs` exports `register(kernel, api)`, it is invoked during kernel boot
 - `registerCommunicationProvider({ id, channels, deliver })` (requires `capabilities.communicationProviders=true`)
 - `registerWebcallbackHandler({ id, handle })` (requires `capabilities.webCallbacks=true`)
 
+Service-style core namespace (recommended):
+- `api.core.settings.get(key, fallback?)`
+- `api.core.settings.set(key, value)`
+- `api.core.site.get(siteId)`
+- `api.core.dataDomain.list(siteId?)`
+- `api.core.taxonomy.list()`
+- `api.core.taxonomy.edit(taxonomyKey, "name:New Label")`
+- `api.core.taxonomy.terms.list(taxonomyKey)`
+- `api.core.taxonomy.terms.meta.get(termTaxonomyId)`
+- `api.core.taxonomy.terms.meta.set(termTaxonomyId, key, value)`
+- `api.core.schedule.create|list|update|delete(...)`
+- `api.core.messaging.send|retryPending|purge(...)`
+- `api.core.webcallbacks.dispatch|listRecent|purge(...)`
+- `api.core.webhooks.subscriptions.list|upsert|delete(...)`
+- `api.core.webhooks.deliveries.retryPending(...)`
+
+Route-like dispatcher for dynamic keys:
+- `api.core.invoke("siteId.<siteId>.taxonomy.list")`
+- `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.edit", "name:New Label")`
+- `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.term.<termTaxonomyId>.edit", "name:New Name")`
+- `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.term.<termTaxonomyId>.meta.get")`
+- `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.term.<termTaxonomyId>.meta.set", { key: "icon", value: "star" })`
+- `api.core.invoke("siteId.<siteId>.data-domain.<domainKey>.<postId>.taxonomy.list")`
+
+Short form for repeated site calls:
+- `const s = api.core.forSite(siteId)`
+- `s.taxonomy.list()`
+- `s.taxonomy.edit("featured", "name:Featured Content")`
+- `s.dataDomain.postTaxonomyList("post", postId)`
+
 Example:
 
 ```js
@@ -110,6 +141,11 @@ Plugin scope and origin are separate:
 
 - `scope: "network" | "site"` controls governance/activation model
 - `distribution: "core" | "community"` is metadata (origin tag only)
+
+Tag model:
+- `tags: string[]` is optional and multi-valued.
+- Tags are normalized to lowercase slug format and deduplicated.
+- Tags are registry-backed and can expand as manifests introduce new tags.
 
 Behavior:
 

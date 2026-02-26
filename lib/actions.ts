@@ -50,7 +50,7 @@ import { cookies } from "next/headers";
 import { withSiteAuth } from "./auth";
 import db from "./db";
 import { SelectSite, accounts, cmsSettings, sites, users } from "./schema";
-import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, terms } from "./schema";
+import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, termTaxonomyMeta, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
 import {
   USER_ROLES,
@@ -802,6 +802,52 @@ export const getTaxonomyTermsPreview = async (taxonomy: string, limit = 20) => {
     .limit(safeLimit);
 };
 
+const normalizeTaxonomyMetaKey = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]/g, "")
+    .slice(0, 80);
+
+export const getTaxonomyTermMeta = async (termTaxonomyId: number) => {
+  if (!Number.isFinite(termTaxonomyId) || termTaxonomyId <= 0) return [];
+  return db
+    .select({
+      key: termTaxonomyMeta.key,
+      value: termTaxonomyMeta.value,
+    })
+    .from(termTaxonomyMeta)
+    .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
+    .orderBy(asc(termTaxonomyMeta.key));
+};
+
+export const setTaxonomyTermMeta = async (input: {
+  termTaxonomyId: number;
+  key: string;
+  value: string;
+}) => {
+  const termTaxonomyId = Math.trunc(input.termTaxonomyId);
+  const key = normalizeTaxonomyMetaKey(input.key);
+  if (!Number.isFinite(termTaxonomyId) || termTaxonomyId <= 0 || !key) {
+    return { error: "termTaxonomyId and key are required" };
+  }
+
+  await db
+    .insert(termTaxonomyMeta)
+    .values({
+      termTaxonomyId,
+      key,
+      value: String(input.value ?? ""),
+    })
+    .onConflictDoUpdate({
+      target: [termTaxonomyMeta.termTaxonomyId, termTaxonomyMeta.key],
+      set: { value: String(input.value ?? ""), updatedAt: new Date() },
+    });
+
+  revalidateDomainAndTaxonomyCaches();
+  return { ok: true };
+};
+
 export const createTaxonomy = async (input: { taxonomy: string; label?: string; description?: string }) => {
   const key = normalizeTaxonomyKey(input.taxonomy);
   if (!key) return { error: "Taxonomy key is required" };
@@ -834,6 +880,7 @@ export const deleteTaxonomy = async (taxonomy: string) => {
     if (rows.length === 0) return;
     const taxonomyIds = rows.map((row) => row.id);
     await tx.delete(termRelationships).where(inArray(termRelationships.termTaxonomyId, taxonomyIds));
+    await tx.delete(termTaxonomyMeta).where(inArray(termTaxonomyMeta.termTaxonomyId, taxonomyIds));
     await tx.delete(termTaxonomyDomains).where(inArray(termTaxonomyDomains.termTaxonomyId, taxonomyIds));
     await tx.delete(termTaxonomies).where(inArray(termTaxonomies.id, taxonomyIds));
 
@@ -995,6 +1042,7 @@ export const deleteTaxonomyTerm = async (termTaxonomyId: number) => {
       .where(and(eq(termTaxonomies.taxonomy, current.taxonomy), eq(termTaxonomies.parentId, termTaxonomyId)));
 
     await tx.delete(termRelationships).where(eq(termRelationships.termTaxonomyId, termTaxonomyId));
+    await tx.delete(termTaxonomyMeta).where(eq(termTaxonomyMeta.termTaxonomyId, termTaxonomyId));
     await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.termTaxonomyId, termTaxonomyId));
     await tx.delete(termTaxonomies).where(eq(termTaxonomies.id, termTaxonomyId));
 

@@ -59,6 +59,9 @@ Filters transform and return values. They chain in priority order.
 - `page:meta`
 - `render:layout`
 - `admin:environment-badge`
+- `admin:context-use-types`
+- `admin:context-use-type`
+- `admin:brand-use-type`
 - `admin:floating-widgets`
 - `admin:profile:sections`
 - `admin:schedule-actions`
@@ -103,3 +106,5 @@ kernel.addFilter("nav:items", (items) => {
 ## Compatibility strategy
 
 When adding new hook names, do not rename existing ones. Add new contracts and keep old contracts functional until explicitly deprecated.
+
+`admin:brand-use-type` remains as a backward-compatible alias.

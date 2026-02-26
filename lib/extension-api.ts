@@ -1,6 +1,16 @@
 import db from "@/lib/db";
-import { cmsSettings, dataDomains, siteDataDomains, sites } from "@/lib/schema";
-import { eq, inArray } from "drizzle-orm";
+import {
+  cmsSettings,
+  domainPosts,
+  dataDomains,
+  siteDataDomains,
+  sites,
+  termRelationships,
+  termTaxonomies,
+  termTaxonomyMeta,
+  terms,
+} from "@/lib/schema";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
 import type {
@@ -14,6 +24,14 @@ import type {
   PluginWebcallbackHandlerRegistration,
 } from "@/lib/kernel";
 import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateScheduleEntry } from "@/lib/scheduler";
+import { purgeCommunicationQueue, retryPendingCommunications, sendCommunication } from "@/lib/communications";
+import { dispatchWebcallback, listRecentWebcallbackEvents, purgeWebcallbackEvents } from "@/lib/webcallbacks";
+import {
+  deleteWebhookSubscription,
+  listWebhookSubscriptions,
+  retryPendingWebhookDeliveries,
+  upsertWebhookSubscription,
+} from "@/lib/webhook-delivery";
 
 type BaseExtensionApi = {
   pluginId?: string;
@@ -58,7 +76,102 @@ type PluginExtensionApiOptions = {
   networkRequired?: boolean;
 };
 
+type CoreApiInvokeInput = string | Record<string, unknown> | undefined;
+
+type BoundSiteCoreApi = {
+  invoke: (path: string, input?: CoreApiInvokeInput) => Promise<unknown>;
+  taxonomy: {
+    list: () => Promise<Array<{ key: string; termCount: number }>>;
+    terms: {
+      list: (taxonomy: string) => Promise<Array<{ id: number; taxonomy: string; name: string; slug: string; parentId: number | null }>>;
+    };
+    edit: (taxonomy: string, input?: CoreApiInvokeInput) => Promise<{ ok: boolean; taxonomy: string; action: string }>;
+  };
+  dataDomain: {
+    list: () => Promise<any[]>;
+    postTaxonomyList: (dataDomainKey: string, postId: string) => Promise<Array<{
+      taxonomy: string;
+      termTaxonomyId: number;
+      termId: number;
+      slug: string;
+      name: string;
+    }>>;
+  };
+};
+
+type CoreServiceApi = {
+  invoke: (path: string, input?: CoreApiInvokeInput) => Promise<unknown>;
+  forSite: (siteId: string) => BoundSiteCoreApi;
+  site: {
+    get: (siteId: string) => Promise<Awaited<ReturnType<BaseExtensionApi["getSiteById"]>>>;
+  };
+  settings: {
+    get: (key: string, fallback?: string) => Promise<string>;
+    set: (key: string, value: string) => Promise<void>;
+  };
+  dataDomain: {
+    list: (siteId?: string) => Promise<any[]>;
+  };
+  taxonomy: {
+    list: () => Promise<Array<{ key: string; termCount: number }>>;
+    edit: (taxonomy: string, input?: CoreApiInvokeInput) => Promise<{ ok: boolean; taxonomy: string; action: string }>;
+    terms: {
+      list: (taxonomy: string) => Promise<Array<{ id: number; taxonomy: string; name: string; slug: string; parentId: number | null }>>;
+      meta: {
+        get: (termTaxonomyId: number) => Promise<Array<{ key: string; value: string }>>;
+        set: (termTaxonomyId: number, key: string, value: string) => Promise<{ ok: boolean }>;
+      };
+    };
+  };
+  schedule: {
+    create: (input: {
+      siteId?: string | null;
+      name: string;
+      actionKey: string;
+      payload?: Record<string, unknown>;
+      enabled?: boolean;
+      runEveryMinutes?: number;
+      nextRunAt?: Date;
+    }) => Promise<any>;
+    list: () => Promise<any[]>;
+    update: (
+      scheduleId: string,
+      input: {
+        siteId?: string | null;
+        name?: string;
+        actionKey?: string;
+        payload?: Record<string, unknown>;
+        enabled?: boolean;
+        runEveryMinutes?: number;
+        nextRunAt?: Date;
+      },
+    ) => Promise<any>;
+    delete: (scheduleId: string) => Promise<void>;
+  };
+  messaging: {
+    send: typeof sendCommunication;
+    retryPending: typeof retryPendingCommunications;
+    purge: typeof purgeCommunicationQueue;
+  };
+  webcallbacks: {
+    dispatch: typeof dispatchWebcallback;
+    listRecent: typeof listRecentWebcallbackEvents;
+    purge: typeof purgeWebcallbackEvents;
+  };
+  webhooks: {
+    subscriptions: {
+      list: typeof listWebhookSubscriptions;
+      upsert: typeof upsertWebhookSubscription;
+      delete: typeof deleteWebhookSubscription;
+    };
+    deliveries: {
+      retryPending: typeof retryPendingWebhookDeliveries;
+    };
+  };
+};
+
 export type PluginExtensionApi = BaseExtensionApi & {
+  core: CoreServiceApi;
   setSetting: (key: string, value: string) => Promise<void>;
   setPluginSetting: (key: string, value: string) => Promise<void>;
   registerContentType: (registration: PluginContentTypeRegistration) => void;
@@ -95,6 +208,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
+  core: Pick<CoreServiceApi, "site" | "settings" | "dataDomain" | "taxonomy">;
   setSetting: (key: string, value: string) => Promise<never>;
   setPluginSetting: (key: string, value: string) => Promise<never>;
   createSchedule: (input: {
@@ -145,6 +259,36 @@ function parseJsonObject<T>(raw: string | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function normalizeTaxonomyKey(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]/g, "");
+}
+
+function normalizeMetaKey(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]/g, "")
+    .slice(0, 80);
+}
+
+function parseCommandInput(input?: CoreApiInvokeInput): Record<string, string> {
+  if (typeof input === "string") {
+    const [rawKey, ...rest] = input.split(":");
+    const key = String(rawKey || "").trim().toLowerCase();
+    const value = rest.join(":").trim();
+    return key ? { [key]: value } : {};
+  }
+  if (!input || typeof input !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    out[String(key).trim().toLowerCase()] = String(value ?? "").trim();
+  }
+  return out;
 }
 
 function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOptions): BaseExtensionApi {
@@ -251,28 +395,28 @@ export function createPluginExtensionApi(
       );
     }
   };
-  return {
-    ...base,
-    async setSetting(key: string, value: string) {
-      await db
-        .insert(cmsSettings)
-        .values({ key, value })
-        .onConflictDoUpdate({
-          target: cmsSettings.key,
-          set: { value },
-        });
-    },
-    async setPluginSetting(key: string, value: string) {
-      const finalKey = pluginSettingKey(pluginId, key);
-      await db
-        .insert(cmsSettings)
-        .values({ key: finalKey, value })
-        .onConflictDoUpdate({
-          target: cmsSettings.key,
-          set: { value },
-        });
-    },
-    registerContentType(registration: PluginContentTypeRegistration) {
+  const setSetting: PluginExtensionApi["setSetting"] = async (key, value) => {
+    await db
+      .insert(cmsSettings)
+      .values({ key, value })
+      .onConflictDoUpdate({
+        target: cmsSettings.key,
+        set: { value },
+      });
+  };
+
+  const setPluginSetting: PluginExtensionApi["setPluginSetting"] = async (key, value) => {
+    const finalKey = pluginSettingKey(pluginId, key);
+    await db
+      .insert(cmsSettings)
+      .values({ key: finalKey, value })
+      .onConflictDoUpdate({
+        target: cmsSettings.key,
+        set: { value },
+      });
+  };
+
+  const registerContentType: PluginExtensionApi["registerContentType"] = (registration) => {
       requireCapability("contentTypes", "registerContentType()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -280,8 +424,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerContentType(registration);
-    },
-    registerServerHandler(registration: PluginServerHandlerRegistration) {
+    };
+
+  const registerServerHandler: PluginExtensionApi["registerServerHandler"] = (registration) => {
       requireCapability("serverHandlers", "registerServerHandler()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -289,8 +434,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerServerHandler(registration);
-    },
-    registerAuthAdapter(registration: PluginAuthAdapterRegistration) {
+    };
+
+  const registerAuthAdapter: PluginExtensionApi["registerAuthAdapter"] = (registration) => {
       requireCapability("authExtensions", "registerAuthAdapter()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -298,8 +444,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerAuthAdapter(registration);
-    },
-    registerScheduleHandler(registration: PluginScheduleHandlerRegistration) {
+    };
+
+  const registerScheduleHandler: PluginExtensionApi["registerScheduleHandler"] = (registration) => {
       requireCapability("scheduleJobs", "registerScheduleHandler()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -307,8 +454,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerScheduleHandler(registration);
-    },
-    registerCommunicationProvider(registration: PluginCommunicationProviderRegistration) {
+    };
+
+  const registerCommunicationProvider: PluginExtensionApi["registerCommunicationProvider"] = (registration) => {
       requireCapability("communicationProviders", "registerCommunicationProvider()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -316,8 +464,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerCommunicationProvider(registration);
-    },
-    registerWebcallbackHandler(registration: PluginWebcallbackHandlerRegistration) {
+    };
+
+  const registerWebcallbackHandler: PluginExtensionApi["registerWebcallbackHandler"] = (registration) => {
       requireCapability("webCallbacks", "registerWebcallbackHandler()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -325,8 +474,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerWebcallbackHandler(registration);
-    },
-    registerContentState(registration: ContentStateRegistration) {
+    };
+
+  const registerContentState: PluginExtensionApi["registerContentState"] = (registration) => {
       requireCapability("hooks", "registerContentState()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -334,8 +484,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerContentState(registration);
-    },
-    registerContentTransition(registration: ContentTransitionRegistration) {
+    };
+
+  const registerContentTransition: PluginExtensionApi["registerContentTransition"] = (registration) => {
       requireCapability("hooks", "registerContentTransition()");
       if (!options?.coreRegistry) {
         throw new Error(
@@ -343,8 +494,9 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerContentTransition(registration);
-    },
-    async createSchedule(input) {
+    };
+
+  const createSchedule: PluginExtensionApi["createSchedule"] = async (input) => {
       requireCapability("scheduleJobs", "createSchedule()");
       return createScheduleEntry("plugin", pluginName, {
         siteId: input.siteId || null,
@@ -355,12 +507,14 @@ export function createPluginExtensionApi(
         runEveryMinutes: input.runEveryMinutes ?? 60,
         nextRunAt: input.nextRunAt,
       } as any);
-    },
-    async listSchedules() {
+    };
+
+  const listSchedules: PluginExtensionApi["listSchedules"] = async () => {
       requireCapability("scheduleJobs", "listSchedules()");
       return listScheduleEntries({ ownerType: "plugin", ownerId: pluginName, includeDisabled: true });
-    },
-    async updateSchedule(scheduleId, input) {
+    };
+
+  const updateSchedule: PluginExtensionApi["updateSchedule"] = async (scheduleId, input) => {
       requireCapability("scheduleJobs", "updateSchedule()");
       await updateScheduleEntry(scheduleId, {
         siteId: input.siteId === undefined ? undefined : input.siteId || null,
@@ -376,15 +530,300 @@ export function createPluginExtensionApi(
         ownerId: pluginName,
       });
       return listScheduleEntries({ ownerType: "plugin", ownerId: pluginName, includeDisabled: true });
-    },
-    async deleteSchedule(scheduleId) {
+    };
+
+  const deleteSchedule: PluginExtensionApi["deleteSchedule"] = async (scheduleId) => {
       requireCapability("scheduleJobs", "deleteSchedule()");
       await deleteScheduleEntry(scheduleId, {
         isAdmin: false,
         ownerType: "plugin",
         ownerId: pluginName,
       });
+    };
+
+  const listTaxonomies = async () => {
+    const rows = await db
+      .select({
+        key: termTaxonomies.taxonomy,
+        termCount: sql<number>`count(${termTaxonomies.id})::int`,
+      })
+      .from(termTaxonomies)
+      .groupBy(termTaxonomies.taxonomy)
+      .orderBy(asc(termTaxonomies.taxonomy));
+    return rows;
+  };
+
+  const editTaxonomy = async (taxonomy: string, input?: CoreApiInvokeInput) => {
+    const key = normalizeTaxonomyKey(taxonomy);
+    if (!key) throw new Error("taxonomy key is required");
+    const command = parseCommandInput(input);
+    const renameTo = normalizeTaxonomyKey(command.rename || command.key || "");
+    const name = String(command.name || command.label || "").trim();
+    if (renameTo && renameTo !== key) {
+      await db.update(termTaxonomies).set({ taxonomy: renameTo }).where(eq(termTaxonomies.taxonomy, key));
+      return { ok: true, taxonomy: renameTo, action: "rename" as const };
+    }
+    if (name) {
+      await setSetting(`taxonomy_label_${key}`, name);
+      return { ok: true, taxonomy: key, action: "label" as const };
+    }
+    return { ok: true, taxonomy: key, action: "noop" as const };
+  };
+
+  const listTaxonomyTerms = async (taxonomy: string) => {
+    const key = normalizeTaxonomyKey(taxonomy);
+    return db
+      .select({
+        id: termTaxonomies.id,
+        taxonomy: termTaxonomies.taxonomy,
+        name: terms.name,
+        slug: terms.slug,
+        parentId: termTaxonomies.parentId,
+      })
+      .from(termTaxonomies)
+      .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
+      .where(eq(termTaxonomies.taxonomy, key))
+      .orderBy(asc(terms.name));
+  };
+
+  const listPostTaxonomyAssignments = async (siteId: string, dataDomainKey: string, postId: string) => {
+    const domainKey = normalizeTaxonomyKey(dataDomainKey);
+    const normalizedSiteId = String(siteId || "").trim();
+    const normalizedPostId = String(postId || "").trim();
+    if (!domainKey || !normalizedPostId) return [];
+
+    return db
+      .select({
+        taxonomy: termTaxonomies.taxonomy,
+        termTaxonomyId: termTaxonomies.id,
+        termId: terms.id,
+        slug: terms.slug,
+        name: terms.name,
+      })
+      .from(termRelationships)
+      .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
+      .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
+      .innerJoin(domainPosts, eq(domainPosts.id, termRelationships.objectId))
+      .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
+      .where(
+        and(
+          eq(domainPosts.id, normalizedPostId),
+          eq(dataDomains.key, domainKey),
+          ...(normalizedSiteId ? [eq(domainPosts.siteId, normalizedSiteId)] : []),
+        ),
+      )
+      .orderBy(asc(termTaxonomies.taxonomy), asc(terms.name));
+  };
+
+  const editTaxonomyTerm = async (taxonomy: string, termTaxonomyId: number, input?: CoreApiInvokeInput) => {
+    const key = normalizeTaxonomyKey(taxonomy);
+    const command = parseCommandInput(input);
+    const [row] = await db
+      .select({
+        taxonomy: termTaxonomies.taxonomy,
+        termId: termTaxonomies.termId,
+      })
+      .from(termTaxonomies)
+      .where(eq(termTaxonomies.id, termTaxonomyId))
+      .limit(1);
+    if (!row || row.taxonomy !== key) throw new Error("Term taxonomy not found.");
+
+    const name = String(command.name || "").trim();
+    const slug = String(command.slug || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+    if (name || slug) {
+      await db
+        .update(terms)
+        .set({
+          ...(name ? { name } : {}),
+          ...(slug ? { slug } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(terms.id, row.termId));
+    }
+
+    return { ok: true, taxonomy: key, termTaxonomyId };
+  };
+
+  const getTaxonomyTermMeta = async (termTaxonomyId: number) =>
+    db
+      .select({
+        key: termTaxonomyMeta.key,
+        value: termTaxonomyMeta.value,
+      })
+      .from(termTaxonomyMeta)
+      .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
+      .orderBy(asc(termTaxonomyMeta.key));
+
+  const setTaxonomyTermMeta = async (termTaxonomyId: number, key: string, value: string) => {
+    const metaKey = normalizeMetaKey(key);
+    if (!metaKey) throw new Error("meta key is required");
+    await db
+      .insert(termTaxonomyMeta)
+      .values({
+        termTaxonomyId: Math.trunc(termTaxonomyId),
+        key: metaKey,
+        value: String(value ?? ""),
+      })
+      .onConflictDoUpdate({
+        target: [termTaxonomyMeta.termTaxonomyId, termTaxonomyMeta.key],
+        set: { value: String(value ?? ""), updatedAt: new Date() },
+      });
+    return { ok: true };
+  };
+
+  const core: CoreServiceApi = {
+    async invoke(path, input) {
+      const segments = String(path || "")
+        .split(".")
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+      if (segments[0]?.toLowerCase() === "core") segments.shift();
+
+      let boundSiteId = "";
+      if (segments[0]?.toLowerCase() === "siteid" || segments[0]?.toLowerCase() === "site") {
+        segments.shift();
+        boundSiteId = segments.shift() || "";
+      }
+
+      const service = (segments.shift() || "").toLowerCase();
+      if (service === "taxonomy") {
+        if ((segments[0] || "").toLowerCase() === "list") return listTaxonomies();
+        const taxonomy = segments.shift() || "";
+        const next = (segments.shift() || "").toLowerCase();
+        if (next === "edit") return editTaxonomy(taxonomy, input);
+        if (next === "terms" && (segments[0] || "").toLowerCase() === "list") {
+          return listTaxonomyTerms(taxonomy);
+        }
+        if (next === "term") {
+          const termTaxonomyId = Math.trunc(Number(segments.shift() || "0"));
+          const action = (segments.shift() || "").toLowerCase();
+          if (action === "edit") return editTaxonomyTerm(taxonomy, termTaxonomyId, input);
+          if (action === "meta") {
+            const op = (segments.shift() || "").toLowerCase();
+            if (op === "get") return getTaxonomyTermMeta(termTaxonomyId);
+            if (op === "set") {
+              const command = parseCommandInput(input);
+              return setTaxonomyTermMeta(termTaxonomyId, command.key || "value", command.value || "");
+            }
+          }
+        }
+      }
+      if (service === "schedule") {
+        const action = (segments.shift() || "").toLowerCase();
+        if (action === "list") return listSchedules();
+      }
+      if (service === "data-domain" || service === "datadomain") {
+        if ((segments[0] || "").toLowerCase() === "list") return base.listDataDomains(boundSiteId || undefined);
+        const domainKey = segments.shift() || "";
+        const postId = segments.shift() || "";
+        const action = (segments.shift() || "").toLowerCase();
+        const op = (segments.shift() || "").toLowerCase();
+        if (action === "taxonomy" && op === "list") {
+          return listPostTaxonomyAssignments(boundSiteId, domainKey, postId);
+        }
+      }
+      throw new Error(`Unknown core route: ${path}`);
     },
+    forSite(siteId: string) {
+      const bound = String(siteId || "").trim();
+      return {
+        invoke: (path: string, input?: CoreApiInvokeInput) => core.invoke(`siteId.${bound}.${path}`, input),
+        taxonomy: {
+          list: () => core.invoke(`siteId.${bound}.taxonomy.list`) as Promise<Array<{ key: string; termCount: number }>>,
+          terms: {
+            list: (taxonomy: string) =>
+              core.invoke(`siteId.${bound}.taxonomy.${taxonomy}.terms.list`) as Promise<
+                Array<{ id: number; taxonomy: string; name: string; slug: string; parentId: number | null }>
+              >,
+          },
+          edit: (taxonomy: string, input?: CoreApiInvokeInput) =>
+            core.invoke(`siteId.${bound}.taxonomy.${taxonomy}.edit`, input) as Promise<{
+              ok: boolean;
+              taxonomy: string;
+              action: string;
+            }>,
+        },
+        dataDomain: {
+          list: () => core.invoke(`siteId.${bound}.data-domain.list`) as Promise<any[]>,
+          postTaxonomyList: (dataDomainKey: string, postId: string) =>
+            core.invoke(`siteId.${bound}.data-domain.${dataDomainKey}.${postId}.taxonomy.list`) as Promise<
+              Array<{ taxonomy: string; termTaxonomyId: number; termId: number; slug: string; name: string }>
+            >,
+        },
+      };
+    },
+    site: {
+      get: (siteId: string) => base.getSiteById(siteId),
+    },
+    settings: {
+      get: (key: string, fallback = "") => base.getSetting(key, fallback),
+      set: (key: string, value: string) => setSetting(key, value),
+    },
+    dataDomain: {
+      list: (siteId?: string) => base.listDataDomains(siteId),
+    },
+    taxonomy: {
+      list: () => listTaxonomies(),
+      edit: (taxonomy: string, input?: CoreApiInvokeInput) => editTaxonomy(taxonomy, input),
+      terms: {
+        list: (taxonomy: string) => listTaxonomyTerms(taxonomy),
+        meta: {
+          get: (termTaxonomyId: number) => getTaxonomyTermMeta(termTaxonomyId),
+          set: (termTaxonomyId: number, key: string, value: string) => setTaxonomyTermMeta(termTaxonomyId, key, value),
+        },
+      },
+    },
+    schedule: {
+      create: createSchedule,
+      list: listSchedules,
+      update: updateSchedule,
+      delete: deleteSchedule,
+    },
+    messaging: {
+      send: sendCommunication,
+      retryPending: retryPendingCommunications,
+      purge: purgeCommunicationQueue,
+    },
+    webcallbacks: {
+      dispatch: dispatchWebcallback,
+      listRecent: listRecentWebcallbackEvents,
+      purge: purgeWebcallbackEvents,
+    },
+    webhooks: {
+      subscriptions: {
+        list: listWebhookSubscriptions,
+        upsert: upsertWebhookSubscription,
+        delete: deleteWebhookSubscription,
+      },
+      deliveries: {
+        retryPending: retryPendingWebhookDeliveries,
+      },
+    },
+  };
+
+  return {
+    ...base,
+    core,
+    setSetting,
+    setPluginSetting,
+    registerContentType,
+    registerServerHandler,
+    registerAuthAdapter,
+    registerScheduleHandler,
+    registerCommunicationProvider,
+    registerWebcallbackHandler,
+    registerContentState,
+    registerContentTransition,
+    createSchedule,
+    listSchedules,
+    updateSchedule,
+    deleteSchedule,
   };
 }
 
@@ -402,6 +841,57 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
   };
   return {
     ...base,
+    core: {
+      site: {
+        get: (siteId: string) => base.getSiteById(siteId),
+      },
+      settings: {
+        get: (key: string, fallback = "") => base.getSetting(key, fallback),
+        set: async () => throwThemeSideEffectError("core.settings.set"),
+      },
+      dataDomain: {
+        list: (siteId?: string) => base.listDataDomains(siteId),
+      },
+      taxonomy: {
+        list: async () =>
+          db
+            .select({
+              key: termTaxonomies.taxonomy,
+              termCount: sql<number>`count(${termTaxonomies.id})::int`,
+            })
+            .from(termTaxonomies)
+            .groupBy(termTaxonomies.taxonomy)
+            .orderBy(asc(termTaxonomies.taxonomy)),
+        edit: async () => throwThemeSideEffectError("core.taxonomy.edit"),
+        terms: {
+          list: async (taxonomy: string) =>
+            db
+              .select({
+                id: termTaxonomies.id,
+                taxonomy: termTaxonomies.taxonomy,
+                name: terms.name,
+                slug: terms.slug,
+                parentId: termTaxonomies.parentId,
+              })
+              .from(termTaxonomies)
+              .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
+              .where(eq(termTaxonomies.taxonomy, normalizeTaxonomyKey(taxonomy)))
+              .orderBy(asc(terms.name)),
+          meta: {
+            get: async (termTaxonomyId: number) =>
+              db
+                .select({
+                  key: termTaxonomyMeta.key,
+                  value: termTaxonomyMeta.value,
+                })
+                .from(termTaxonomyMeta)
+                .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
+                .orderBy(asc(termTaxonomyMeta.key)),
+            set: async () => throwThemeSideEffectError("core.taxonomy.terms.meta.set"),
+          },
+        },
+      },
+    },
     async setSetting() {
       return throwThemeSideEffectError("setSetting");
     },

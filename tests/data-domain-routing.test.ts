@@ -7,17 +7,17 @@ import {
 
 describe("data-domain routing contract", () => {
   it("normalizes route segments", () => {
-    expect(normalizeDomainSegment("  Projects  ")).toBe("projects");
-    expect(normalizeDomainKeyFromSegment("Projects")).toBe("project");
+    expect(normalizeDomainSegment("  Showcases  ")).toBe("showcases");
+    expect(normalizeDomainKeyFromSegment("Showcases")).toBe("showcase");
     expect(normalizeDomainKeyFromSegment("Companies")).toBe("company");
   });
 
   it("accepts plural listing segments for archives", () => {
-    expect(isDomainArchiveSegment("projects", "project", "Project")).toBe(true);
+    expect(isDomainArchiveSegment("showcases", "showcase", "Showcase")).toBe(true);
     expect(isDomainArchiveSegment("companies", "company", "Company")).toBe(true);
   });
 
   it("rejects singular segment for listing route", () => {
-    expect(isDomainArchiveSegment("project", "project", "Project")).toBe(false);
+    expect(isDomainArchiveSegment("showcase", "showcase", "Showcase")).toBe(false);
   });
 });

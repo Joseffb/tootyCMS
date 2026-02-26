@@ -18,6 +18,10 @@ export default function SitePostContent({ postData }: { postData: any }) {
 
   const activeLayout = postData.layout ?? "post";
   const isPageLayout = activeLayout === "page";
+  const categoryBase = String(postData?.primals?.category_base || "c").replace(/^\/+|\/+$/g, "") || "c";
+  const documentationCategorySlug =
+    String(postData?.primals?.documentation_category_slug || "documentation").replace(/^\/+|\/+$/g, "") || "documentation";
+  const documentationHref = `/${categoryBase}/${documentationCategorySlug}`;
 
   const renderLayout = () => {
     switch (activeLayout) {
@@ -60,7 +64,7 @@ export default function SitePostContent({ postData }: { postData: any }) {
                 <a href={siteUrl} className="tooty-post-link hover:underline">
                   Main Site
                 </a>
-                <Link href="/c/documentation" className="tooty-post-link hover:underline">
+                <Link href={documentationHref} className="tooty-post-link hover:underline">
                   Documentation
                 </Link>
               </>

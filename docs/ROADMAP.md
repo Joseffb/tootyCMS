@@ -21,17 +21,21 @@
 14. Add robust media pipeline (validation, transforms, remote/local providers, cleanup jobs, quotas).
 16. Add draft/publish workflow states and scheduled publish/unpublish transitions.
 
+## P1.5: Platform Foundations (Cross-Domain Systems)
+
+17. Add pluggable Search system via spine/registration model (provider contract + routing/query adapters), including a native DB-backed provider in core as baseline.
+
 ## P2: Multi-Tenant + Network Operations
 
 P2-0. Add core comment service (provider contract, RBAC-first orchestration, tenant-scoped context, trace logging, migration-managed schema), with full unit/integration/e2e coverage.
 P2-1. Add central signing system service (non-enforcing dev mode, enforce-capable production mode), including reserved-subdomain lookup support for external verification flows.
 P2-2. Add external public REST API module in core (`/api/v1/*`), versioned and tenant-scoped, RBAC-gated; keep internal `/app/api/*` as non-public plumbing.
 P2-3. Add autosave, revisions, and restore history for editable content types.
-17. Enforce tenant isolation everywhere (queries, cache tags, theme queries, scheduler jobs, analytics).
-18. Finish network query governance (main site + permissioned sites only, audited access).
-19. Add site-level limits/quotas (entries, media, scheduler jobs, API usage).
-20. Add admin tools for tenant lifecycle (archive, export, transfer ownership, disable safely).
-21. Add safe background jobs for cross-site operations (reindex, cache warm, sitemap rebuild).
+18. Enforce tenant isolation everywhere (queries, cache tags, theme queries, scheduler jobs, analytics).
+19. Finish network query governance (main site + permissioned sites only, audited access).
+20. Add site-level limits/quotas (entries, media, scheduler jobs, API usage).
+21. Add admin tools for tenant lifecycle (archive, export, transfer ownership, disable safely).
+22. Add safe background jobs for cross-site operations (reindex, cache warm, sitemap rebuild).
 
 ## P3: Extension Platform Maturity
 

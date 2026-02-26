@@ -17,13 +17,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   const site = await getSiteData(decodedDomain);
   if (!site) notFound();
   const writing = await getSiteWritingSettings(site.id);
-  const taxonomyDomainKey = writing.noDomainDataDomain || "post";
-  const data = await getTaxonomyArchiveData(
-    decodedDomain,
-    "tag",
-    decodedSlug,
-    taxonomyDomainKey,
-  );
+  const data = await getTaxonomyArchiveData(decodedDomain, "tag", decodedSlug);
   if (!data) notFound();
   const activeTheme = site?.id ? await getActiveThemeForSite(site.id) : null;
   const documentationCategorySlug =
@@ -41,13 +35,14 @@ export default async function TagArchivePage({ params }: { params: Params }) {
     isPrimary,
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
+  const documentationPath = `/${(writing.categoryBase || "c").replace(/^\/+|\/+$/g, "")}/${documentationCategorySlug}`;
+  const documentationHref = `${siteUrl.replace(/\/$/, "")}${documentationPath}`;
 
   if (site?.id) {
     const tagTemplate = await getThemeTemplateByHierarchy(site.id, {
-        taxonomy: "tag",
-        slug: decodedSlug,
-        dataDomain: taxonomyDomainKey,
-      });
+      taxonomy: "tag",
+      slug: decodedSlug,
+    });
     if (tagTemplate) {
       const html = renderThemeTemplate(tagTemplate.template, {
         theme_header: tagTemplate.partials?.header || "",
@@ -66,13 +61,13 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         posts: data.posts.map((post) => ({
           title: post.title,
           description: post.description || "",
-          href: `${siteUrl}${buildDetailPath(taxonomyDomainKey, post.slug, writing)}`,
+          href: `${siteUrl}${buildDetailPath(post.dataDomain || "post", post.slug, writing)}`,
           created_at: toDateString(post.createdAt),
         })),
         links: {
           root: rootUrl,
           main_site: siteUrl,
-          documentation: `${siteUrl}/c/documentation`,
+          documentation: documentationHref,
           about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
@@ -100,7 +95,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
             <a href={siteUrl} className="tooty-post-link hover:underline">
               Main Site
             </a>
-            <Link href="/c/documentation" className="tooty-post-link hover:underline">
+            <Link href={documentationPath} className="tooty-post-link hover:underline">
               Documentation
             </Link>
           </div>
@@ -130,7 +125,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
         <div className="grid gap-4">
           {data.posts.map((post) => (
             <article key={post.slug} className="tooty-archive-card rounded-xl border p-4">
-              <Link href={buildDetailPath(taxonomyDomainKey, post.slug, writing)} className="tooty-post-title font-semibold hover:underline">
+              <Link href={buildDetailPath(post.dataDomain || "post", post.slug, writing)} className="tooty-post-title font-semibold hover:underline">
                 {post.title}
               </Link>
               <p className="tooty-post-meta mt-1 text-sm">{toDateString(post.createdAt)}</p>

@@ -60,7 +60,7 @@ export default async function SitePostPage({
     }
   }
 
-  if (!existingPost && ((singularFromSlug && singularFromSlug !== "post") || noDomainPrefixDomainKey)) {
+  if (!existingPost && (singularFromSlug || noDomainPrefixDomainKey)) {
     const domainKeyForArchive = noDomainPrefixDomainKey || singularFromSlug;
     if (!domainKeyForArchive) notFound();
     const domainRow = await db.query.dataDomains.findFirst({
@@ -70,6 +70,17 @@ export default async function SitePostPage({
     if (domainRow) {
       const isMappedNoDomainArchive = Boolean(noDomainPrefixDomainKey);
       if (isMappedNoDomainArchive || isDomainArchiveSegment(normalizedSlug, domainRow.key, domainRow.label)) {
+        const incomingArchivePath = `/${decodedSlug}`;
+        const canonicalArchivePath = buildArchivePath(domainRow.key, writing);
+        if (incomingArchivePath !== canonicalArchivePath) {
+          trace("routing", "domain archive redirect to canonical", {
+            from: incomingArchivePath,
+            to: canonicalArchivePath,
+            dataDomain: domainRow.key,
+          });
+          redirect(canonicalArchivePath);
+        }
+
         const entries = await getDomainPostsForSite(decodedDomain, domainRow.key);
         const isPrimary = Boolean((site as any).isPrimary) || (site as any).subdomain === "main";
         const configuredRootUrl = (await getSiteUrlSettingForSite(site.id as string, "")).value.trim();
@@ -282,6 +293,8 @@ export default async function SitePostPage({
     primals: {
       public_image_base: `/theme-assets/${themeId}`,
       documentation_category_slug: documentationCategorySlug,
+      category_base: writing.categoryBase || "c",
+      tag_base: writing.tagBase || "t",
     },
   };
   return <SitePostContent postData={postData} />;

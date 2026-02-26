@@ -22,6 +22,7 @@ const { dbMock, getSessionMock, canUserMutateDomainPostMock, userCanMock } = vi.
     }),
     insert: vi.fn(() => ({
       values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(async () => insertQueue.shift() ?? []),
         returning: vi.fn(async () => insertQueue.shift() ?? []),
       })),
     })),
@@ -90,6 +91,8 @@ import {
   deleteDomainPost,
   getAllCategories,
   getAllTags,
+  getTaxonomyTermMeta,
+  setTaxonomyTermMeta,
 } from "@/lib/actions";
 
 describe("taxonomy actions", () => {
@@ -142,6 +145,31 @@ describe("taxonomy actions", () => {
 
     const rows = await getAllTags();
     expect(rows).toEqual([{ id: 30, name: "alpha" }]);
+  });
+
+  it("returns taxonomy term meta rows ordered by key", async () => {
+    dbMock.__pushSelectResult([
+      { key: "color", value: "blue" },
+      { key: "icon", value: "star" },
+    ]);
+
+    const rows = await getTaxonomyTermMeta(9);
+
+    expect(rows).toEqual([
+      { key: "color", value: "blue" },
+      { key: "icon", value: "star" },
+    ]);
+  });
+
+  it("upserts taxonomy term meta with normalized key", async () => {
+    const result = await setTaxonomyTermMeta({
+      termTaxonomyId: 9,
+      key: " SEO Title ",
+      value: "Hello",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(dbMock.insert).toHaveBeenCalledTimes(1);
   });
 
   it("creates per-domain content and meta table names with dynamic prefix", async () => {

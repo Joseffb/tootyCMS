@@ -34,7 +34,7 @@ const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }>
   { name: "Themes", href: "/settings/themes", match: "/settings/themes" },
   { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
   { name: "Messages", href: "/settings/messages", match: "/settings/messages" },
-  { name: "Database", href: "/settings/database", match: "/settings/database" },
+  { name: "Migrations", href: "/settings/database", match: "/settings/database" },
   { name: "Schedules", href: "/settings/schedules", match: "/settings/schedules" },
   { name: "Users", href: "/settings/users", match: "/settings/users" },
   { name: "User Roles", href: "/settings/rbac", match: "/settings/rbac" },
@@ -193,10 +193,11 @@ export default function Nav({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
+    const pathQuery = `path=${encodeURIComponent(pathname || "")}`;
     const separator = query ? "&" : "?";
     const requestId = ++adminUiRequestRef.current;
     const controller = new AbortController();
-    fetch(`/api/plugins/admin-ui${query}${separator}r=${Date.now()}`, { cache: "no-store", signal: controller.signal })
+    fetch(`/api/plugins/admin-ui${query}${separator}${pathQuery}&r=${Date.now()}`, { cache: "no-store", signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
@@ -241,6 +242,11 @@ export default function Nav({ children }: { children: ReactNode }) {
     if (!teetyQuote) {
       setTeetyAnimatedQuote("");
       setTeetyAnimationPhase("done");
+      return;
+    }
+    if (teetyQuote.includes("\n")) {
+      setTeetyAnimationPhase("done");
+      setTeetyAnimatedQuote(teetyQuote);
       return;
     }
     if (!teetyImageLoaded) {
@@ -296,7 +302,6 @@ export default function Nav({ children }: { children: ReactNode }) {
     };
     const filteredTabs = GLOBAL_SETTINGS_TABS.filter((item) => {
       if (singleSiteMode && item.name === "Sites") return false;
-      if (!navContext.migrationRequired && item.name === "Database") return false;
       if (!navContext.canManageNetworkPlugins && item.name === "Messages") return false;
       return true;
     });
@@ -353,6 +358,10 @@ export default function Nav({ children }: { children: ReactNode }) {
     }
 
     const buildContentTabs = (siteId: string): NavTab[] => {
+      const dedupedByListHref = new Map<
+        string,
+        { name: string; singular: string; listHref: string; addHref: string; order?: number }
+      >();
       const entries = [
         {
           name: "Posts",
@@ -362,7 +371,13 @@ export default function Nav({ children }: { children: ReactNode }) {
           order: undefined as number | undefined,
         },
         ...dataDomainTabs,
-      ]
+      ];
+      for (const item of entries) {
+        if (!dedupedByListHref.has(item.listHref)) {
+          dedupedByListHref.set(item.listHref, item);
+        }
+      }
+      return Array.from(dedupedByListHref.values())
         .sort((a, b) => {
           const aHasOrder = Number.isFinite(a.order);
           const bHasOrder = Number.isFinite(b.order);
@@ -370,9 +385,8 @@ export default function Nav({ children }: { children: ReactNode }) {
           if (aHasOrder) return -1;
           if (bHasOrder) return 1;
           return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        });
-
-      return entries.flatMap((item) => ([
+        })
+        .flatMap((item) => ([
         {
           name: item.name,
           href: item.listHref,
@@ -519,7 +533,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
           { name: "Messages", href: `/site/${navContext.mainSiteId}/settings/messages`, match: `/site/${navContext.mainSiteId}/settings/messages` },
           { name: "Users", href: `/site/${navContext.mainSiteId}/settings/users`, match: `/site/${navContext.mainSiteId}/settings/users` },
-          { name: "Database", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
+          { name: "Migrations", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
           { name: "RBAC", href: `/site/${navContext.mainSiteId}/settings/rbac`, match: `/site/${navContext.mainSiteId}/settings/rbac` },
           { name: "Schedules", href: `/site/${navContext.mainSiteId}/settings/schedules`, match: `/site/${navContext.mainSiteId}/settings/schedules` },
         ].flatMap((item) => {
@@ -785,7 +799,7 @@ export default function Nav({ children }: { children: ReactNode }) {
               <div key={widget.id} className="pointer-events-none fixed right-4 z-20 max-w-xs" style={{ bottom }}>
                 {isTeety ? (
                   <div className="relative overflow-visible rounded-lg border border-stone-600 bg-stone-800 px-3 py-2 pr-14 text-xs text-stone-100 shadow-lg">
-                    <p className="italic">
+                    <p className="whitespace-pre-line italic">
                       {teetyImageLoaded ? (teetyAnimatedQuote || (teetyAnimationPhase === "done" ? widget.content : "")) : ""}
                       {teetyAnimationPhase === "typing" && teetyAnimatedQuote.length < widget.content.length ? <span className="ml-0.5 animate-pulse">|</span> : null}
                     </p>

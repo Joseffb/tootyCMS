@@ -76,15 +76,43 @@ describe("hello-teety plugin", () => {
     expect(String((context.trace as string[])[0])).toContain("hello-teety:");
   });
 
-  it("uses teety-dark specific quote pool when site theme is teety-dark", async () => {
+  it("uses theme quote mode only on theme settings paths", async () => {
     const { kernel, filters } = createKernel();
     getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "teety-dark" : ""));
     await register(kernel as any, { getPluginSetting, getSetting });
 
     const widgetFilter = filters.get("admin:floating-widgets")?.[0];
-    const widgets = await widgetFilter!([], { siteId: "site_123" });
+    const widgets = await widgetFilter!([], { siteId: "site_123", path: "/site/site_123/settings/themes" });
     expect(widgets).toHaveLength(1);
     const quote = String(widgets[0].content);
-    expect(quote.length).toBeGreaterThan(0);
+    const lines = quote.split("\n").map((line) => line.trim()).filter(Boolean);
+    expect(lines).toHaveLength(12);
+  });
+
+  it("does not use theme quote mode off theme pages", async () => {
+    const { kernel, filters } = createKernel();
+    getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "teety-dark" : ""));
+    await register(kernel as any, { getPluginSetting, getSetting });
+
+    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
+    const widgets = await widgetFilter!([], { siteId: "site_123", path: "/site/site_123/settings/menus" });
+    expect(widgets).toHaveLength(1);
+    const quote = String(widgets[0].content);
+    expect(quote.includes("\n")).toBe(false);
+  });
+
+  it("emits 15 comments when migration kit plugin page is open", async () => {
+    const { kernel, filters } = createKernel();
+    await register(kernel as any, { getPluginSetting, getSetting });
+
+    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
+    const widgets = await widgetFilter!([], { path: "/plugins/export-import" });
+    expect(widgets).toHaveLength(1);
+    const lines = String(widgets[0].content || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(lines).toHaveLength(15);
+    expect(lines.some((line) => line.includes("Moving the docs huh?"))).toBe(true);
   });
 });

@@ -102,7 +102,7 @@ export async function register(kernel, api) {
     "Call it a win.",
   ];
 
-  const tootyDarkQuotes = [
+  const themeQuotes = [
     "Tooty Dark looks how I feel: unbothered and dangerous.",
     "Dark mode. Low empathy for nonsense.",
     "Tooty Dark is my face in interface form.",
@@ -115,6 +115,24 @@ export async function register(kernel, api) {
     "Tooty Dark makes my indifference look intentional.",
     "In the dark, my standards glow.",
     "Tooty Dark is my resting expression with better lighting.",
+  ];
+
+  const utilityQuotes = [
+    "Moving the docs huh?",
+    "Sure, refactor first. Regret later.",
+    "That comment looked lonely anyway.",
+    "You renamed it. Did tests notice?",
+    "One tiny tweak. Famous last words.",
+    "I felt that merge conflict from here.",
+    "Bold commit message. Zero context.",
+    "This looked temporary yesterday too.",
+    "You changed one line. Twelve files moved.",
+    "Looks cleaner. Somehow more dangerous.",
+    "You touched routing again?",
+    "This branch has trust issues.",
+    "Ship it. But like... gently.",
+    "Yes, this is technically progress.",
+    "Coffee-driven architecture detected.",
   ];
 
   const asBool = (value, fallback = true) => {
@@ -130,6 +148,45 @@ export async function register(kernel, api) {
     return quotes[index] || defaultQuotes[0];
   };
 
+  const pickQuotes = (quotes, count) => {
+    const pool = Array.isArray(quotes) ? [...quotes] : [];
+    const out = [];
+    while (pool.length > 0 && out.length < count) {
+      const index = Math.floor(Math.random() * pool.length);
+      const [picked] = pool.splice(index, 1);
+      if (picked) out.push(picked);
+    }
+    return out;
+  };
+
+  const isTweetyContext = (context = {}) => {
+    const path = String(context?.path || context?.pathname || "").trim().toLowerCase();
+    if (!path) return false;
+    if (path.includes("/plugins/export-import")) return true;
+    if (path.includes("teety") || path.includes("tweety")) return true;
+    return false;
+  };
+
+  const isThemeSettingsPath = (context = {}) => {
+    const path = String(context?.path || context?.pathname || "").trim().toLowerCase();
+    if (!path) return false;
+    if (path.includes("/settings/themes")) return true;
+    return false;
+  };
+
+  const resolveTweetyUseType = (context = {}, siteThemeId = "") => {
+    const isDarkTheme = siteThemeId === "teety-dark" || siteThemeId === "tooty-dark";
+    if (isDarkTheme && isThemeSettingsPath(context)) return "theme";
+    if (isTweetyContext(context)) return "utility";
+    return "default";
+  };
+
+  kernel.addFilter("admin:context-use-type", async (current = "default", context = {}) => {
+    const siteThemeId = await resolveSiteThemeId(context?.siteId);
+    const use_type = resolveTweetyUseType(context, siteThemeId);
+    return use_type !== "default" ? use_type : current;
+  }, 20);
+
   const resolveSiteThemeId = async (siteId) => {
     if (!siteId) return "";
     const key = `site_${siteId}_theme`;
@@ -143,7 +200,8 @@ export async function register(kernel, api) {
       const showInDebug = asBool(await api?.getPluginSetting("showInDebug", "false"), false);
       if (!showInDebug) return;
       const siteThemeId = await resolveSiteThemeId(context?.siteId);
-      const traceQuote = siteThemeId === "teety-dark" || siteThemeId === "tooty-dark" ? pickQuote(tootyDarkQuotes) : pickQuote(defaultQuotes);
+      const use_type = String(context?.use_type || resolveTweetyUseType(context, siteThemeId));
+      const traceQuote = use_type === "theme" ? pickQuote(themeQuotes) : use_type === "utility" ? pickQuote(utilityQuotes) : pickQuote(defaultQuotes);
       context.trace = [...(context.trace || []), `hello-teety: ${traceQuote}`];
     },
     30,
@@ -153,8 +211,11 @@ export async function register(kernel, api) {
     const showWidget = asBool(await api?.getPluginSetting("showWidget", "true"), true);
     if (!showWidget) return widgets;
     const siteThemeId = await resolveSiteThemeId(context?.siteId);
-    const builtinQuotes = siteThemeId === "teety-dark" || siteThemeId === "tooty-dark" ? [...tootyDarkQuotes, ...defaultQuotes] : defaultQuotes;
-    const quote = pickQuote(builtinQuotes);
+    const use_type = String(context?.use_type || resolveTweetyUseType(context, siteThemeId));
+    const is_tweety = use_type === "theme" || use_type === "utility";
+    const quote = is_tweety
+      ? pickQuotes(use_type === "theme" ? themeQuotes : utilityQuotes, 15).map((line) => `- ${line}`).join("\n")
+      : pickQuote(defaultQuotes);
     return [
       ...widgets,
       {

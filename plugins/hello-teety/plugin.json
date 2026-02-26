@@ -4,6 +4,7 @@
   "description": "Hear wisdom from Tooty’s one-minute-younger brother, Teety. Broody. Brilliant. Occasionally dramatic.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
+  "tags": ["utility", "teety"],
   "scope": "network",
   "capabilities": {
     "hooks": true,

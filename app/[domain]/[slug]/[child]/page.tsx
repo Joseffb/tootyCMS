@@ -125,7 +125,7 @@ export default async function DomainPostPage({ params }: { params: Params }) {
         links: {
           root: rootUrl,
           main_site: siteUrl,
-          posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath("post", writing)}`,
+          posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath(decodedDataDomain, writing)}`,
           about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
@@ -138,5 +138,19 @@ export default async function DomainPostPage({ params }: { params: Params }) {
     }
   }
 
-  return <SitePostContent postData={{ ...(data as any), layout }} />;
+  return (
+    <SitePostContent
+      postData={{
+        ...(data as any),
+        layout,
+        menuItems,
+        primals: {
+          public_image_base: "",
+          documentation_category_slug: "documentation",
+          category_base: writing.categoryBase || "c",
+          tag_base: writing.tagBase || "t",
+        },
+      }}
+    />
+  );
 }

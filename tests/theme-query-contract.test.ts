@@ -10,11 +10,11 @@ describe("theme query contract", () => {
         name: "Fernain Portfolio",
         queries: [
           {
-            key: "featured_projects",
+            key: "featured_showcases",
             source: "content.list",
             route: "home",
             scope: "site",
-            params: { dataDomain: "project", taxonomy: "category", withTerm: "featured", limit: 4 },
+            params: { dataDomain: "showcase", taxonomy: "category", withTerm: "featured", limit: 4 },
           },
           {
             key: "latest_posts",
@@ -27,14 +27,14 @@ describe("theme query contract", () => {
             source: "content.list",
             route: "domain_detail",
             scope: "site",
-            params: { dataDomain: "project", limit: 3 },
+            params: { dataDomain: "showcase", limit: 3 },
           },
         ],
       },
       "home",
     );
 
-    expect(requests.map((request) => request.key)).toEqual(["featured_projects", "latest_posts"]);
+    expect(requests.map((request) => request.key)).toEqual(["featured_showcases", "latest_posts"]);
   });
 
   it("returns empty requests for themes without query declarations", () => {

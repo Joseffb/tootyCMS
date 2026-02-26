@@ -157,14 +157,15 @@ export async function getThemeTemplateByHierarchy(
   opts: { taxonomy: "category" | "tag"; slug: string; dataDomain?: string },
 ) {
   const slug = opts.slug.trim().toLowerCase();
-  const dataDomain = (opts.dataDomain || "data_domain").trim().toLowerCase();
+  const dataDomain = (opts.dataDomain || "").trim().toLowerCase();
   const taxonomy = opts.taxonomy;
   const taxonomyCandidates = taxonomyArchiveTemplateCandidates(taxonomy, slug);
-  const domainArchiveCandidates = domainArchiveTemplateCandidates(dataDomain, "");
-  const domainCandidates =
-    taxonomy === "category"
+  const domainArchiveCandidates = dataDomain ? domainArchiveTemplateCandidates(dataDomain, "") : [];
+  const domainCandidates = dataDomain
+    ? taxonomy === "category"
       ? [`${dataDomain}-category-${slug}.html`]
-      : [`${dataDomain}-tag-${slug}.html`];
+      : [`${dataDomain}-tag-${slug}.html`]
+    : [];
   const candidates = [...domainCandidates, ...taxonomyCandidates, ...domainArchiveCandidates];
 
   return getThemeTemplateFromCandidates(siteId, candidates);

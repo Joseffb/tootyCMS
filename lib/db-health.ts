@@ -16,7 +16,7 @@ export type MissingDbColumn = {
 export const DB_SCHEMA_VERSION_KEY = "db_schema_version";
 export const DB_SCHEMA_TARGET_VERSION_KEY = "db_schema_target_version";
 export const DB_SCHEMA_UPDATED_AT_KEY = "db_schema_updated_at";
-export const TARGET_DB_SCHEMA_VERSION = "2026.02.25.2";
+export const TARGET_DB_SCHEMA_VERSION = "2026.02.26.1";
 
 async function safeGetSetting(key: string, fallback: string) {
   try {
@@ -40,6 +40,7 @@ const REQUIRED_TABLE_SUFFIXES = [
   "webhook_subscriptions",
   "webhook_deliveries",
   "domain_events_queue",
+  "term_taxonomy_meta",
 ] as const;
 
 function getPrefix() {
@@ -99,10 +100,9 @@ export async function getDatabaseHealthReport() {
     ...(missingTables.length > 0
       ? [
           {
-            id: "2026.02.25.2-communication-webhook-tables",
-            title: "Create communication/webhook queue and callback audit tables",
-            reason:
-              "Missing communication_messages, communication_attempts, webcallback_events, webhook_subscriptions, webhook_deliveries, and/or domain_events_queue tables.",
+            id: "2026.02.26.1-required-tables",
+            title: "Create required communication/taxonomy compatibility tables",
+            reason: "Missing required communication queue/webhook and/or taxonomy meta tables.",
           },
         ]
       : []),
@@ -118,7 +118,7 @@ export async function getDatabaseHealthReport() {
     ...(versionBehind
       ? [
           {
-            id: "2026.02.25.2-version",
+            id: "2026.02.26.1-version",
             title: "Record schema version",
             reason: "Installed schema version is not at current target.",
           },
@@ -151,6 +151,7 @@ export async function applyDatabaseCompatibilityFixes() {
   const webhookSubscriptionsTable = `${prefix}webhook_subscriptions`;
   const webhookDeliveriesTable = `${prefix}webhook_deliveries`;
   const domainEventsQueueTable = `${prefix}domain_events_queue`;
+  const termTaxonomyMetaTable = `${prefix}term_taxonomy_meta`;
   const mediaTable = `${prefix}media`;
 
   await db.execute(
@@ -291,6 +292,18 @@ export async function applyDatabaseCompatibilityFixes() {
         "processed_at" timestamptz NULL,
         "created_at" timestamptz NOT NULL DEFAULT now(),
         "updated_at" timestamptz NOT NULL DEFAULT now()
+      )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(termTaxonomyMetaTable)} (
+        "id" serial PRIMARY KEY,
+        "termTaxonomyId" integer NOT NULL REFERENCES ${quoteIdentifier(`${prefix}term_taxonomies`)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "key" text NOT NULL,
+        "value" text NOT NULL DEFAULT '',
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
       )`,
     ),
   );
@@ -443,6 +456,16 @@ export async function applyDatabaseCompatibilityFixes() {
   );
   await db.execute(
     sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${termTaxonomyMetaTable}_termTaxonomyId_idx" ON ${quoteIdentifier(termTaxonomyMetaTable)} ("termTaxonomyId")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${termTaxonomyMetaTable}_term_taxonomy_key_idx" ON ${quoteIdentifier(termTaxonomyMetaTable)} ("termTaxonomyId", "key")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
       `CREATE INDEX IF NOT EXISTS "${domainPostsTable}_site_domain_published_updated_idx" ON ${quoteIdentifier(domainPostsTable)} ("siteId", "dataDomainId", "published", "updatedAt")`,
     ),
   );
@@ -477,6 +500,7 @@ export async function applyDatabaseCompatibilityFixes() {
       webhookSubscriptionsTable,
       webhookDeliveriesTable,
       domainEventsQueueTable,
+      termTaxonomyMetaTable,
       mediaTable,
     ],
   });
