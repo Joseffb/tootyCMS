@@ -13,6 +13,7 @@ import { purgeCommunicationQueue, retryPendingCommunications } from "@/lib/commu
 import { purgeWebcallbackEvents } from "@/lib/webcallbacks";
 import { retryPendingWebhookDeliveries } from "@/lib/webhook-delivery";
 import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
+import { purgeOldMediaRecords } from "@/lib/media-governance";
 
 export type SchedulerOwnerType = "plugin" | "theme" | "core";
 export type SchedulerStatus = "success" | "error" | "skipped" | "blocked" | "dead_letter";
@@ -457,6 +458,16 @@ async function runCoreAction(entry: ScheduleEntry): Promise<{ status: Exclude<Sc
     const limit = Number(entry.payload?.limit || 25);
     const result = await retryPendingWebhookDeliveries(Number.isFinite(limit) ? limit : 25);
     if (result.failed > 0) return { status: "error", error: `${result.failed} webhook deliveries failed` };
+    return { status: "success" };
+  }
+
+  if (action === "core.media.cleanup" || action === "media.cleanup") {
+    const result = await purgeOldMediaRecords({
+      siteId: String(entry.payload?.siteId || entry.siteId || "").trim() || null,
+      olderThanDays: Number(entry.payload?.olderThanDays || 30),
+      limit: Number(entry.payload?.limit || 100),
+    });
+    if (result.deleted === 0) return { status: "skipped", error: "no media rows eligible for cleanup" };
     return { status: "success" };
   }
 

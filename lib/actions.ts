@@ -2716,6 +2716,11 @@ async function getScheduleActionCatalog(): Promise<ScheduleActionOption[]> {
       description: "Retries queued/retrying outbound webhook deliveries.",
     },
     {
+      key: "core.media.cleanup",
+      label: "Cleanup Media Records",
+      description: "Deletes media index rows older than payload.olderThanDays (default 30).",
+    },
+    {
       key: "core.content.publish",
       label: "Publish Content",
       description: "Publishes a domain content record from payload.domainPostId.",

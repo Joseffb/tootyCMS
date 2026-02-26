@@ -68,3 +68,17 @@ For S3-backed assets to render on public pages, bucket/object read must be publi
 2. Site-level media inventory
 3. Future cleanup/usage reporting
 4. Provider-agnostic media retrieval
+
+## Cleanup jobs
+
+Core scheduler supports a retention cleanup action:
+
+- `core.media.cleanup` (alias `media.cleanup`)
+
+Payload options:
+
+- `olderThanDays` (default `30`)
+- `limit` (default `100`)
+- `siteId` (optional override; defaults to schedule `siteId`)
+
+This cleanup removes old rows from `tooty_media` in bounded batches.

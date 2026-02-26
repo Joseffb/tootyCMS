@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   retryPendingCommunications: vi.fn(),
   purgeCommunicationQueue: vi.fn(),
   purgeWebcallbackEvents: vi.fn(),
+  purgeOldMediaRecords: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -31,6 +32,10 @@ vi.mock("@/lib/communications", () => ({
 
 vi.mock("@/lib/webcallbacks", () => ({
   purgeWebcallbackEvents: mocks.purgeWebcallbackEvents,
+}));
+
+vi.mock("@/lib/media-governance", () => ({
+  purgeOldMediaRecords: mocks.purgeOldMediaRecords,
 }));
 
 function sqlParams(input: any): any[] {
@@ -76,10 +81,12 @@ describe("scheduler reliability model", () => {
     mocks.retryPendingCommunications.mockReset();
     mocks.purgeCommunicationQueue.mockReset();
     mocks.purgeWebcallbackEvents.mockReset();
+    mocks.purgeOldMediaRecords.mockReset();
 
     mocks.getBooleanSetting.mockResolvedValue(true);
     mocks.getSiteUrlSetting.mockResolvedValue({ value: "http://localhost:3000" });
     mocks.getSiteUrlSettingForSite.mockResolvedValue({ value: "http://localhost:3000" });
+    mocks.purgeOldMediaRecords.mockResolvedValue({ deleted: 1, olderThanDays: 30, limit: 100, siteId: null });
 
     mocks.execute.mockResolvedValue({ rows: [] });
   });
@@ -141,5 +148,36 @@ describe("scheduler reliability model", () => {
     const auditParams = sqlParams(mocks.execute.mock.calls[13]?.[0]);
     expect(auditParams).toContain("manual");
     expect(auditParams).toContain("dead_letter");
+  });
+
+  it("runs core media cleanup action successfully", async () => {
+    const { runDueSchedules } = await import("@/lib/scheduler");
+    for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
+    mocks.execute
+      .mockResolvedValueOnce({
+        rows: [
+          makeDueRow({
+            action_key: "core.media.cleanup",
+            payload: JSON.stringify({ olderThanDays: 45, limit: 25 }),
+            max_retries: 1,
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await runDueSchedules(10);
+
+    expect(result.ran).toBe(1);
+    expect(result.errors).toBe(0);
+    expect(result.deadLettered).toBe(0);
+    expect(mocks.purgeOldMediaRecords).toHaveBeenCalledWith({
+      siteId: null,
+      olderThanDays: 45,
+      limit: 25,
+    });
+
+    const updateParams = sqlParams(mocks.execute.mock.calls[12]?.[0]);
+    expect(updateParams).toContain("success");
   });
 });

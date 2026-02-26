@@ -73,6 +73,18 @@ Per-run audit records are stored in `"<CMS_DB_PREFIX>scheduled_action_runs"` and
 - Non-admin extension APIs can only mutate schedules owned by that extension.
 - Missing action handlers fail gracefully and are marked as `skipped`/`error` on the entry.
 
+## Core action catalog (current)
+
+- `core.ping_sitemap`
+- `core.http_ping`
+- `core.communication.retry`
+- `core.communication.purge`
+- `core.webcallbacks.purge`
+- `core.webhooks.retry`
+- `core.media.cleanup` (age-based cleanup for `tooty_media` rows; payload supports `olderThanDays`, `limit`, `siteId`)
+- `core.content.publish`
+- `core.content.unpublish`
+
 ## Extension integration
 
 Plugins and themes can create/list/update/delete schedule records through the internal extension API.
