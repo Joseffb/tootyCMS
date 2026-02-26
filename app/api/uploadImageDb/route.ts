@@ -5,9 +5,10 @@ import db from "@/lib/db";
 import { media, sites } from "@/lib/schema";
 import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { userCan } from "@/lib/authorization";
 import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
+import { buildMediaVariants } from "@/lib/media-variants";
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
@@ -72,41 +73,71 @@ export async function POST(req: Request) {
     );
   }
 
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const dataUrl = `data:${file.type};base64,${bytes.toString("base64")}`;
-  const hash = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 24);
-  const ext = file.type.split("/")[1] || "bin";
-  const objectKey = `${safeSegment(siteId)}/${hash}.${ext}`;
-  const label = safeSegment(name);
+  const { hash, variants, extension, mimeType } = await buildMediaVariants(file);
+  const siteSegment = safeSegment(siteId);
+  const nameLabel = safeSegment(name);
+  const originalKey = `${siteSegment}/${hash}.${extension}`;
+  const variantKeys = variants
+    .filter((variant) => variant.suffix !== "original")
+    .map((variant) => `${siteSegment}/${hash}-${variant.suffix}.${extension}`);
+  const allKeys = [originalKey, ...variantKeys];
+
+  let existingByKey = new Map<string, string>();
+  try {
+    const existing = await db
+      .select({
+        objectKey: media.objectKey,
+        url: media.url,
+      })
+      .from(media)
+      .where(and(eq(media.siteId, siteId), inArray(media.objectKey, allKeys)));
+    existingByKey = new Map(existing.map((row) => [row.objectKey, row.url]));
+  } catch {
+    existingByKey = new Map<string, string>();
+  }
 
   try {
-    await db
-      .insert(media)
-      .values({
-        siteId,
-        userId: session.user.id,
-        provider: "dbblob",
-        bucket: "dbblob",
-        objectKey,
-        url: dataUrl,
-        label,
-        mimeType: file.type,
-        size: file.size,
-      })
-      .onConflictDoUpdate({
-        target: media.objectKey,
-        set: {
+    for (const variant of variants) {
+      const key =
+        variant.suffix === "original"
+          ? originalKey
+          : `${siteSegment}/${hash}-${variant.suffix}.${extension}`;
+      let url = existingByKey.get(key);
+      if (!url) {
+        const bytes = Buffer.from(variant.buffer);
+        url = `data:${variant.mimeType};base64,${bytes.toString("base64")}`;
+      }
+      const variantLabel = variant.suffix === "original" ? nameLabel : `${nameLabel}-${variant.suffix}`;
+
+      await db
+        .insert(media)
+        .values({
           siteId,
           userId: session.user.id,
           provider: "dbblob",
           bucket: "dbblob",
-          url: dataUrl,
-          label,
-          mimeType: file.type,
-          size: file.size,
-          updatedAt: new Date(),
-        },
-      });
+          objectKey: key,
+          url,
+          label: variantLabel,
+          mimeType,
+          size: variant.buffer.byteLength,
+        })
+        .onConflictDoUpdate({
+          target: media.objectKey,
+          set: {
+            siteId,
+            userId: session.user.id,
+            provider: "dbblob",
+            bucket: "dbblob",
+            url,
+            label: variantLabel,
+            mimeType,
+            size: variant.buffer.byteLength,
+            updatedAt: new Date(),
+          },
+        });
+      existingByKey.set(key, url);
+    }
   } catch (error) {
     trace("upload.api.dbblob", "db write failed", { traceId, error: error instanceof Error ? error.message : String(error) }, "error");
     return NextResponse.json({ error: "DB blob write failed" }, { status: 500 });
@@ -115,16 +146,26 @@ export async function POST(req: Request) {
   trace("upload.api.dbblob", "upload success", {
     traceId,
     siteId,
-    objectKey,
+    objectKey: originalKey,
     provider: "dbblob",
     size: file.size,
-    mimeType: file.type,
+    mimeType,
   });
 
   return NextResponse.json({
-    url: dataUrl,
-    filename: objectKey,
+    url: existingByKey.get(originalKey) ?? "",
+    filename: originalKey,
     hash,
-    variants: [],
+    variants: variants
+      .filter((variant) => variant.suffix !== "original")
+      .map((variant) => {
+        const key = `${siteSegment}/${hash}-${variant.suffix}.${extension}`;
+        return {
+          suffix: variant.suffix,
+          width: variant.width,
+          key,
+          url: existingByKey.get(key),
+        };
+      }),
   });
 }
