@@ -1,6 +1,6 @@
 import { getAllPosts } from "@/lib/fetchers";
 import { getSiteUrlSetting, getSiteWritingSettings } from "@/lib/cms-config";
-import { isMissingRelationError } from "@/lib/db-errors";
+import { isMissingConnectionStringError, isMissingRelationError } from "@/lib/db-errors";
 import { buildDetailPath } from "@/lib/permalink";
 import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 import { NextResponse } from "next/server";
@@ -31,14 +31,22 @@ function buildDetailUrl(domain: string, detailPath: string) {
 }
 
 export async function GET() {
-  let posts = await getAllPosts();
+  let posts = [] as Awaited<ReturnType<typeof getAllPosts>>;
   let baseUrl = getRootSiteUrl();
+
+  try {
+    posts = await getAllPosts();
+  } catch (error) {
+    // Build may run without DB env (CI); fallback to homepage-only sitemap.
+    if (!isMissingRelationError(error) && !isMissingConnectionStringError(error)) throw error;
+  }
+
   try {
     const siteUrl = await getSiteUrlSetting();
     baseUrl = resolveBaseUrl(siteUrl.value);
   } catch (error) {
-    // Fresh installs may not have cms_settings yet.
-    if (!isMissingRelationError(error)) throw error;
+    // Fresh installs may not have cms_settings yet; CI build may also run without DB env.
+    if (!isMissingRelationError(error) && !isMissingConnectionStringError(error)) throw error;
   }
 
   const homepage = `<url><loc>${escapeXml(baseUrl)}</loc><lastmod>${new Date().toISOString()}</lastmod></url>`;
@@ -46,7 +54,11 @@ export async function GET() {
   const writingBySiteId = new Map<string, Awaited<ReturnType<typeof getSiteWritingSettings>>>();
   await Promise.all(
     [...new Set(posts.map((post) => post.siteId).filter(Boolean))].map(async (siteId) => {
-      writingBySiteId.set(siteId, await getSiteWritingSettings(siteId));
+      try {
+        writingBySiteId.set(siteId, await getSiteWritingSettings(siteId));
+      } catch (error) {
+        if (!isMissingRelationError(error) && !isMissingConnectionStringError(error)) throw error;
+      }
     }),
   );
 

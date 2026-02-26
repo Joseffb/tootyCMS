@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBooleanSetting, getSiteUrlSetting, SEO_INDEXING_ENABLED_KEY } from "@/lib/cms-config";
-import { isMissingRelationError } from "@/lib/db-errors";
+import { isMissingConnectionStringError, isMissingRelationError } from "@/lib/db-errors";
 import { getRootSiteUrl } from "@/lib/site-url";
 
 function resolveBaseUrl(configuredSiteUrl: string) {
@@ -18,8 +18,8 @@ export async function GET() {
     baseUrl = resolveBaseUrl(siteUrlSetting.value);
     indexingEnabled = indexingSetting;
   } catch (error) {
-    // Fresh installs may not have cms_settings yet.
-    if (!isMissingRelationError(error)) throw error;
+    // Fresh installs may not have cms_settings yet; CI build may also run without DB env.
+    if (!isMissingRelationError(error) && !isMissingConnectionStringError(error)) throw error;
   }
   const sitemapUrl = `${baseUrl.replace(/\/$/, "")}/sitemap.xml`;
 
