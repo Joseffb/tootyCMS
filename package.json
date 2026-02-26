@@ -1,6 +1,6 @@
 {
   "name": "tooty-cms",
-  "version": "0.4.0",
+  "version": "0.4.2-2",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -19,6 +19,8 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "bash ./scripts/test-integration.sh",
     "test:all": "npm run test && npm run test:integration",
+    "sync:plugins": "node ./scripts/sync-plugins.mjs from-repo",
+    "sync:plugins:to-repo": "node ./scripts/sync-plugins.mjs to-repo",
     "scan:secrets": "node ./scripts/scan-secrets.mjs --all",
     "scan:secrets:staged": "node ./scripts/scan-secrets.mjs --staged",
     "hooks:install": "bash ./scripts/install-git-hooks.sh"
