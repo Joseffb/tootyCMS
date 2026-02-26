@@ -441,6 +441,30 @@ export async function ensureMainSiteForUser(userId: string) {
   }
 
   if (globalMain?.id) {
+    await db
+      .update(sites)
+      .set({ isPrimary: true })
+      .where(eq(sites.id, globalMain.id));
+    await ensurePrimarySiteUsesMainSubdomain(globalMain.id);
+    await ensureSeedSiteThumbnail(globalMain.id);
+    await ensureDefaultSiteDataDomains(globalMain.id);
+    const postDomain = await db.query.dataDomains.findFirst({
+      where: eq(dataDomains.key, "post"),
+      columns: { id: true },
+    });
+    if (postDomain) {
+      await db
+        .update(domainPosts)
+        .set({ layout: "post" })
+        .where(
+          and(
+            eq(domainPosts.siteId, globalMain.id),
+            eq(domainPosts.dataDomainId, postDomain.id),
+            isNull(domainPosts.layout),
+          ),
+        );
+    }
+    await upsertSiteUserRole(globalMain.id, userId, await getDefaultSiteRoleForUser(userId));
     return;
   }
 

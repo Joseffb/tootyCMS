@@ -153,11 +153,13 @@ export const createCategoryByName = async (name: string, parentId?: number | nul
       })
       .returning();
 
+    revalidateDomainAndTaxonomyCaches();
     return { id: createdTaxonomy.id, name: createdTerm.name };
   } catch {
     const existingLegacy = await db.select().from(categories).where(eq(categories.name, trimmed)).limit(1);
     if (existingLegacy[0]) return existingLegacy[0];
     const [created] = await db.insert(categories).values({ name: trimmed }).returning();
+    revalidateDomainAndTaxonomyCaches();
     return created;
   }
 };
@@ -209,11 +211,13 @@ export const createTagByName = async (name: string) => {
       })
       .returning();
 
+    revalidateDomainAndTaxonomyCaches();
     return { id: createdTaxonomy.id, name: createdTerm.name };
   } catch {
     const existingLegacy = await db.select().from(tags).where(eq(tags.name, trimmed)).limit(1);
     if (existingLegacy[0]) return existingLegacy[0];
     const [created] = await db.insert(tags).values({ name: trimmed }).returning();
+    revalidateDomainAndTaxonomyCaches();
     return created;
   }
 };
@@ -435,7 +439,7 @@ export const createDataDomain = async (input: {
         set: { isActive: input.activateForSite ?? true },
       });
   }
-
+  revalidateDomainAndTaxonomyCaches({ siteId: input.siteId || null });
   return created;
 };
 
@@ -471,7 +475,7 @@ export const updateDataDomain = async (input: {
     })
     .where(eq(dataDomains.id, input.id))
     .returning();
-
+  revalidateDomainAndTaxonomyCaches();
   return updated;
 };
 
@@ -506,7 +510,7 @@ export const deleteDataDomain = async (id: number) => {
     await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeMetaTable}"`));
     await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeContentTable}"`));
   });
-
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
@@ -539,7 +543,7 @@ export const setDataDomainActivation = async (input: {
   } catch (error: any) {
     return { error: error?.message ?? "Failed to update activation state" };
   }
-
+  revalidateDomainAndTaxonomyCaches({ siteId: input.siteId });
   return { ok: true };
 };
 
@@ -754,6 +758,7 @@ export const setTaxonomyLabel = async (input: { taxonomy: string; label: string 
       target: cmsSettings.key,
       set: { value: label },
     });
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
@@ -813,6 +818,7 @@ export const renameTaxonomy = async (input: { current: string; next: string }) =
   const next = normalizeTaxonomyKey(input.next);
   if (!current || !next) return { error: "Current and next taxonomy keys are required" };
   await db.update(termTaxonomies).set({ taxonomy: next }).where(eq(termTaxonomies.taxonomy, current));
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
@@ -842,7 +848,7 @@ export const deleteTaxonomy = async (taxonomy: string) => {
       await tx.delete(terms).where(inArray(terms.id, orphaned));
     }
   });
-
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
@@ -901,13 +907,16 @@ export const createTaxonomyTerm = async (input: {
     })
     .onConflictDoNothing()
     .returning();
-
-  if (created) return created;
+  if (created) {
+    revalidateDomainAndTaxonomyCaches();
+    return created;
+  }
   const [existing] = await db
     .select()
     .from(termTaxonomies)
     .where(and(eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)))
     .limit(1);
+  if (existing) revalidateDomainAndTaxonomyCaches();
   return existing ?? { error: "Failed to create term taxonomy" };
 };
 
@@ -967,7 +976,7 @@ export const updateTaxonomyTerm = async (input: {
       .set({ parentId: nextParentId })
       .where(eq(termTaxonomies.id, input.termTaxonomyId));
   }
-
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
@@ -998,6 +1007,7 @@ export const deleteTaxonomyTerm = async (termTaxonomyId: number) => {
       await tx.delete(terms).where(eq(terms.id, current.termId));
     }
   });
+  revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 const nanoid = customAlphabet(
@@ -1712,6 +1722,20 @@ function revalidatePublicContentCache() {
   revalidatePath("/[domain]/t/[slug]", "page");
   revalidatePath("/sitemap.xml");
   revalidatePath("/robots.txt");
+}
+
+function revalidateDomainAndTaxonomyCaches(options?: { siteId?: string | null }) {
+  const siteId = String(options?.siteId || "").trim();
+  if (siteId) {
+    revalidateSettingsPath(`/site/${siteId}/settings/domains`);
+    revalidateSettingsPath(`/site/${siteId}/settings/categories`);
+  }
+  revalidatePath("/site/[id]/settings/domains", "page");
+  revalidatePath("/app/site/[id]/settings/domains", "page");
+  revalidatePath("/site/[id]/settings/categories", "page");
+  revalidatePath("/app/site/[id]/settings/categories", "page");
+  revalidateSettingsPath("/settings/sites");
+  revalidatePublicContentCache();
 }
 
 async function requireOwnedSite(siteIdRaw: string, capability: SiteCapability = "site.settings.write") {
@@ -2472,6 +2496,7 @@ export const updateWritingSettings = async (formData: FormData) => {
   ]);
 
   revalidateSettingsPath("/settings/writing");
+  revalidatePublicContentCache();
 };
 
 export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
@@ -2533,6 +2558,7 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
   ]);
 
   revalidatePath(`/site/${site.id}/settings/reading`);
+  revalidatePublicContentCache();
   return { ok: true };
 };
 
@@ -2629,6 +2655,7 @@ export const updateSiteEditorSettings = async (formData: FormData) => {
   await setSiteTextSetting(site.id, WRITING_EDITOR_MODE_KEY, editorMode);
 
   revalidatePath(`/site/${site.id}/settings/writing`);
+  revalidatePath(`/app/site/${site.id}/settings/writing`);
   return { ok: true };
 };
 

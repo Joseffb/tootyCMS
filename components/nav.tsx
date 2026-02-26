@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   Menu,
   Monitor,
-  Newspaper,
   Settings,
   User,
 } from "lucide-react";
@@ -49,7 +48,7 @@ export default function Nav({ children }: { children: ReactNode }) {
 
   const [pluginTabs, setPluginTabs] = useState<Array<{ name: string; href: string }>>([]);
   const [dataDomainTabs, setDataDomainTabs] = useState<
-    Array<{ name: string; singular: string; listHref: string; addHref: string }>
+    Array<{ name: string; singular: string; listHref: string; addHref: string; order?: number }>
   >([]);
   const [navContext, setNavContext] = useState<{
     siteCount: number;
@@ -184,6 +183,7 @@ export default function Nav({ children }: { children: ReactNode }) {
               singular: String(item.singular || ""),
               listHref: String(item.listHref || ""),
               addHref: String(item.addHref || ""),
+              order: Number.isFinite(Number(item.order)) ? Number(item.order) : undefined,
             }))
             .filter((item: any) => item.name && item.listHref && item.addHref),
         );
@@ -352,6 +352,52 @@ export default function Nav({ children }: { children: ReactNode }) {
       ];
     }
 
+    const buildContentTabs = (siteId: string): NavTab[] => {
+      const entries = [
+        {
+          name: "Posts",
+          singular: "Post",
+          listHref: `/site/${siteId}/domain/post`,
+          addHref: `/site/${siteId}/domain/post/create`,
+          order: undefined as number | undefined,
+        },
+        ...dataDomainTabs,
+      ]
+        .sort((a, b) => {
+          const aHasOrder = Number.isFinite(a.order);
+          const bHasOrder = Number.isFinite(b.order);
+          if (aHasOrder && bHasOrder) return Number(a.order) - Number(b.order);
+          if (aHasOrder) return -1;
+          if (bHasOrder) return 1;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        });
+
+      return entries.flatMap((item) => ([
+        {
+          name: item.name,
+          href: item.listHref,
+          isActive: pathname?.includes(item.listHref) && !pathname?.includes(`${item.listHref}/create`),
+          icon: <Globe width={18} />,
+        },
+        {
+          name: `List ${item.name}`,
+          href: item.listHref,
+          isActive: pathname?.includes(item.listHref) && !pathname?.includes(`${item.listHref}/create`),
+          icon: <Globe width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
+        },
+        {
+          name: `Add ${item.singular}`,
+          href: item.addHref,
+          isActive: pathname?.includes(item.addHref),
+          icon: <Globe width={18} />,
+          isChild: true as const,
+          childLevel: 1 as const,
+        },
+      ]));
+    };
+
     if (segments[0] === "site" && id) {
       const siteSettingsChildren: NavTab[] = [
         { name: "General", href: `/site/${id}/settings`, match: `/site/${id}/settings` },
@@ -366,6 +412,11 @@ export default function Nav({ children }: { children: ReactNode }) {
           name: "Plugins",
           href: `/site/${id}/settings/plugins`,
           match: `/site/${id}/settings/plugins`,
+        },
+        {
+          name: "Messages",
+          href: `/site/${id}/settings/messages`,
+          match: `/site/${id}/settings/messages`,
         },
         {
           name: "Users",
@@ -400,32 +451,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           isActive: pathname?.startsWith("/profile"),
           icon: <User width={18} />,
         },
-        ...(navContext.canCreateSiteContent
-          ? [
-              {
-                name: "Posts",
-                href: `/site/${id}/domain/post`,
-                isActive: pathname?.includes(`/site/${id}/domain/post`) && !pathname?.includes(`/site/${id}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-              },
-              {
-                name: "List Posts",
-                href: `/site/${id}/domain/post`,
-                isActive: pathname?.includes(`/site/${id}/domain/post`) && !pathname?.includes(`/site/${id}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-                isChild: true as const,
-                childLevel: 1 as const,
-              },
-              {
-                name: "Add Post",
-                href: `/site/${id}/domain/post/create`,
-                isActive: pathname?.includes(`/site/${id}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-                isChild: true as const,
-                childLevel: 1 as const,
-              },
-            ]
-          : []),
+        ...(navContext.canCreateSiteContent ? buildContentTabs(id) : []),
         ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
           ? [
               {
@@ -447,30 +473,6 @@ export default function Nav({ children }: { children: ReactNode }) {
               ...siteSettingsChildren,
             ]
           : []),
-        ...dataDomainTabs.flatMap((item) => ([
-          {
-            name: item.name,
-            href: item.listHref,
-            isActive: pathname?.includes(item.listHref),
-            icon: <Globe width={18} />,
-          },
-          {
-            name: `List ${item.name}`,
-            href: item.listHref,
-            isActive: pathname?.includes(item.listHref),
-            icon: <Globe width={18} />,
-            isChild: true as const,
-            childLevel: 1 as const,
-          },
-          {
-            name: `Add ${item.singular}`,
-            href: item.addHref,
-            isActive: pathname?.includes(item.addHref),
-            icon: <Globe width={18} />,
-            isChild: true as const,
-            childLevel: 1 as const,
-          },
-        ])),
       ];
 
       return singleSiteMode
@@ -486,32 +488,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           isActive: pathname?.startsWith("/profile"),
           icon: <User width={18} />,
         },
-        ...(navContext.canCreateSiteContent
-          ? [
-              {
-                name: "Posts",
-                href: `/site/${navContext.mainSiteId}/domain/post`,
-                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post`) && !pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-              },
-              {
-                name: "List Posts",
-                href: `/site/${navContext.mainSiteId}/domain/post`,
-                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post`) && !pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-                isChild: true as const,
-                childLevel: 1 as const,
-              },
-              {
-                name: "Add Post",
-                href: `/site/${navContext.mainSiteId}/domain/post/create`,
-                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/domain/post/create`),
-                icon: <Newspaper width={18} />,
-                isChild: true as const,
-                childLevel: 1 as const,
-              },
-            ]
-          : []),
+        ...(navContext.canCreateSiteContent ? buildContentTabs(navContext.mainSiteId) : []),
         ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
           ? [
               {
@@ -540,6 +517,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           { name: "Menus", href: `/site/${navContext.mainSiteId}/settings/menus`, match: `/site/${navContext.mainSiteId}/settings/menus` },
           { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
           { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
+          { name: "Messages", href: `/site/${navContext.mainSiteId}/settings/messages`, match: `/site/${navContext.mainSiteId}/settings/messages` },
           { name: "Users", href: `/site/${navContext.mainSiteId}/settings/users`, match: `/site/${navContext.mainSiteId}/settings/users` },
           { name: "Database", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
           { name: "RBAC", href: `/site/${navContext.mainSiteId}/settings/rbac`, match: `/site/${navContext.mainSiteId}/settings/rbac` },
@@ -566,30 +544,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         }),
             ]
           : []),
-        ...dataDomainTabs.flatMap((item) => ([
-          {
-            name: item.name,
-            href: item.listHref,
-            isActive: pathname?.includes(item.listHref),
-            icon: <Globe width={18} />,
-          },
-          {
-            name: `List ${item.name}`,
-            href: item.listHref,
-            isActive: pathname?.includes(item.listHref),
-            icon: <Globe width={18} />,
-            isChild: true as const,
-            childLevel: 1 as const,
-          },
-          {
-            name: `Add ${item.singular}`,
-            href: item.addHref,
-            isActive: pathname?.includes(item.addHref),
-            icon: <Globe width={18} />,
-            isChild: true as const,
-            childLevel: 1 as const,
-          },
-        ])),
+        ...(navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
       ];
       return singleSiteTabs;
     }
@@ -682,9 +637,9 @@ export default function Nav({ children }: { children: ReactNode }) {
       <div
         className={`transform ${
           showSidebar ? "w-full translate-x-0" : "-translate-x-full"
-        } fixed z-10 flex h-full flex-col justify-between border-r border-stone-200 bg-stone-100 p-4 transition-all sm:w-60 sm:translate-x-0 dark:border-stone-700 dark:bg-stone-900 [&_a]:no-underline`}
+        } fixed z-10 flex h-full min-h-0 flex-col justify-between overflow-hidden border-r border-stone-200 bg-stone-100 p-4 transition-all sm:w-60 sm:translate-x-0 dark:border-stone-700 dark:bg-stone-900 [&_a]:no-underline`}
       >
-        <div className="grid gap-2">
+        <div className="grid min-h-0 flex-1 gap-2">
           <div className="rounded-lg px-2 py-1.5">
             <div className="flex items-center space-x-2">
               <a
@@ -758,42 +713,44 @@ export default function Nav({ children }: { children: ReactNode }) {
               </div>
             ) : null}
           </div>
-          <div className="grid gap-1">
-            {renderedTabs
-              .filter((tab) => tab.visible)
-              .map(({ name, href, isActive, icon, isChild, childLevel, hasChildren, level }) => (
-              <Link
-                key={`${name}-${href}`}
-                href={href}
-                className={`flex items-center space-x-3 ${
-                  isActive ? "bg-stone-200 text-black dark:bg-stone-700" : ""
-                } rounded-lg px-2 py-1.5 transition-all duration-150 ease-in-out hover:bg-stone-200 active:bg-stone-300 dark:text-white dark:hover:bg-stone-700 dark:active:bg-stone-800 ${
-                  !isChild ? "" : childLevel === 2 ? "ml-10" : "ml-5"
-                }`}
-              >
-                {icon}
-                <span className="text-sm font-medium flex-1">{name}</span>
-                {hasChildren ? (
-                  <button
-                    type="button"
-                    aria-label={`${collapsedByHref[href] ? "Expand" : "Collapse"} ${name}`}
-                    className="rounded p-0.5 hover:bg-stone-300/50 dark:hover:bg-stone-600/50"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setCollapsedByHref((prev) => ({
-                        ...prev,
-                        [href]: !(prev[href] ?? true),
-                      }));
-                    }}
-                  >
-                    {(collapsedByHref[href] ?? true) ? <ChevronRight width={14} /> : <ChevronDown width={14} />}
-                  </button>
-                ) : level > 0 ? (
-                  <span className="inline-block w-[18px]" />
-                ) : null}
-              </Link>
-            ))}
+          <div className="min-h-0 overflow-y-auto pr-1">
+            <div className="grid gap-1 pb-2">
+              {renderedTabs
+                .filter((tab) => tab.visible)
+                .map(({ name, href, isActive, icon, isChild, childLevel, hasChildren, level }) => (
+                <Link
+                  key={`${name}-${href}`}
+                  href={href}
+                  className={`flex items-start space-x-3 ${
+                    isActive ? "bg-stone-200 text-black dark:bg-stone-700" : ""
+                  } rounded-lg px-2 py-1.5 transition-all duration-150 ease-in-out hover:bg-stone-200 active:bg-stone-300 dark:text-white dark:hover:bg-stone-700 dark:active:bg-stone-800 ${
+                    !isChild ? "" : childLevel === 2 ? "ml-10" : "ml-5"
+                  }`}
+                >
+                  <span className="mt-0.5">{icon}</span>
+                  <span className="flex-1 text-sm font-medium leading-tight">{name}</span>
+                  {hasChildren ? (
+                    <button
+                      type="button"
+                      aria-label={`${collapsedByHref[href] ? "Expand" : "Collapse"} ${name}`}
+                      className="mt-0.5 self-start rounded p-0.5 hover:bg-stone-300/50 dark:hover:bg-stone-600/50"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setCollapsedByHref((prev) => ({
+                          ...prev,
+                          [href]: !(prev[href] ?? true),
+                        }));
+                      }}
+                    >
+                      {(collapsedByHref[href] ?? true) ? <ChevronRight width={14} /> : <ChevronDown width={14} />}
+                    </button>
+                  ) : level > 0 ? (
+                    <span className="inline-block w-[18px]" />
+                  ) : null}
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
         <div>

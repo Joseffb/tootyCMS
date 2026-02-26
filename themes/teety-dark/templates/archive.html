@@ -4,9 +4,9 @@
   <header class="hero">
     <div class="hero-inner">
       <div class="hero-copy">
-        <p class="hero-kicker">Posts</p>
-        <h1>All Posts</h1>
-        <p class="hero-tagline">Everything published on this site.</p>
+        <p class="hero-kicker">{{data_domain or 'Archive'}}</p>
+        <h1>Archive</h1>
+        <p class="hero-tagline">Published entries for this section.</p>
         <div class="hero-actions">
           <a class="btn btn-secondary" href="{{links.main_site}}">Back Home</a>
         </div>
@@ -28,7 +28,7 @@
       </article>
       {% endfor %}
       {% else %}
-      <p class="empty-state">No posts yet. Existential, yes. Blocked, no.</p>
+      <p class="empty-state">No entries yet. Not dramatic, just early.</p>
       {% endif %}
     </div>
   </section>

@@ -139,7 +139,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     try {
       await installFromRepo("plugin", directory);
     } catch {
-      redirect(`/site/${siteId}/settings/plugins?tab=discover&error=rate_limit`);
+      redirect(`/app/site/${siteId}/settings/plugins?tab=discover&error=rate_limit`);
     }
     revalidatePath(`/site/${siteId}/settings/plugins`);
     revalidatePath(`/app/site/${siteId}/settings/plugins`);

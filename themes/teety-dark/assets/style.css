@@ -292,6 +292,27 @@
   padding: 0.8rem 1rem;
   color: #9db4cf;
   font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.tooty-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+}
+
+.tooty-footer-links a {
+  color: #c8d8ed;
+  text-decoration: none;
+}
+
+.tooty-footer-links a:hover {
+  color: #f3f8ff;
+  text-decoration: underline;
 }
 
 .theme-header-art-slot {

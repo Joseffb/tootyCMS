@@ -2,15 +2,17 @@ import { NextResponse } from "next/server";
 import { getInstallState } from "@/lib/install-state";
 import { saveSetupEnvValues } from "@/lib/setup-env";
 import db from "@/lib/db";
-import { cmsSettings, users } from "@/lib/schema";
+import { cmsSettings, sites, users } from "@/lib/schema";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { trace } from "@/lib/debug";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { hashPassword } from "@/lib/password";
 import { NETWORK_ADMIN_ROLE } from "@/lib/rbac";
 import { advanceSetupLifecycleTo } from "@/lib/setup-lifecycle";
 import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import { ensureMainSiteForUser } from "@/lib/bootstrap";
+import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import {
   applyPendingDatabaseMigrations,
   getDatabaseHealthReport,
@@ -240,7 +242,6 @@ export async function POST(req: Request) {
   );
   trace("setup", "saving setup env values");
   await saveSetupEnvValues(normalized);
-  await advanceSetupLifecycleTo("configured");
   try {
     const missingTables = await getMissingTableSets(normalized);
     trace("setup", "required table existence check", {
@@ -276,6 +277,8 @@ export async function POST(req: Request) {
     );
   }
 
+  await advanceSetupLifecycleTo("configured");
+
   const dbHealth = await getDatabaseHealthReport();
   if (dbHealth.migrationRequired) {
     trace("setup", "applying pending database migrations during setup", {
@@ -295,14 +298,19 @@ export async function POST(req: Request) {
     where: (table, { eq }) => eq(table.email, adminEmail),
     columns: { id: true },
   });
+  let ensuredUserId = "";
   if (!existingUser) {
-    await db.insert(users).values({
-      email: adminEmail,
-      name: adminName,
-      role: NETWORK_ADMIN_ROLE,
-      authProvider: "native",
-      passwordHash,
-    });
+    const created = await db
+      .insert(users)
+      .values({
+        email: adminEmail,
+        name: adminName,
+        role: NETWORK_ADMIN_ROLE,
+        authProvider: "native",
+        passwordHash,
+      })
+      .returning({ id: users.id });
+    ensuredUserId = String(created[0]?.id || "").trim();
   } else {
     await db
       .update(users)
@@ -313,6 +321,10 @@ export async function POST(req: Request) {
         passwordHash,
       })
       .where(eq(users.id, existingUser.id));
+    ensuredUserId = String(existingUser.id || "").trim();
+  }
+  if (!ensuredUserId) {
+    throw new Error("Failed to create or resolve setup admin user.");
   }
   await db
     .insert(cmsSettings)
@@ -365,8 +377,26 @@ export async function POST(req: Request) {
   }
 
   await ensureDefaultCoreDataDomains();
+  await ensureMainSiteForUser(ensuredUserId);
+  const siteIds = await listSiteIdsForUser(ensuredUserId);
+  const memberSites = siteIds.length > 0
+    ? await db.query.sites.findMany({
+        where: inArray(sites.id, siteIds),
+        columns: { id: true, isPrimary: true, subdomain: true },
+      })
+    : [];
+  const mainSiteId =
+    memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
+    memberSites[0]?.id ||
+    null;
 
   await advanceSetupLifecycleTo("ready");
   trace("setup", "setup save completed successfully");
-  return NextResponse.json({ ok: true, envSaved: true, dbInitialized: true, userCreated: true });
+  return NextResponse.json({
+    ok: true,
+    envSaved: true,
+    dbInitialized: true,
+    userCreated: true,
+    mainSiteId,
+  });
 }

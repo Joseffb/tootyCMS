@@ -71,6 +71,9 @@ export default async function TagArchivePage({ params }: { params: Params }) {
           root: rootUrl,
           main_site: siteUrl,
           documentation: `${siteUrl}/c/documentation`,
+          about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
+          tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
+          privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
       });
       return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;

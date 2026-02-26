@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth";
 import { getSiteMenu, saveSiteMenuFromJson } from "@/lib/menu-system";
 import { notFound, redirect } from "next/navigation";
 import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
+import { revalidatePath } from "next/cache";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -26,6 +27,16 @@ export default async function SiteMenuSettingsPage({ params }: Props) {
     if (!allowed) redirect("/app");
     const raw = String(formData.get("menu_json") || "[]");
     await saveSiteMenuFromJson(siteData.id, "header", raw);
+    revalidatePath(`/site/${siteData.id}/settings/menus`);
+    revalidatePath(`/app/site/${siteData.id}/settings/menus`);
+    revalidatePath("/", "layout");
+    revalidatePath("/[domain]", "layout");
+    revalidatePath("/[domain]/posts", "page");
+    revalidatePath("/[domain]/[slug]", "page");
+    revalidatePath("/[domain]/[slug]/[child]", "page");
+    revalidatePath("/[domain]/c/[slug]", "page");
+    revalidatePath("/[domain]/t/[slug]", "page");
+    redirect(`/app/site/${siteData.id}/settings/menus`);
   }
 
   return (

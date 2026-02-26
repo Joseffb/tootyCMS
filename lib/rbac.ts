@@ -48,6 +48,11 @@ export type SiteCapability = (typeof SITE_CAPABILITIES)[number];
 export type CapabilityMap = Record<SiteCapability, boolean>;
 export type CapabilityMatrix = Record<string, CapabilityMap>;
 const RBAC_CAPABILITY_MATRIX_KEY = "rbac_capability_matrix_v1";
+const CAPABILITY_CACHE_TTL_MS = 5_000;
+
+let rbacBootstrapDone = false;
+let rbacBootstrapPromise: Promise<void> | null = null;
+let capabilityMatrixCache: { value: CapabilityMatrix; expiresAt: number } | null = null;
 
 export function normalizeRole(role: unknown): string {
   return String(role || "").trim().toLowerCase();
@@ -317,57 +322,106 @@ async function migrateLegacyMatrixIfNeeded() {
   }
 }
 
-export async function listRbacRoles() {
-  await migrateLegacyMatrixIfNeeded();
+function invalidateCapabilityMatrixCache() {
+  capabilityMatrixCache = null;
+}
+
+async function ensureRbacBootstrap() {
+  if (rbacBootstrapDone) return;
+  if (rbacBootstrapPromise) {
+    await rbacBootstrapPromise;
+    return;
+  }
+  rbacBootstrapPromise = (async () => {
+    await migrateLegacyMatrixIfNeeded();
+    rbacBootstrapDone = true;
+    invalidateCapabilityMatrixCache();
+  })();
+  try {
+    await rbacBootstrapPromise;
+  } finally {
+    rbacBootstrapPromise = null;
+  }
+}
+
+async function readCapabilityMatrixFromDb() {
+  await ensureRbacBootstrap();
   const rows = await db.select().from(rbacRoles);
-  return rows
-    .map((row) => ({
-      role: normalizeRole(row.role),
-      isSystem: Boolean(row.isSystem),
-      capabilities: normalizeCapabilityMap(row.capabilities, defaultCapabilityMapFor(row.role)),
-    }))
-    .filter((row) => row.role);
-}
-
-export async function createRbacRole(role: string) {
-  const normalized = normalizeRole(role);
-  if (!normalized) throw new Error("Role is required");
-  await migrateLegacyMatrixIfNeeded();
-  const existing = await db.query.rbacRoles.findFirst({
-    where: eq(rbacRoles.role, normalized),
-    columns: { role: true },
-  });
-  if (existing) return;
-  await seedRoleRow(normalized, defaultCapabilityMapFor(normalized), false);
-}
-
-export async function getCapabilityMatrix() {
-  const roles = await listRbacRoles();
   const matrix: CapabilityMatrix = {};
-  for (const row of roles) matrix[row.role] = row.capabilities;
+  for (const row of rows) {
+    const role = normalizeRole(row.role);
+    if (!role) continue;
+    matrix[role] = normalizeCapabilityMap(row.capabilities, defaultCapabilityMapFor(row.role));
+  }
   for (const role of SYSTEM_ROLES) {
     if (!matrix[role]) matrix[role] = defaultCapabilityMapFor(role);
   }
   return matrix;
 }
 
+export async function listRbacRoles() {
+  const matrix = await getCapabilityMatrix();
+  const rows = await db.select({ role: rbacRoles.role, isSystem: rbacRoles.isSystem }).from(rbacRoles);
+  const rowMap = new Map(rows.map((row) => [normalizeRole(row.role), row]));
+  const merged = new Map<string, { role: string; isSystem: boolean; capabilities: CapabilityMap }>();
+  for (const [role, capabilities] of Object.entries(matrix)) {
+    const row = rowMap.get(role);
+    merged.set(role, {
+      role,
+      isSystem: row ? Boolean(row.isSystem) : SYSTEM_ROLES.includes(role as (typeof SYSTEM_ROLES)[number]),
+      capabilities,
+    });
+  }
+  return rows
+    .map((row) => normalizeRole(row.role))
+    .filter(Boolean)
+    .map((role) => merged.get(role))
+    .filter((row): row is { role: string; isSystem: boolean; capabilities: CapabilityMap } => Boolean(row));
+}
+
+export async function createRbacRole(role: string) {
+  const normalized = normalizeRole(role);
+  if (!normalized) throw new Error("Role is required");
+  await ensureRbacBootstrap();
+  const existing = await db.query.rbacRoles.findFirst({
+    where: eq(rbacRoles.role, normalized),
+    columns: { role: true },
+  });
+  if (existing) return;
+  await seedRoleRow(normalized, defaultCapabilityMapFor(normalized), false);
+  invalidateCapabilityMatrixCache();
+}
+
+export async function getCapabilityMatrix() {
+  const now = Date.now();
+  if (capabilityMatrixCache && capabilityMatrixCache.expiresAt > now) {
+    return capabilityMatrixCache.value;
+  }
+  const matrix = await readCapabilityMatrixFromDb();
+  capabilityMatrixCache = { value: matrix, expiresAt: now + CAPABILITY_CACHE_TTL_MS };
+  return matrix;
+}
+
 export async function saveCapabilityMatrix(matrix: unknown) {
   const normalized = normalizeCapabilityMatrix(matrix);
+  await ensureRbacBootstrap();
   for (const [role, capabilities] of Object.entries(normalized)) {
     await seedRoleRow(role, capabilities, SYSTEM_ROLES.includes(role as (typeof SYSTEM_ROLES)[number]));
   }
   await setTextSetting(RBAC_CAPABILITY_MATRIX_KEY, JSON.stringify(normalized));
+  invalidateCapabilityMatrixCache();
   return normalized;
 }
 
 export async function saveRoleCapabilities(role: string, caps: unknown) {
   const normalizedRole = normalizeRole(role);
   if (!normalizedRole) throw new Error("Role is required");
-  await migrateLegacyMatrixIfNeeded();
+  await ensureRbacBootstrap();
   const current = await getCapabilityMatrix();
   const fallback = current[normalizedRole] ?? defaultCapabilityMapFor(normalizedRole);
   const next = normalizeCapabilityMap(caps, fallback);
   await seedRoleRow(normalizedRole, next, SYSTEM_ROLES.includes(normalizedRole as (typeof SYSTEM_ROLES)[number]));
+  invalidateCapabilityMatrixCache();
   return next;
 }
 
@@ -397,6 +451,7 @@ function siteUsersTableName(tableIndex: number) {
 export async function deleteRbacRole(role: string) {
   const normalized = normalizeRole(role);
   if (!normalized) throw new Error("Role is required");
+  await ensureRbacBootstrap();
 
   const existing = await db.query.rbacRoles.findFirst({
     where: eq(rbacRoles.role, normalized),
@@ -429,4 +484,5 @@ export async function deleteRbacRole(role: string) {
   }
 
   await db.delete(rbacRoles).where(eq(rbacRoles.role, normalized));
+  invalidateCapabilityMatrixCache();
 }

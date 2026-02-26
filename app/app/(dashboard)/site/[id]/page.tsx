@@ -22,5 +22,5 @@ export default async function SitePosts({ params }: Props) {
   if (!data) {
     notFound();
   }
-  redirect(`/site/${siteId}/domain/post`);
+  redirect(`/app/site/${siteId}/domain/post`);
 }

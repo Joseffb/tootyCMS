@@ -1,3 +1,8 @@
 <footer class="tooty-footer">
-  Powered by Tooty CMS.
+  <span>Powered by Tooty CMS.</span>
+  <nav class="tooty-footer-links" aria-label="Legal">
+    <a href="{{ links.about or '/page/about-this-site' }}">About</a>
+    <a href="{{ links.tos or '/page/terms-of-service' }}">TOS</a>
+    <a href="{{ links.privacy or '/page/privacy-policy' }}">Privacy</a>
+  </nav>
 </footer>

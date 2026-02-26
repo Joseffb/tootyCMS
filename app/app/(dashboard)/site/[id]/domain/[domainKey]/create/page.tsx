@@ -26,8 +26,8 @@ export default async function CreateDomainEntryPage({ params }: Props) {
 
   const created = await createDomainPost(null, siteId, resolvedDomainKey);
   if ((created as any)?.error || !(created as any)?.id) {
-    redirect(domain.key === "post" ? `/site/${siteId}` : `/site/${siteId}/domain/${resolvedDomainKey}`);
+    redirect(domain.key === "post" ? `/app/site/${siteId}` : `/app/site/${siteId}/domain/${resolvedDomainKey}`);
   }
 
-  redirect(`/site/${siteId}/domain/${resolvedDomainKey}/post/${(created as any).id}`);
+  redirect(`/app/site/${siteId}/domain/${resolvedDomainKey}/post/${(created as any).id}`);
 }

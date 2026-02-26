@@ -141,7 +141,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
     setStepIndex((current) => Math.max(0, current - 1));
   }
 
-  async function signInWithRetry(email: string, password: string): Promise<{
+  async function signInWithRetry(email: string, password: string, callbackUrl: string): Promise<{
     ok: boolean;
     url?: string;
     error?: string;
@@ -152,7 +152,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
         email,
         password,
         redirect: false,
-        callbackUrl: "/app",
+        callbackUrl,
       })) as
         | string
         | {
@@ -224,6 +224,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       const data = (await response.json().catch(() => ({}))) as {
         error?: string;
         requiresDbInit?: boolean;
+        mainSiteId?: string | null;
       };
 
       if (!response.ok) {
@@ -236,9 +237,11 @@ export default function SetupWizard({ fields, initialValues }: Props) {
         throw new Error(data.error || "Failed to save environment values.");
       }
 
-      const signInResult = await signInWithRetry(adminEmail.trim().toLowerCase(), adminPassword);
+      const mainSiteId = String(data.mainSiteId || "").trim();
+      const destinationPath = mainSiteId ? `/site/${mainSiteId}` : "/app";
+      const signInResult = await signInWithRetry(adminEmail.trim().toLowerCase(), adminPassword, destinationPath);
       if (signInResult.ok) {
-        router.push(signInResult.url || "/app");
+        router.push(destinationPath);
       } else {
         const message = encodeURIComponent(
           `Setup completed, but auto sign-in failed: ${signInResult.error || "Unknown error"}`,

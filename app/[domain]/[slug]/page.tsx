@@ -125,6 +125,9 @@ export default async function SitePostPage({
                 root: rootUrl,
                 main_site: siteUrl,
                 posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath(domainRow.key, writing)}`,
+                about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
+                tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
+                privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
               },
               menu_items: menuItems,
               theme: {
@@ -254,6 +257,9 @@ export default async function SitePostPage({
           root: rootUrl,
           main_site: siteUrl,
           posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath("post", writing)}`,
+          about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
+          tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
+          privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
         menu_items: menuItems,
         theme: {

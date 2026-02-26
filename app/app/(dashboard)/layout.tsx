@@ -37,7 +37,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
               action={async () => {
                 "use server";
                 await stopUserMimic();
-                redirect("/settings/users");
+                redirect("/app/settings/users");
               }}
               className="inline"
             >

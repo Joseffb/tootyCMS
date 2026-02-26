@@ -4,15 +4,15 @@
   <header class="hero">
     <div class="hero-inner">
       <div class="hero-copy">
-        <p class="hero-kicker">Posts</p>
-        <h1>All Posts</h1>
-        <p class="hero-tagline">Everything published on this site.</p>
+        <p class="hero-kicker">{{data_domain or 'Archive'}}</p>
+        <h1>Archive</h1>
+        <p class="hero-tagline">Browse published entries for this section.</p>
         <div class="hero-actions">
           <a class="btn btn-secondary" href="{{links.main_site}}">Back Home</a>
         </div>
       </div>
       <div class="hero-mascot">
-        <img src="/theme-assets/teety-dark/mascots/tooty-dark-whatever.png" alt="Theme graphic" />
+        <img src="/theme-assets/tooty-light/mascots/tooty-camera.png" alt="Theme graphic" />
       </div>
     </div>
   </header>
@@ -28,7 +28,7 @@
       </article>
       {% endfor %}
       {% else %}
-      <p class="empty-state">No posts yet. Existential, yes. Blocked, no.</p>
+      <p class="empty-state">No entries yet.</p>
       {% endif %}
     </div>
   </section>

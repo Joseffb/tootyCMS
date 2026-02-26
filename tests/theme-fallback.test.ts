@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { domainArchiveTemplateCandidates, domainDetailTemplateCandidates } from "@/lib/theme-fallback";
 
 describe("theme fallback contract", () => {
@@ -25,5 +27,14 @@ describe("theme fallback contract", () => {
       "projects.html",
       "project.html",
     ]);
+  });
+
+  it("requires built-in themes to provide single and archive fallbacks", () => {
+    const themes = ["tooty-light", "teety-dark"];
+    for (const themeId of themes) {
+      const templateDir = path.join(process.cwd(), "themes", themeId, "templates");
+      expect(existsSync(path.join(templateDir, "single.html"))).toBe(true);
+      expect(existsSync(path.join(templateDir, "archive.html"))).toBe(true);
+    }
   });
 });

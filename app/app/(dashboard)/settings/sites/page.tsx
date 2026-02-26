@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { revalidatePath } from "next/cache";
 import db from "@/lib/db";
 import { sites } from "@/lib/schema";
 import { getSitePublicUrl } from "@/lib/site-url";
@@ -71,6 +72,10 @@ export default async function SitesSettingsIndexPage() {
     const allowedSiteIds = String(formData.get("allowedSiteIds") || "");
     await setBooleanSetting(THEME_QUERY_NETWORK_ENABLED_KEY, enabled);
     await setTextSetting(THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY, allowedSiteIds);
+    revalidatePath("/settings/sites");
+    revalidatePath("/app/settings/sites");
+    revalidatePath("/[domain]", "layout");
+    redirect("/app/settings/sites");
   }
 
   return (

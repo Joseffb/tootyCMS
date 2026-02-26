@@ -22,7 +22,7 @@ export default async function Overview() {
     if (memberSites.length === 1) {
       const primary =
         memberSites.find((site) => site.isPrimary || site.subdomain === "main") || memberSites[0];
-      redirect(`/site/${primary.id}`);
+      redirect(`/app/site/${primary.id}`);
     }
   }
 

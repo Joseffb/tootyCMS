@@ -270,3 +270,23 @@ Where `<domain>` is canonical singular key and plural aliases are supported. `po
 Rules:
 - Core must not fall back to unrelated route templates (e.g. domain archives must not force `posts.html`).
 - Data-domain identity remains singular in data contracts; listing routes remain plural.
+
+## Theme Link Alias Contract (MUST)
+
+Core provides stable `links.*` aliases in theme render context for legal/footer navigation:
+
+- `links.about`
+- `links.tos`
+- `links.privacy`
+
+Default slug mapping (authoritative defaults):
+
+- `links.about` -> `page/about-this-site`
+- `links.tos` -> `page/terms-of-service`
+- `links.privacy` -> `page/privacy-policy`
+
+Permalink behavior:
+
+- Slugs above are fixed defaults unless changed in core code.
+- URL shape is computed through active site permalink settings (default/custom, domain-prefix/no-prefix).
+- These aliases generate URLs only; they do not search content or guarantee that target pages exist.

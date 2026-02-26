@@ -130,7 +130,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     try {
       await installFromRepo("plugin", directory);
     } catch {
-      redirect("/settings/plugins?tab=discover&error=rate_limit");
+      redirect("/app/settings/plugins?tab=discover&error=rate_limit");
     }
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");

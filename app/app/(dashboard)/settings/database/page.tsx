@@ -34,7 +34,7 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
     await applyPendingDatabaseMigrations();
     revalidatePath("/settings/database");
     revalidatePath("/app");
-    redirect("/settings/database?updated=1");
+    redirect("/app/settings/database?updated=1");
   }
 
   return (

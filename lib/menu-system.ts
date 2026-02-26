@@ -49,7 +49,7 @@ function isLegacyDefaultHeaderMenu(items: MenuItem[]) {
 export function defaultHeaderMenu(): MenuItem[] {
   return [
     { label: "Main Site", href: "/", order: 10 },
-    { label: "Documentation", href: "/c/documentation", order: 20 },
+    { label: "Posts", href: "/posts", order: 20 },
   ];
 }
 

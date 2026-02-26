@@ -79,6 +79,11 @@ export default function SiteSettingsNav() {
     ...(singleSiteMode
       ? [
           {
+            name: "Messages",
+            href: `/site/${id}/settings/messages`,
+            segment: "messages",
+          },
+          {
             name: "User Roles",
             href: `/site/${id}/settings/rbac`,
             segment: "rbac",

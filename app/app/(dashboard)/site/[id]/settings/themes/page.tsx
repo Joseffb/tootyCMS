@@ -119,7 +119,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
     try {
       await installFromRepo("theme", directory);
     } catch {
-      redirect(`/site/${siteData.id}/settings/themes?tab=discover&error=rate_limit`);
+      redirect(`/app/site/${siteData.id}/settings/themes?tab=discover&error=rate_limit`);
     }
     revalidatePath(`/site/${siteData.id}/settings/themes`);
     revalidatePath(`/app/site/${siteData.id}/settings/themes`);

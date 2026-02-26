@@ -27,6 +27,21 @@ export async function GET(request: Request) {
       id: domain.id,
       label: pluralizeLabel(domain.label),
       singular: singularizeLabel(domain.label),
+      order: (() => {
+        const rawSettings = domain?.settings;
+        const parsed = typeof rawSettings === "string"
+          ? (() => {
+              try {
+                return JSON.parse(rawSettings);
+              } catch {
+                return {};
+              }
+            })()
+          : (rawSettings || {});
+        const rawOrder = parsed?.menuOrder ?? parsed?.order;
+        const n = Number(rawOrder);
+        return Number.isFinite(n) ? n : undefined;
+      })(),
       listHref: `/site/${siteId}/domain/${domain.key}`,
       addHref: `/site/${siteId}/domain/${domain.key}/create`,
     }))

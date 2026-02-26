@@ -40,6 +40,22 @@ Themes should use only canonical primaries and explicit payload data:
 - `system.theme_id`
 - `system.theme_name`
 
+## Stable Theme Link Aliases
+
+Core provides stable legal-link aliases in theme context:
+
+- `links.about`
+- `links.tos`
+- `links.privacy`
+
+Default destination slugs are:
+
+- `about-this-site`
+- `terms-of-service`
+- `privacy-policy`
+
+Core computes final URLs using active site permalink settings.
+
 ## Compliance Checks
 
 - No mascot/theme-brand imports in CMS route files under `app/[domain]/**` unless the route is a theme renderer.

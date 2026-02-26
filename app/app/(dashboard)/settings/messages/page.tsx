@@ -27,20 +27,27 @@ function buildHref(base: string, params: Record<string, string | number | null |
   return qs ? `${base}?${qs}` : base;
 }
 
-export default async function SettingsMessagesPage({ searchParams }: Props) {
+export async function renderMessagesPage(input: {
+  searchParams?: Props["searchParams"];
+  siteId?: string;
+  basePath: string;
+  denyRedirectPath: string;
+  requiredCapability: "network.plugins.manage" | "site.plugins.manage";
+}) {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const allowed = await userCan("network.plugins.manage", session.user.id);
-  if (!allowed) redirect("/app");
+  const allowed = await userCan(input.requiredCapability, session.user.id, input.siteId ? { siteId: input.siteId } : undefined);
+  if (!allowed) redirect(input.denyRedirectPath);
 
-  const query = (await searchParams) || {};
+  const query = (await input.searchParams) || {};
   const q = String(query.q || "").trim();
   const status = String(query.status || "").trim();
   const provider = String(query.provider || "").trim();
   const offset = Math.max(0, Number.parseInt(String(query.offset || "0"), 10) || 0);
 
   const { items, hasMore, nextOffset } = await listCommunicationMessages({
+    siteId: input.siteId,
     search: q,
     status,
     providerId: provider,
@@ -48,12 +55,16 @@ export default async function SettingsMessagesPage({ searchParams }: Props) {
     offset,
   });
 
+  const subtitle = input.siteId
+    ? "Communication queue and delivery states for this site."
+    : "Communication queue and delivery states across sites.";
+
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
         <h2 className="font-cal text-xl dark:text-white">Messages</h2>
         <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
-          Communication queue and delivery states across sites.
+          {subtitle}
         </p>
       </div>
 
@@ -124,7 +135,7 @@ export default async function SettingsMessagesPage({ searchParams }: Props) {
 
       {hasMore && nextOffset !== null ? (
         <Link
-          href={buildHref("/settings/messages", { q, status, provider, offset: nextOffset })}
+          href={buildHref(input.basePath, { q, status, provider, offset: nextOffset })}
           className="inline-flex rounded border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-600"
         >
           Load more
@@ -134,3 +145,12 @@ export default async function SettingsMessagesPage({ searchParams }: Props) {
   );
 }
 
+export default async function SettingsMessagesPage({ searchParams }: Props) {
+  const query = (await searchParams) || {};
+  return renderMessagesPage({
+    searchParams: Promise.resolve(query),
+    basePath: "/settings/messages",
+    denyRedirectPath: "/app",
+    requiredCapability: "network.plugins.manage",
+  });
+}

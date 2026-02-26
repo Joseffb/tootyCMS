@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { getPluginById, getPluginConfig, savePluginConfig } from "@/lib/plugin-runtime";
 import { notFound, redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import Link from "next/link";
 import { userCan } from "@/lib/authorization";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
@@ -81,6 +82,9 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       }
     }
     await savePluginConfig(pluginData.id, nextConfig);
+    revalidatePath(`/plugins/${pluginData.id}`);
+    revalidatePath(`/app/plugins/${pluginData.id}`);
+    redirect(`/app/plugins/${pluginData.id}?tab=settings&saved=1`);
   }
 
   return (

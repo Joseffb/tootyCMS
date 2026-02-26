@@ -88,7 +88,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
     try {
       await installFromRepo("theme", directory);
     } catch {
-      redirect("/settings/themes?tab=discover&error=rate_limit");
+      redirect("/app/settings/themes?tab=discover&error=rate_limit");
     }
     revalidatePath("/settings/themes");
     revalidatePath("/app/settings/themes");

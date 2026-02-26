@@ -13,16 +13,19 @@ const runPluginPermsE2E = process.env.RUN_PLUGIN_PERMS_E2E === "1";
 const singleEmail = `${runId}-single@example.com`;
 const siteAdminEmail = `${runId}-site-admin@example.com`;
 const networkAdminEmail = `${runId}-network-admin@example.com`;
+const networkSingleAdminEmail = `${runId}-network-single-admin@example.com`;
 
 const singleUserId = `${runId}-single-user`;
 const siteAdminUserId = `${runId}-site-admin-user`;
 const networkAdminUserId = `${runId}-network-admin-user`;
+const networkSingleAdminUserId = `${runId}-network-single-admin-user`;
 
 const singleSiteId = `${runId}-single-site`;
 const siteAdminMainSiteId = `${runId}-site-admin-main`;
 const siteAdminSecondSiteId = `${runId}-site-admin-second`;
 const networkMainSiteId = `${runId}-network-main`;
 const networkSecondSiteId = `${runId}-network-second`;
+const networkSingleSiteId = `${runId}-network-single`;
 
 const globalEnabledKey = () => `plugin_${pluginId}_enabled`;
 const globalNetworkRequiredKey = () => `plugin_${pluginId}_network_required`;
@@ -45,7 +48,7 @@ async function ensureUser(params: {
   id: string;
   email: string;
   name: string;
-  role: "administrator" | "editor";
+  role: "administrator" | "editor" | "network admin";
   passwordHash: string;
 }) {
   await sql`
@@ -142,6 +145,13 @@ test.beforeAll(async () => {
     role: "administrator",
     passwordHash,
   });
+  await ensureUser({
+    id: networkSingleAdminUserId,
+    email: networkSingleAdminEmail,
+    name: "Network Single Admin User",
+    role: "network admin",
+    passwordHash,
+  });
 
   await ensureSite({
     id: singleSiteId,
@@ -178,6 +188,23 @@ test.beforeAll(async () => {
     subdomain: `${runId}-na-second`,
     isPrimary: false,
   });
+  await ensureSite({
+    id: networkSingleSiteId,
+    userId: networkSingleAdminUserId,
+    name: "Network Single",
+    subdomain: `${runId}-na-single`,
+    isPrimary: true,
+  });
+});
+
+test("single-site network admin: shows both network and site settings menus", async ({ page }) => {
+  await authenticateAs(page, networkSingleAdminUserId);
+  await page.goto(`${appOrigin}/app`);
+
+  await expect(page.locator(`a[href="/site/${networkSingleSiteId}/settings"]`)).toBeVisible();
+  await expect(page.locator(`a[href="/settings"]`)).toBeVisible();
+  await expect(page.getByRole("link", { name: "System" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
 });
 
 test("single-site plugins: can toggle enabled from site plugins view", async ({ page }) => {
