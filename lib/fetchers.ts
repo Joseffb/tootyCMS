@@ -146,7 +146,21 @@ export async function getPostData(domain: string, slug: string) {
       if (!data) {
         const legacy = await db
           .select({
-            post: posts,
+            post: {
+              id: posts.id,
+              title: posts.title,
+              description: posts.description,
+              content: posts.content,
+              layout: posts.layout,
+              slug: posts.slug,
+              image: posts.image,
+              imageBlurhash: posts.imageBlurhash,
+              createdAt: posts.createdAt,
+              updatedAt: posts.updatedAt,
+              published: posts.published,
+              siteId: posts.siteId,
+              userId: posts.userId,
+            },
             site: sites,
             user: users,
           })
