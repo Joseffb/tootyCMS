@@ -20,6 +20,20 @@ type BridgeAuth = {
   user: BridgeUser | null;
 };
 
+type BridgeFetchResult =
+  | {
+      token: string;
+      user: BridgeUser | null;
+      unauthenticated?: false;
+    }
+  | {
+      token: "";
+      user: null;
+      unauthenticated: true;
+    };
+
+const TOKEN_REFRESH_SKEW_SECONDS = 20;
+
 declare global {
   interface Window {
     __tootyFrontendAuth?: BridgeAuth;
@@ -42,6 +56,29 @@ function deriveAppOrigin() {
     return `${protocol}//app.${parts.slice(-2).join(".")}${port}`;
   }
   return `${protocol}//app.${hostname}${port}`;
+}
+
+function decodeTokenExp(token: string): number | null {
+  const normalized = String(token || "").trim();
+  if (!normalized) return null;
+  const parts = normalized.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload + "=".repeat((4 - (payload.length % 4 || 4)) % 4);
+    const json = JSON.parse(window.atob(padded));
+    const exp = Number(json?.exp);
+    return Number.isFinite(exp) ? exp : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTokenUsable(token: string) {
+  const exp = decodeTokenExp(token);
+  if (!exp) return Boolean(String(token || "").trim());
+  const now = Math.floor(Date.now() / 1000);
+  return exp - TOKEN_REFRESH_SKEW_SECONDS > now;
 }
 
 function consumeHashPayload() {
@@ -67,7 +104,7 @@ function readStoredPayload() {
     if (!raw) return null;
     const payload = JSON.parse(raw);
     const token = String(payload?.token || "").trim();
-    if (!token) return null;
+    if (!token || !isTokenUsable(token)) return null;
     return {
       token,
       user: payload?.user || null,
@@ -89,6 +126,14 @@ function persistPayload(payload: { token?: string; user?: BridgeUser | null }) {
     );
   } catch {
     // best effort cache
+  }
+}
+
+function clearStoredPayload() {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // best effort cache clear
   }
 }
 
@@ -125,7 +170,7 @@ function renderGreeting(user: BridgeUser | null) {
   }
 }
 
-async function fetchBridgeAuth(mode: "silent" | "interactive" = "silent") {
+async function fetchBridgeAuth(mode: "silent" | "interactive" = "silent"): Promise<BridgeFetchResult | null> {
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timeoutId = window.setTimeout(() => {
     if (controller) controller.abort();
@@ -146,6 +191,13 @@ async function fetchBridgeAuth(mode: "silent" | "interactive" = "silent") {
         user: (data.user || null) as BridgeUser | null,
       };
     }
+    if (response.ok && data && data.authenticated === false) {
+      return {
+        token: "",
+        user: null,
+        unauthenticated: true,
+      };
+    }
     return null;
   } catch {
     return null;
@@ -159,25 +211,54 @@ export default function FrontendAuthBridge() {
     let cancelled = false;
     let bridgePromise: Promise<BridgeAuth> | null = null;
 
-    const resolveAuth = async (mode: "silent" | "interactive" = "silent"): Promise<BridgeAuth> => {
+    const resolveAuth = async (
+      mode: "silent" | "interactive" = "silent",
+      forceRefresh = false,
+    ): Promise<BridgeAuth> => {
       const current = window.__tootyFrontendAuth;
-      if (current?.ready && current.token) return current;
       if (bridgePromise) return bridgePromise;
 
       bridgePromise = (async () => {
-        let payload = consumeHashPayload();
+        let payloadSource: "current" | "hash" | "storage" | null = null;
+        let payload =
+          !forceRefresh && current?.ready && current.token && isTokenUsable(current.token)
+            ? { token: String(current.token || ""), user: current.user || null }
+            : null;
+        if (payload?.token) payloadSource = "current";
+        if (!payload?.token) {
+          payload = consumeHashPayload();
+          if (payload?.token) payloadSource = "hash";
+        }
         if (payload?.token) {
           persistPayload(payload);
         } else {
           payload = readStoredPayload();
+          if (payload?.token) payloadSource = "storage";
         }
 
-        if (!payload?.token) {
+        if (payload?.token && isTokenUsable(payload.token) && payloadSource !== "hash") {
+          const refreshed = await fetchBridgeAuth("silent");
+          if (refreshed?.token && isTokenUsable(refreshed.token)) {
+            payload = refreshed;
+            persistPayload(payload);
+          } else if (refreshed?.unauthenticated) {
+            payload = null;
+            clearStoredPayload();
+          }
+        }
+
+        if (!payload?.token || !isTokenUsable(payload.token)) {
+          payload = null;
           for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
             const fetched = await fetchBridgeAuth(mode);
-            if (fetched?.token) {
+            if (fetched?.token && isTokenUsable(fetched.token)) {
               payload = fetched;
               persistPayload(payload);
+              break;
+            }
+            if (fetched?.unauthenticated) {
+              clearStoredPayload();
+              payload = null;
               break;
             }
             if (attempt < MAX_RETRIES - 1) {
@@ -194,9 +275,13 @@ export default function FrontendAuthBridge() {
         window.__tootyFrontendAuth = auth;
         window.__tootyFrontendAuthLoggedOut = !auth.token;
         window.__tootyThemeFrontendLoggedOut = !auth.token;
+        if (!auth.token) {
+          clearStoredPayload();
+        }
         if (!cancelled) {
           renderGreeting(auth.user);
           window.dispatchEvent(new CustomEvent("tooty:auth-changed", { detail: auth }));
+          window.dispatchEvent(new CustomEvent("tooty:bridge-auth", { detail: auth }));
         }
         if (!auth.token) bridgePromise = null;
         return auth;
@@ -205,7 +290,7 @@ export default function FrontendAuthBridge() {
     };
 
     window.__tootyResolveFrontendAuth = () => resolveAuth("silent");
-    window.__tootyPingFrontendBridge = (mode = "silent") => resolveAuth(mode);
+    window.__tootyPingFrontendBridge = (mode = "silent") => resolveAuth(mode, true);
     renderGreeting(window.__tootyFrontendAuth?.user || null);
     void resolveAuth("silent");
 

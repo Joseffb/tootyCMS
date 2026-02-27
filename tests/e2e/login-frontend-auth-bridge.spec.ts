@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "@vercel/postgres";
-import { hashPassword } from "../../lib/password";
+import { encode } from "next-auth/jwt";
 import { setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-auth-bridge-${Date.now()}`;
@@ -31,8 +31,45 @@ async function ensureMainSite() {
     ORDER BY "isPrimary" DESC, "createdAt" ASC
     LIMIT 1
   `;
-  if (!rows.rows[0]?.id) throw new Error("Primary/main site not found.");
-  siteId = String(rows.rows[0].id);
+  if (rows.rows[0]?.id) {
+    siteId = String(rows.rows[0].id);
+    return;
+  }
+
+  siteId = `${runId}-site-main`;
+  const upserted = await sql`
+    INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
+    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
+    ON CONFLICT ("subdomain") DO UPDATE
+    SET "name" = EXCLUDED."name",
+        "isPrimary" = EXCLUDED."isPrimary",
+        "updatedAt" = NOW()
+    RETURNING "id"
+  `;
+  if (upserted.rows[0]?.id) {
+    siteId = String(upserted.rows[0].id);
+    return;
+  }
+  const fallback = await sql`
+    SELECT "id"
+    FROM tooty_sites
+    WHERE "subdomain" = 'main'
+    LIMIT 1
+  `;
+  if (fallback.rows[0]?.id) {
+    siteId = String(fallback.rows[0].id);
+    return;
+  }
+  await sql`
+    INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
+    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
+    ON CONFLICT ("id") DO UPDATE
+    SET "name" = EXCLUDED."name",
+        "subdomain" = EXCLUDED."subdomain",
+        "isPrimary" = EXCLUDED."isPrimary",
+        "userId" = EXCLUDED."userId",
+        "updatedAt" = NOW()
+  `;
 }
 
 async function ensurePostDomain() {
@@ -42,22 +79,34 @@ async function ensurePostDomain() {
     WHERE "key" = ${domainKey}
     LIMIT 1
   `;
-  if (!rows.rows[0]?.id) throw new Error("Post data domain not found.");
-  dataDomainId = Number(rows.rows[0].id);
+  if (rows.rows[0]?.id) {
+    dataDomainId = Number(rows.rows[0].id);
+    return;
+  }
+  const inserted = await sql`
+    INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
+    VALUES ('post', 'Posts', 'domain_posts', 'domain_post_meta', NOW(), NOW())
+    ON CONFLICT ("key") DO UPDATE
+    SET "label" = EXCLUDED."label",
+        "contentTable" = EXCLUDED."contentTable",
+        "metaTable" = EXCLUDED."metaTable",
+        "updatedAt" = NOW()
+    RETURNING "id"
+  `;
+  dataDomainId = Number(inserted.rows[0]?.id || 0);
+  if (!dataDomainId) throw new Error("Failed to create post data domain.");
 }
 
 async function ensureUser() {
-  const passwordHash = await hashPassword(password);
   await sql`
-    INSERT INTO tooty_users ("id", "email", "name", "username", "role", "authProvider", "passwordHash", "createdAt", "updatedAt")
-    VALUES (${userId}, ${email}, ${"Bridge User Name"}, ${"bridge_user_name"}, 'administrator', 'native', ${passwordHash}, NOW(), NOW())
+    INSERT INTO tooty_users ("id", "email", "name", "username", "role", "authProvider", "createdAt", "updatedAt")
+    VALUES (${userId}, ${email}, ${"Bridge User Name"}, ${"bridge_user_name"}, 'administrator', 'native', NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
     SET "email" = EXCLUDED."email",
         "name" = EXCLUDED."name",
         "username" = EXCLUDED."username",
         "role" = EXCLUDED."role",
         "authProvider" = EXCLUDED."authProvider",
-        "passwordHash" = EXCLUDED."passwordHash",
         "updatedAt" = NOW()
   `;
   await sql`
@@ -104,9 +153,9 @@ async function ensureCommentSettings() {
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
+  await ensureUser();
   await ensureMainSite();
   await ensurePostDomain();
-  await ensureUser();
   await ensurePost();
   await ensureCommentSettings();
 });
@@ -133,14 +182,56 @@ async function ensureFrontendBridgeAuth(page: import("@playwright/test").Page) {
   await expect(authNode).toContainText(`Hello ${displayName}`, { timeout: 20000 });
 }
 
-test("signin on app.localhost is recognized on localhost post comments UI", async ({ page }) => {
-  await page.goto(`${appOrigin}/login`);
-  await page.getByPlaceholder("Email").fill(email);
-  await page.getByPlaceholder("Password").fill(password);
-  await page.getByRole("button", { name: "Login with Email" }).click();
-  await page.waitForURL(/\/app(\/.*)?$/i, { timeout: 20000 });
+async function authenticateAs(
+  page: import("@playwright/test").Page,
+  uid: string,
+  domain: string,
+  user: { email: string; name: string; username: string; displayName: string },
+) {
+  const secret = String(process.env.NEXTAUTH_SECRET || "").trim();
+  if (!secret) throw new Error("NEXTAUTH_SECRET is required for auth bridge e2e.");
+  const token = await encode({
+    secret,
+    token: {
+      sub: uid,
+      email: user.email,
+      name: user.name,
+      role: "administrator",
+      user: {
+        id: uid,
+        email: user.email,
+        name: user.name,
+        username: user.username,
+        displayName: user.displayName,
+        role: "administrator",
+      },
+    },
+    maxAge: 60 * 60 * 24,
+  });
+  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
+  await page.context().addCookies([
+    {
+      name: "next-auth.session-token",
+      value: token,
+      domain,
+      path: "/",
+      httpOnly: true,
+      secure: false,
+      sameSite: "Lax",
+      expires,
+    },
+  ]);
+}
 
-  await page.goto(`${publicOrigin}/post/${postSlug}`);
+test("signin on app.localhost is recognized on localhost post comments UI", async ({ page }) => {
+  await authenticateAs(page, userId, "app.localhost", {
+    email,
+    name: "Bridge User Name",
+    username: "bridge_user_name",
+    displayName,
+  });
+  const bridgeStart = `${appOrigin}/theme-bridge-start?return=${encodeURIComponent(`${publicOrigin}/post/${postSlug}`)}`;
+  await page.goto(bridgeStart);
   await ensureFrontendBridgeAuth(page);
   await expect(page.locator("label:has-text('Display Name')")).toBeHidden({ timeout: 20000 });
   await expect(page.locator("label:has-text('Email (never shown)')")).toBeHidden({ timeout: 20000 });

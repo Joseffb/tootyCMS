@@ -83,13 +83,14 @@ export async function getThemeTemplateForSite(siteId: string) {
     const templatePath = path.join(themesDir, active.id, "templates", safeFile);
     try {
       const raw = await readFile(templatePath, "utf8");
-      const partials: { header: string; footer: string; commentItem: string; password: string } = {
+      const partials: { header: string; footer: string; commentItem: string; password: string; comments: string } = {
         header: "",
         footer: "",
         commentItem: "",
         password: "",
+        comments: "",
       };
-      for (const partialName of ["header.html", "footer.html", "comment-item.html", "password.html"] as const) {
+      for (const partialName of ["header.html", "footer.html", "comment-item.html", "password.html", "comments.html"] as const) {
         const partialPath = path.join(themesDir, active.id, "templates", partialName);
         try {
           const partialRaw = await readFile(partialPath, "utf8");
@@ -97,6 +98,7 @@ export async function getThemeTemplateForSite(siteId: string) {
           if (partialName === "footer.html") partials.footer = partialRaw;
           if (partialName === "comment-item.html") partials.commentItem = partialRaw;
           if (partialName === "password.html") partials.password = partialRaw;
+          if (partialName === "comments.html") partials.comments = partialRaw;
         } catch {
           // optional partial
         }
@@ -133,13 +135,14 @@ export async function getThemeTemplateFromCandidates(siteId: string, candidates:
     const templatePath = path.join(themesDir, active.id, "templates", safeFile);
     try {
       const raw = await readFile(templatePath, "utf8");
-      const partials: { header: string; footer: string; commentItem: string; password: string } = {
+      const partials: { header: string; footer: string; commentItem: string; password: string; comments: string } = {
         header: "",
         footer: "",
         commentItem: "",
         password: "",
+        comments: "",
       };
-      for (const partialName of ["header.html", "footer.html", "comment-item.html", "password.html"] as const) {
+      for (const partialName of ["header.html", "footer.html", "comment-item.html", "password.html", "comments.html"] as const) {
         const partialPath = path.join(themesDir, active.id, "templates", partialName);
         try {
           const partialRaw = await readFile(partialPath, "utf8");
@@ -147,6 +150,7 @@ export async function getThemeTemplateFromCandidates(siteId: string, candidates:
           if (partialName === "footer.html") partials.footer = partialRaw;
           if (partialName === "comment-item.html") partials.commentItem = partialRaw;
           if (partialName === "password.html") partials.password = partialRaw;
+          if (partialName === "comments.html") partials.comments = partialRaw;
         } catch {
           // optional partial
         }

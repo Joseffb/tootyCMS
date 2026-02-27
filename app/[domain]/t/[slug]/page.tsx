@@ -8,6 +8,8 @@ import { renderThemeTemplate } from "@/lib/theme-template";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildDetailPath } from "@/lib/permalink";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 
 type Params = Promise<{ domain: string; slug: string }>;
 
@@ -45,6 +47,14 @@ export default async function TagArchivePage({ params }: { params: Params }) {
       slug: decodedSlug,
     });
     if (tagTemplate) {
+      const kernel = await createKernelForRequest(site.id);
+      const baseHeaderMenu = await getSiteMenu(site.id, "header");
+      const filteredMenuItems = await kernel.applyFilters("nav:items", baseHeaderMenu, {
+        location: "header",
+        domain: decodedDomain,
+        siteId: site.id,
+      });
+      const menuItems = normalizeMenuItemsForPermalinks(filteredMenuItems, writing);
       const themeRuntime = await getThemeRenderContext(site.id, "tag_archive", [
         tagTemplate.template,
         tagTemplate.partials?.header,
@@ -53,6 +63,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
       const html = renderThemeTemplate(tagTemplate.template, {
         theme_header: tagTemplate.partials?.header || "",
         theme_footer: tagTemplate.partials?.footer || "",
+        theme_comments: tagTemplate.partials?.comments || "",
         theme_comment_item: tagTemplate.partials?.commentItem || "",
         theme_password: tagTemplate.partials?.password || "",
         site: {
@@ -80,6 +91,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
+        menu_items: menuItems,
         tooty: themeRuntime.tooty,
         auth: themeRuntime.auth,
       });

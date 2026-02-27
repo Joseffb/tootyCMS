@@ -48,6 +48,40 @@ function buildFloatingWidgetDismissKey(widget: FloatingWidget) {
   return `${widget.id}::${widget.content}`;
 }
 
+function normalizeAdminSiteHref(href: string) {
+  if (!href) return href;
+  return href.startsWith("/site/") ? href.replace(/^\/site\//, "/app/site/") : href;
+}
+
+function parsePluginTabs(items: any[]): Array<{ name: string; href: string }> {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item: any) => ({
+      name: String(item.label || ""),
+      href: String(item.href || ""),
+      order: Number.isFinite(Number(item.order)) ? Number(item.order) : 999,
+    }))
+    .filter((item: any) => item.name && item.href)
+    .sort((a: any, b: any) => (a.order - b.order) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+    .map((item: any) => ({
+      name: item.name,
+      href: item.href,
+    }));
+}
+
+function parseDataDomainTabs(items: any[]): Array<{ name: string; singular: string; listHref: string; addHref: string; order?: number }> {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item: any) => ({
+      name: String(item.label || ""),
+      singular: String(item.singular || ""),
+      listHref: normalizeAdminSiteHref(String(item.listHref || "")),
+      addHref: normalizeAdminSiteHref(String(item.addHref || "")),
+      order: Number.isFinite(Number(item.order)) ? Number(item.order) : undefined,
+    }))
+    .filter((item: any) => item.name && item.listHref && item.addHref);
+}
+
 const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }> = [
   { name: "Sites", href: "/settings/sites", match: "/settings/sites" },
   { name: "Themes", href: "/settings/themes", match: "/settings/themes" },
@@ -149,57 +183,44 @@ export default function Nav({ children }: { children: ReactNode }) {
   }, []);
 
   const loadPluginTabs = useCallback(() => {
-    const query = !singleSiteMode && effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
+    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
     fetch(`/api/plugins/menu${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((json) => {
-        if (!Array.isArray(json?.items)) {
-          setPluginTabs([]);
-          return;
-        }
-        setPluginTabs(
-          json.items
-            .map((item: any) => ({
-              name: String(item.label || ""),
-              href: String(item.href || ""),
-              order: Number.isFinite(Number(item.order)) ? Number(item.order) : 999,
-            }))
-            .filter((item: any) => item.name && item.href)
-            .sort((a: any, b: any) => (a.order - b.order) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-            .map((item: any) => ({
-              name: item.name,
-              href: item.href,
-            })),
-        );
-      })
+      .then((json) => setPluginTabs(parsePluginTabs(json?.items)))
       .catch(() => setPluginTabs([]));
-  }, [effectiveSiteId, singleSiteMode]);
+  }, [effectiveSiteId]);
 
   useEffect(() => {
-    loadPluginTabs();
     const onPluginSettingsPage = pathname?.includes("/settings/plugins");
     if (!onPluginSettingsPage) return;
+    loadPluginTabs();
     const timer = setInterval(() => loadPluginTabs(), 1500);
     return () => clearInterval(timer);
   }, [loadPluginTabs, pathname]);
 
   useEffect(() => {
-    const querySiteId = segments[0] === "site" && id ? id : navContext.mainSiteId || "";
-    const query = querySiteId ? `?siteId=${encodeURIComponent(querySiteId)}` : "";
-    fetch(`/api/nav/context${query}`, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : { siteCount: 0, mainSiteId: null, sites: [] }))
+    const querySiteId = currentSiteId || "";
+    const siteQuery = querySiteId ? `siteId=${encodeURIComponent(querySiteId)}&` : "";
+    const pathQuery = `path=${encodeURIComponent(pathname || "")}`;
+    const requestId = ++adminUiRequestRef.current;
+    const controller = new AbortController();
+    fetch(`/api/admin/bootstrap?${siteQuery}${pathQuery}`, { cache: "no-store", signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
+        if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
+        if (!json) return;
+        const nextNavContext = json?.navContext || {};
         setNavContext({
-          siteCount: Number(json?.siteCount || 0),
-          mainSiteId: json?.mainSiteId ? String(json.mainSiteId) : null,
-          migrationRequired: Boolean(json?.migrationRequired),
-          canManageNetworkSettings: Boolean(json?.canManageNetworkSettings),
-          canManageNetworkPlugins: Boolean(json?.canManageNetworkPlugins),
-          canManageSiteSettings: Boolean(json?.canManageSiteSettings),
-          canReadSiteAnalytics: Boolean(json?.canReadSiteAnalytics),
-          canCreateSiteContent: Boolean(json?.canCreateSiteContent),
-          sites: Array.isArray(json?.sites)
-            ? json.sites
+          siteCount: Number(nextNavContext?.siteCount || 0),
+          mainSiteId: nextNavContext?.mainSiteId ? String(nextNavContext.mainSiteId) : null,
+          migrationRequired: Boolean(nextNavContext?.migrationRequired),
+          canManageNetworkSettings: Boolean(nextNavContext?.canManageNetworkSettings),
+          canManageNetworkPlugins: Boolean(nextNavContext?.canManageNetworkPlugins),
+          canManageSiteSettings: Boolean(nextNavContext?.canManageSiteSettings),
+          canReadSiteAnalytics: Boolean(nextNavContext?.canReadSiteAnalytics),
+          canCreateSiteContent: Boolean(nextNavContext?.canCreateSiteContent),
+          sites: Array.isArray(nextNavContext?.sites)
+            ? nextNavContext.sites
                 .map((site: any) => ({
                   id: String(site?.id || ""),
                   name: String(site?.name || ""),
@@ -207,69 +228,18 @@ export default function Nav({ children }: { children: ReactNode }) {
                 .filter((site: { id: string; name: string }) => site.id)
             : [],
         });
-      })
-      .catch(() =>
-        setNavContext({
-          siteCount: 0,
-          mainSiteId: null,
-          migrationRequired: false,
-          canManageNetworkSettings: false,
-          canManageNetworkPlugins: false,
-          canManageSiteSettings: false,
-          canReadSiteAnalytics: false,
-          canCreateSiteContent: false,
-          sites: [],
-        }),
-      );
-  }, [pathname, id, navContext.mainSiteId]);
-
-  useEffect(() => {
-    if (!effectiveSiteId) {
-      setDataDomainTabs([]);
-      return;
-    }
-    fetch(`/api/data-domains/menu?siteId=${encodeURIComponent(effectiveSiteId)}`, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((json) => {
-        if (!Array.isArray(json?.items)) {
-          setDataDomainTabs([]);
-          return;
-        }
-        setDataDomainTabs(
-          json.items
-            .map((item: any) => ({
-              name: String(item.label || ""),
-              singular: String(item.singular || ""),
-              listHref: String(item.listHref || ""),
-              addHref: String(item.addHref || ""),
-              order: Number.isFinite(Number(item.order)) ? Number(item.order) : undefined,
-            }))
-            .filter((item: any) => item.name && item.listHref && item.addHref),
-        );
-      })
-      .catch(() => setDataDomainTabs([]));
-  }, [effectiveSiteId]);
-
-  useEffect(() => {
-    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
-    const pathQuery = `path=${encodeURIComponent(pathname || "")}`;
-    const separator = query ? "&" : "?";
-    const requestId = ++adminUiRequestRef.current;
-    const controller = new AbortController();
-    fetch(`/api/plugins/admin-ui${query}${separator}${pathQuery}&r=${Date.now()}`, { cache: "no-store", signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
-        if (!json) return;
-        setHasAnalyticsProviders(Boolean(json.hasAnalyticsProviders));
+        setPluginTabs(parsePluginTabs(json?.pluginMenuItems));
+        setDataDomainTabs(parseDataDomainTabs(json?.dataDomainItems));
+        const adminUi = json?.adminUi || {};
+        setHasAnalyticsProviders(Boolean(adminUi.hasAnalyticsProviders));
         setEnvironmentBadge({
-          show: Boolean(json.environmentBadge?.show),
-          label: String(json.environmentBadge?.label || ""),
-          environment: json.environmentBadge?.environment === "development" ? "development" : "production",
+          show: Boolean(adminUi.environmentBadge?.show),
+          label: String(adminUi.environmentBadge?.label || ""),
+          environment: adminUi.environmentBadge?.environment === "development" ? "development" : "production",
         });
         setFloatingWidgets(
-          Array.isArray(json.floatingWidgets)
-            ? json.floatingWidgets
+          Array.isArray(adminUi.floatingWidgets)
+            ? adminUi.floatingWidgets
                 .map((widget: any) => ({
                   id: String(widget?.id || ""),
                   title: String(widget?.title || ""),
@@ -293,6 +263,19 @@ export default function Nav({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
+        setNavContext({
+          siteCount: 0,
+          mainSiteId: null,
+          migrationRequired: false,
+          canManageNetworkSettings: false,
+          canManageNetworkPlugins: false,
+          canManageSiteSettings: false,
+          canReadSiteAnalytics: false,
+          canCreateSiteContent: false,
+          sites: [],
+        });
+        setPluginTabs([]);
+        setDataDomainTabs([]);
         setHasAnalyticsProviders(false);
         setEnvironmentBadge({
           show: false,
@@ -302,10 +285,8 @@ export default function Nav({ children }: { children: ReactNode }) {
         setFloatingWidgets([]);
         setTeetyAnimationRun((value) => value + 1);
       });
-    return () => {
-      controller.abort();
-    };
-  }, [effectiveSiteId, pathname]);
+    return () => controller.abort();
+  }, [currentSiteId, pathname]);
 
   const dismissFloatingWidget = useCallback((widget: FloatingWidget) => {
     if (widget.dismissSetting?.pluginId && widget.dismissSetting?.key) {
@@ -421,16 +402,16 @@ export default function Nav({ children }: { children: ReactNode }) {
 
   const tabs = useMemo<NavTab[]>(() => {
     const domainPostMatch = pathname?.match(
-      /^\/site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
+      /^\/(?:app\/)?site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
     );
     if (segments[0] === "site" && id && domainPostMatch) {
       const domainKey = domainPostMatch[2];
       const postId = domainPostMatch[3];
-      const baseHref = `/site/${id}/domain/${domainKey}/post/${postId}`;
+      const baseHref = `/app/site/${id}/domain/${domainKey}/post/${postId}`;
       return [
         {
           name: "Back to Entries",
-          href: `/site/${id}/domain/${domainKey}`,
+          href: `/app/site/${id}/domain/${domainKey}`,
           icon: <ArrowLeft width={18} />,
         },
         {
@@ -457,8 +438,8 @@ export default function Nav({ children }: { children: ReactNode }) {
         {
           name: "Posts",
           singular: "Post",
-          listHref: `/site/${siteId}/domain/post`,
-          addHref: `/site/${siteId}/domain/post/create`,
+          listHref: `/app/site/${siteId}/domain/post`,
+          addHref: `/app/site/${siteId}/domain/post/create`,
           order: undefined as number | undefined,
         },
         ...dataDomainTabs,
@@ -505,33 +486,33 @@ export default function Nav({ children }: { children: ReactNode }) {
 
     if (segments[0] === "site" && id) {
       const siteSettingsChildren: NavTab[] = [
-        { name: "General", href: `/site/${id}/settings`, match: `/site/${id}/settings` },
-        { name: "Categories", href: `/site/${id}/settings/categories`, match: `/site/${id}/settings/categories` },
-        { name: "Post-Types", href: `/site/${id}/settings/domains`, match: `/site/${id}/settings/domains` },
-        { name: "Reading", href: `/site/${id}/settings/reading`, match: `/site/${id}/settings/reading` },
-        { name: "SEO & Social", href: `/site/${id}/settings/seo`, match: `/site/${id}/settings/seo` },
-        { name: "Writing", href: `/site/${id}/settings/writing`, match: `/site/${id}/settings/writing` },
-        { name: "Menus", href: `/site/${id}/settings/menus`, match: `/site/${id}/settings/menus` },
-        { name: "Themes", href: `/site/${id}/settings/themes`, match: `/site/${id}/settings/themes` },
+        { name: "General", href: `/app/site/${id}/settings`, match: `/app/site/${id}/settings` },
+        { name: "Categories", href: `/app/site/${id}/settings/categories`, match: `/app/site/${id}/settings/categories` },
+        { name: "Post-Types", href: `/app/site/${id}/settings/domains`, match: `/app/site/${id}/settings/domains` },
+        { name: "Reading", href: `/app/site/${id}/settings/reading`, match: `/app/site/${id}/settings/reading` },
+        { name: "SEO & Social", href: `/app/site/${id}/settings/seo`, match: `/app/site/${id}/settings/seo` },
+        { name: "Writing", href: `/app/site/${id}/settings/writing`, match: `/app/site/${id}/settings/writing` },
+        { name: "Menus", href: `/app/site/${id}/settings/menus`, match: `/app/site/${id}/settings/menus` },
+        { name: "Themes", href: `/app/site/${id}/settings/themes`, match: `/app/site/${id}/settings/themes` },
         {
           name: "Plugins",
-          href: `/site/${id}/settings/plugins`,
-          match: `/site/${id}/settings/plugins`,
+          href: `/app/site/${id}/settings/plugins`,
+          match: `/app/site/${id}/settings/plugins`,
         },
         {
           name: "Messages",
-          href: `/site/${id}/settings/messages`,
-          match: `/site/${id}/settings/messages`,
+          href: `/app/site/${id}/settings/messages`,
+          match: `/app/site/${id}/settings/messages`,
         },
         {
           name: "Comments",
-          href: `/site/${id}/settings/comments`,
-          match: `/site/${id}/settings/comments`,
+          href: `/app/site/${id}/settings/comments`,
+          match: `/app/site/${id}/settings/comments`,
         },
         {
           name: "Users",
-          href: `/site/${id}/settings/users`,
-          match: `/site/${id}/settings/users`,
+          href: `/app/site/${id}/settings/users`,
+          match: `/app/site/${id}/settings/users`,
         },
       ].flatMap((item) => {
         const base: NavTab = {
@@ -566,7 +547,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           ? [
               {
                 name: "Analytics",
-                href: `/site/${id}/analytics`,
+                href: `/app/site/${id}/analytics`,
                 isActive: segments.includes("analytics"),
                 icon: <BarChart3 width={18} />,
               },
@@ -576,7 +557,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           ? [
               {
                 name: "Settings",
-                href: `/site/${id}/settings`,
+                href: `/app/site/${id}/settings`,
                 isActive: segments.includes("settings"),
                 icon: <Monitor width={18} />,
               },
@@ -587,7 +568,7 @@ export default function Nav({ children }: { children: ReactNode }) {
 
       return singleSiteMode
         ? siteTabs
-        : [{ name: "Back to All Sites", href: "/sites", icon: <ArrowLeft width={18} /> }, ...siteTabs];
+        : [{ name: "Back to All Sites", href: "/app/sites", icon: <ArrowLeft width={18} /> }, ...siteTabs];
     }
 
     if (singleSiteMode && navContext.mainSiteId) {
@@ -603,8 +584,8 @@ export default function Nav({ children }: { children: ReactNode }) {
           ? [
               {
                 name: "Analytics",
-                href: `/site/${navContext.mainSiteId}/analytics`,
-                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/analytics`),
+                href: `/app/site/${navContext.mainSiteId}/analytics`,
+                isActive: pathname?.includes(`/app/site/${navContext.mainSiteId}/analytics`),
                 icon: <BarChart3 width={18} />,
               } as NavTab,
             ]
@@ -613,26 +594,26 @@ export default function Nav({ children }: { children: ReactNode }) {
           ? [
               {
                 name: "System",
-                href: `/site/${navContext.mainSiteId}/settings`,
-                isActive: pathname?.includes(`/site/${navContext.mainSiteId}/settings`),
+                href: `/app/site/${navContext.mainSiteId}/settings`,
+                isActive: pathname?.includes(`/app/site/${navContext.mainSiteId}/settings`),
                 icon: <Monitor width={18} />,
               },
               ...[
-          { name: "General", href: `/site/${navContext.mainSiteId}/settings`, match: `/site/${navContext.mainSiteId}/settings` },
-          { name: "Categories", href: `/site/${navContext.mainSiteId}/settings/categories`, match: `/site/${navContext.mainSiteId}/settings/categories` },
-          { name: "Post-Types", href: `/site/${navContext.mainSiteId}/settings/domains`, match: `/site/${navContext.mainSiteId}/settings/domains` },
-          { name: "Reading", href: `/site/${navContext.mainSiteId}/settings/reading`, match: `/site/${navContext.mainSiteId}/settings/reading` },
-          { name: "SEO & Social", href: `/site/${navContext.mainSiteId}/settings/seo`, match: `/site/${navContext.mainSiteId}/settings/seo` },
-          { name: "Writing", href: `/site/${navContext.mainSiteId}/settings/writing`, match: `/site/${navContext.mainSiteId}/settings/writing` },
-          { name: "Menus", href: `/site/${navContext.mainSiteId}/settings/menus`, match: `/site/${navContext.mainSiteId}/settings/menus` },
-          { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
-          { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
-          { name: "Messages", href: `/site/${navContext.mainSiteId}/settings/messages`, match: `/site/${navContext.mainSiteId}/settings/messages` },
-          { name: "Comments", href: `/site/${navContext.mainSiteId}/settings/comments`, match: `/site/${navContext.mainSiteId}/settings/comments` },
-          { name: "Users", href: `/site/${navContext.mainSiteId}/settings/users`, match: `/site/${navContext.mainSiteId}/settings/users` },
-          { name: "Migrations", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
-          { name: "RBAC", href: `/site/${navContext.mainSiteId}/settings/rbac`, match: `/site/${navContext.mainSiteId}/settings/rbac` },
-          { name: "Schedules", href: `/site/${navContext.mainSiteId}/settings/schedules`, match: `/site/${navContext.mainSiteId}/settings/schedules` },
+          { name: "General", href: `/app/site/${navContext.mainSiteId}/settings`, match: `/app/site/${navContext.mainSiteId}/settings` },
+          { name: "Categories", href: `/app/site/${navContext.mainSiteId}/settings/categories`, match: `/app/site/${navContext.mainSiteId}/settings/categories` },
+          { name: "Post-Types", href: `/app/site/${navContext.mainSiteId}/settings/domains`, match: `/app/site/${navContext.mainSiteId}/settings/domains` },
+          { name: "Reading", href: `/app/site/${navContext.mainSiteId}/settings/reading`, match: `/app/site/${navContext.mainSiteId}/settings/reading` },
+          { name: "SEO & Social", href: `/app/site/${navContext.mainSiteId}/settings/seo`, match: `/app/site/${navContext.mainSiteId}/settings/seo` },
+          { name: "Writing", href: `/app/site/${navContext.mainSiteId}/settings/writing`, match: `/app/site/${navContext.mainSiteId}/settings/writing` },
+          { name: "Menus", href: `/app/site/${navContext.mainSiteId}/settings/menus`, match: `/app/site/${navContext.mainSiteId}/settings/menus` },
+          { name: "Themes", href: `/app/site/${navContext.mainSiteId}/settings/themes`, match: `/app/site/${navContext.mainSiteId}/settings/themes` },
+          { name: "Plugins", href: `/app/site/${navContext.mainSiteId}/settings/plugins`, match: `/app/site/${navContext.mainSiteId}/settings/plugins` },
+          { name: "Messages", href: `/app/site/${navContext.mainSiteId}/settings/messages`, match: `/app/site/${navContext.mainSiteId}/settings/messages` },
+          { name: "Comments", href: `/app/site/${navContext.mainSiteId}/settings/comments`, match: `/app/site/${navContext.mainSiteId}/settings/comments` },
+          { name: "Users", href: `/app/site/${navContext.mainSiteId}/settings/users`, match: `/app/site/${navContext.mainSiteId}/settings/users` },
+          { name: "Migrations", href: `/app/site/${navContext.mainSiteId}/settings/database`, match: `/app/site/${navContext.mainSiteId}/settings/database` },
+          { name: "RBAC", href: `/app/site/${navContext.mainSiteId}/settings/rbac`, match: `/app/site/${navContext.mainSiteId}/settings/rbac` },
+          { name: "Schedules", href: `/app/site/${navContext.mainSiteId}/settings/schedules`, match: `/app/site/${navContext.mainSiteId}/settings/schedules` },
         ].flatMap((item) => {
           const base: NavTab = {
             name: item.name,
@@ -675,7 +656,7 @@ export default function Nav({ children }: { children: ReactNode }) {
       },
       {
         name: "Sites",
-        href: "/sites",
+        href: "/app/sites",
         isActive: segments[0] === "sites",
         icon: <Globe width={18} />,
       },
@@ -683,8 +664,8 @@ export default function Nav({ children }: { children: ReactNode }) {
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
         .map((site) => ({
         name: site.name,
-        href: `/site/${site.id}`,
-        isActive: pathname?.includes(`/site/${site.id}`),
+        href: `/app/site/${site.id}`,
+        isActive: pathname?.includes(`/app/site/${site.id}`),
         icon: <Globe width={18} />,
         isChild: true,
         childLevel: 1 as const,

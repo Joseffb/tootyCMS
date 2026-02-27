@@ -137,7 +137,7 @@ export default async function SiteCard({
   return (
     <div className="relative rounded-lg border border-stone-200 pb-10 shadow-md transition-all hover:shadow-xl dark:border-stone-700 dark:hover:border-white">
       {/* Cover + title ------------------------------------------------------- */}
-      <Link href={`/site/${data.id}`} className="flex flex-col overflow-hidden rounded-lg">
+      <Link href={`/app/site/${data.id}`} className="flex flex-col overflow-hidden rounded-lg">
         <BlurImage
           alt={data.name ?? "Card thumbnail"}
           width={500}
@@ -172,7 +172,7 @@ export default async function SiteCard({
         {/* Analytics link with live share % */}
         {hasAnalytics ? (
           <Link
-            href={`/site/${data.id}/analytics`}
+            href={`/app/site/${data.id}/analytics`}
             className={`flex items-center rounded-md px-2 py-1 text-sm font-medium transition-colors ${
               trend
                 ? trend.trend === "up"

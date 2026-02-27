@@ -14,6 +14,7 @@ import {
 } from "@/lib/cms-config";
 import Script from "next/script";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
+import { getThemeCacheBustToken, withCacheBust } from "@/lib/theme-cache-bust";
 
 export async function generateMetadata({
   params,
@@ -109,10 +110,11 @@ export default async function SiteLayout({
     notFound();
   }
   const siteId = data.id as string;
-  const [themeAssets, baseHeaderMenu, kernel] = await Promise.all([
+  const [themeAssets, baseHeaderMenu, kernel, cacheBustToken] = await Promise.all([
     getThemeAssetsForSite(siteId),
     getSiteMenu(siteId, "header"),
     createKernelForRequest(siteId),
+    getThemeCacheBustToken(siteId),
   ]);
 
   await kernel.doAction("request:begin", { domain: decoded, siteId });
@@ -132,7 +134,7 @@ export default async function SiteLayout({
   return (
     <>
       {themeAssets.styles.map((href: string) => (
-        <link key={href} rel="stylesheet" href={href} />
+        <link key={href} rel="stylesheet" href={withCacheBust(href, cacheBustToken)} />
       ))}
       {enqueuedStyles.map((asset) =>
         asset.inline ? (
@@ -145,7 +147,7 @@ export default async function SiteLayout({
           <link
             key={asset.id}
             rel={(asset.attrs || {}).rel || "stylesheet"}
-            href={asset.src || ""}
+            href={withCacheBust(asset.src || "", cacheBustToken)}
             {...(asset.attrs || {})}
           />
         ),
@@ -153,14 +155,14 @@ export default async function SiteLayout({
       <FrontendAuthBridge />
       {children}
       {themeAssets.scripts.map((src: string) => (
-        <Script key={src} src={src} strategy="afterInteractive" />
+        <Script key={src} src={withCacheBust(src, cacheBustToken)} strategy="afterInteractive" />
       ))}
       {enqueuedScripts.map((asset) =>
         asset.src ? (
           <Script
             key={asset.id}
             id={asset.id}
-            src={asset.src}
+            src={withCacheBust(asset.src, cacheBustToken)}
             strategy={asset.strategy || "afterInteractive"}
             {...(asset.attrs || {})}
           />

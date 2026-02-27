@@ -37,7 +37,7 @@ export default function CreateSiteModal({ successRedirectPath }: { successRedire
             toast.error(res.error);
           } else {
             const { id } = res;
-            const redirectPath = successRedirectPath || `/site/${id}`;
+            const redirectPath = successRedirectPath || `/app/site/${id}`;
             router.refresh();
             router.push(redirectPath);
             modal?.hide();

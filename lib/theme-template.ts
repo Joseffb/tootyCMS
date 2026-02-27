@@ -19,11 +19,15 @@ export function renderThemeTemplate(template: string, context: Record<string, un
 
   const headerRaw = typeof payload.theme_header === "string" ? payload.theme_header : "";
   const footerRaw = typeof payload.theme_footer === "string" ? payload.theme_footer : "";
+  const commentsRaw = typeof payload.theme_comments === "string" ? payload.theme_comments : "";
   if (headerRaw) {
     payload.theme_header = env.renderString(headerRaw, payload);
   }
   if (footerRaw) {
     payload.theme_footer = env.renderString(footerRaw, payload);
+  }
+  if (commentsRaw) {
+    payload.theme_comments = env.renderString(commentsRaw, payload);
   }
 
   return env.renderString(template, payload);

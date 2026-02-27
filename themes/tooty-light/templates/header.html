@@ -1,8 +1,9 @@
 <section>
   <div class="tooty-post-nav">
-    <a class="tooty-post-link" href="{{links.root}}">{{theme.site_title or site.name}}</a>
     <nav class="tooty-post-nav-links" aria-label="Primary">
-      <a class="tooty-post-link" href="{{links.about}}">About</a>
+      {% for item in menu_items or [] %}
+      <a class="tooty-post-link" href="{{item.href}}" {% if item.external %}target="_blank" rel="noopener noreferrer"{% endif %}>{{item.label}}</a>
+      {% endfor %}
     </nav>
     <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or auth.username or "there" }}{% endif %}</p>
   </div>

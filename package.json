@@ -14,7 +14,7 @@
     "format": "prettier \"**/*.{css,js,json,jsx,ts,tsx}\"",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run && npm run lint && npm run build",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "bash ./scripts/test-integration.sh",

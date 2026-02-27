@@ -1,5 +1,7 @@
 import type { MenuItem, MenuLocation } from "@/lib/kernel";
 import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
+import type { SitePermalinkSettings } from "@/lib/permalink";
+import { buildArchivePath } from "@/lib/permalink";
 
 function menuKey(siteId: string, location: MenuLocation) {
   return `site_${siteId}_menu_${location}`;
@@ -80,4 +82,18 @@ export async function saveSiteMenu(siteId: string, location: MenuLocation, items
 export async function saveSiteMenuFromJson(siteId: string, location: MenuLocation, rawJson: string) {
   const parsed = safeParseMenu(rawJson);
   await saveSiteMenu(siteId, location, parsed);
+}
+
+export function normalizeMenuItemsForPermalinks(items: MenuItem[], writing: SitePermalinkSettings) {
+  return items.map((item) => {
+    const href = String(item.href || "").trim();
+    if (!href) return item;
+    if (href === "/posts") {
+      return { ...item, href: buildArchivePath("post", writing) };
+    }
+    if (href === "/pages") {
+      return { ...item, href: buildArchivePath("page", writing) };
+    }
+    return item;
+  });
 }

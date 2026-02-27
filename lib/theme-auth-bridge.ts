@@ -46,7 +46,21 @@ export async function verifyThemeBridgeToken(rawToken: string) {
   if (!secret) return null;
   const token = String(rawToken || "").trim();
   if (!token) return null;
-  const payload = await decode({ token, secret });
+  let payload: Awaited<ReturnType<typeof decode>> | null = null;
+  try {
+    payload = await decode({ token, secret });
+  } catch (error) {
+    if (process.env.TRACE_PROFILE === "Test") {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code || "")
+          : "";
+      console.info("[trace:Test:theme-bridge] token rejected", {
+        reason: code || "decode_error",
+      });
+    }
+    return null;
+  }
   if (!payload) return null;
   if (String(payload.aud || "") !== THEME_BRIDGE_AUDIENCE) return null;
   const sub = String(payload.sub || "").trim();
@@ -60,4 +74,3 @@ export async function verifyThemeBridgeToken(rawToken: string) {
     aud: THEME_BRIDGE_AUDIENCE,
   } as ThemeBridgeClaims;
 }
-

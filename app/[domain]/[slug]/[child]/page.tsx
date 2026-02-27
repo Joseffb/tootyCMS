@@ -10,7 +10,7 @@ import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { toDateString } from "@/lib/utils";
 import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
-import { getSiteMenu } from "@/lib/menu-system";
+import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 import { normalizeDomainKeyFromSegment } from "@/lib/data-domain-routing";
 import { buildArchivePath, buildDetailPath, resolveNoDomainPrefixDomain } from "@/lib/permalink";
 import { trace } from "@/lib/debug";
@@ -88,6 +88,7 @@ export default async function DomainPostPage({
   });
 
   const resolvedSite = (data as any)?.site;
+  const canonicalSite = resolvedSite?.id ? resolvedSite : site;
   const passwordError = String(resolvedSearchParams?.pw || "") === "invalid";
   const isPasswordProtected = requiresPostPasswordGate({
     usePassword: (data as any)?.usePassword,
@@ -130,12 +131,19 @@ export default async function DomainPostPage({
       );
     }
   }
-  const siteId = resolvedSite?.id as string | undefined;
-  const isPrimary = Boolean(resolvedSite?.isPrimary) || resolvedSite?.subdomain === "main";
-  const configuredRootUrl = siteId ? (await getSiteUrlSettingForSite(siteId, "")).value.trim() : "";
+  const siteId = canonicalSite?.id as string | undefined;
+  const isPrimary = Boolean(canonicalSite?.isPrimary) || canonicalSite?.subdomain === "main";
+  let configuredRootUrl = "";
+  if (siteId) {
+    try {
+      configuredRootUrl = (await getSiteUrlSettingForSite(siteId, "")).value.trim();
+    } catch {
+      configuredRootUrl = "";
+    }
+  }
   const derivedSiteUrl = getSitePublicUrl({
-    subdomain: resolvedSite?.subdomain,
-    customDomain: resolvedSite?.customDomain,
+    subdomain: canonicalSite?.subdomain,
+    customDomain: canonicalSite?.customDomain,
     isPrimary,
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
@@ -145,13 +153,14 @@ export default async function DomainPostPage({
   const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
   const useComments = readBooleanMeta(postMeta, "use_comments", commentsGateEnabled);
   const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
-  const menuItems = siteId
+  const rawMenuItems = siteId
     ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
         location: "header",
         domain: decodedDomain,
         siteId,
       })
     : [];
+  const menuItems = normalizeMenuItemsForPermalinks(rawMenuItems, writing);
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
@@ -175,11 +184,12 @@ export default async function DomainPostPage({
       const html = renderThemeTemplate(themedTemplate.template, {
         theme_header: themedTemplate.partials?.header || "",
         theme_footer: themedTemplate.partials?.footer || "",
+        theme_comments: themedTemplate.partials?.comments || "",
         site: {
-          id: resolvedSite?.id,
-          name: resolvedSite?.name || "Tooty Site",
-          description: resolvedSite?.description || "",
-          subtitle: resolvedSite?.heroSubtitle || "",
+          id: canonicalSite?.id,
+          name: canonicalSite?.name || "Tooty Site",
+          description: canonicalSite?.description || "",
+          subtitle: canonicalSite?.heroSubtitle || "",
           url: siteUrl,
           domain: siteUrl.replace(/^https?:\/\//, ""),
         },

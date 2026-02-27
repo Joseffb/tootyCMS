@@ -7,7 +7,7 @@ import db from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { dataDomains, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
 import { createKernelForRequest } from "@/lib/plugin-runtime";
-import { getSiteMenu } from "@/lib/menu-system";
+import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { toDateString } from "@/lib/utils";
@@ -111,13 +111,14 @@ export default async function SitePostPage({
         const siteId = site.id as string;
         const kernel = await createKernelForRequest(site.id as string);
         const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
-        const menuItems = siteId
+        const rawMenuItems = siteId
           ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
               location: "header",
               domain: decodedDomain,
               siteId,
             })
           : [];
+        const menuItems = normalizeMenuItemsForPermalinks(rawMenuItems, writing);
 
         if (siteId) {
           const archiveCandidates = domainArchiveTemplateCandidates(domainRow.key, domainPluralSegment(domainRow.key));
@@ -139,6 +140,7 @@ export default async function SitePostPage({
             const html = renderThemeTemplate(themeTemplate.template, {
               theme_header: themeTemplate.partials?.header || "",
               theme_footer: themeTemplate.partials?.footer || "",
+              theme_comments: themeTemplate.partials?.comments || "",
               site: {
                 id: site.id,
                 name: site.name || "Tooty Site",
@@ -263,13 +265,14 @@ export default async function SitePostPage({
   });
   const siteId = (data as any)?.site?.id as string | undefined;
   const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
-  const menuItems = siteId
+  const rawMenuItems = siteId
     ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
         location: "header",
         domain: decodedDomain,
         siteId,
       })
     : [];
+  const menuItems = normalizeMenuItemsForPermalinks(rawMenuItems, writing);
   const activeTheme = siteId ? await getActiveThemeForSite(siteId) : null;
   const documentationCategorySlug =
     typeof activeTheme?.config?.documentation_category_slug === "string" &&
@@ -321,6 +324,7 @@ export default async function SitePostPage({
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
+        theme_comments: themeTemplate.partials?.comments || "",
         site: {
           id: (data as any)?.site?.id,
           name: (data as any)?.site?.name || "Tooty Site",

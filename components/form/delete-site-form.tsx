@@ -35,7 +35,7 @@ export default function DeleteSiteForm({ siteName }: Props) {
               toast.error(res.error);
             } else {
               router.refresh();
-              router.push("/sites");
+              router.push("/app/sites");
               toast.success(`Successfully deleted site!`);
             }
           })

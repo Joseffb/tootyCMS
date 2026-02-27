@@ -51,6 +51,38 @@ function isAllowedAppCallback(rawUrl: string) {
   }
 }
 
+function readLastSiteId(req: NextRequest) {
+  return String(req.cookies.get("tooty_last_site_id")?.value || "").trim();
+}
+
+function readLastAppPath(req: NextRequest) {
+  const value = String(req.cookies.get("tooty_last_app_path")?.value || "").trim();
+  if (!value.startsWith("/site/")) return "";
+  return value;
+}
+
+function setLastSiteId(res: NextResponse, siteId: string) {
+  const normalized = String(siteId || "").trim();
+  if (!normalized) return;
+  res.cookies.set("tooty_last_site_id", normalized, {
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: "lax",
+    secure: false,
+  });
+}
+
+function setLastAppPath(res: NextResponse, appPath: string) {
+  const normalized = String(appPath || "").trim();
+  if (!normalized.startsWith("/site/")) return;
+  res.cookies.set("tooty_last_app_path", normalized, {
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: "lax",
+    secure: false,
+  });
+}
+
 export const config = {
   matcher: [
     "/((?!api/|_next/|_static/|_vercel|media/|sitemap\\.xml|robots\\.txt|.*\\..*).*)",
@@ -174,6 +206,44 @@ export default async function middleware(req: NextRequest) {
       traceEdge("middleware", "redirect authenticated app user", { traceId, to: "/" });
       return redirectWithTrace("/");
     }
+    if (isAuthenticated && (appPath === "/" || appPath === "")) {
+      const lastAppPath = readLastAppPath(req);
+      if (lastAppPath) {
+        traceEdge("middleware", "redirect app-domain /app to last path", {
+          traceId,
+          to: `/app${lastAppPath}`,
+        });
+        return redirectWithTrace(`/app${lastAppPath}`);
+      }
+      const lastSiteId = readLastSiteId(req);
+      if (lastSiteId) {
+        traceEdge("middleware", "redirect app-domain /app to last site", {
+          traceId,
+          to: `/app/site/${lastSiteId}`,
+        });
+        return redirectWithTrace(`/app/site/${lastSiteId}`);
+      }
+    }
+    if (isAuthenticated && (appPath === "/sites" || appPath === "/sites/")) {
+      const lastAppPath = readLastAppPath(req);
+      if (lastAppPath) {
+        traceEdge("middleware", "redirect app-domain /sites to last path", {
+          traceId,
+          to: `/app${lastAppPath}`,
+        });
+        return redirectWithTrace(`/app${lastAppPath}`);
+      }
+      const lastSiteId = readLastSiteId(req);
+      if (lastSiteId) {
+        traceEdge("middleware", "redirect app-domain /sites to last site", {
+          traceId,
+          to: `/app/site/${lastSiteId}`,
+        });
+        return redirectWithTrace(`/app/site/${lastSiteId}`);
+      }
+      traceEdge("middleware", "redirect app-domain /sites to /app", { traceId, to: "/app" });
+      return redirectWithTrace("/app");
+    }
     if (
       isAuthenticated &&
       forcePasswordChange &&
@@ -183,11 +253,18 @@ export default async function middleware(req: NextRequest) {
       traceEdge("middleware", "force password change redirect", { traceId, to: "/settings/profile?forcePasswordChange=1" });
       return redirectWithTrace("/settings/profile?forcePasswordChange=1");
     }
+    const rewriteTarget = `/app${appPath === "/" ? "" : appFullPath}`;
     traceEdge("middleware", "rewrite app-domain", {
       traceId,
-      to: `/app${appPath === "/" ? "" : appFullPath}`,
+      to: rewriteTarget,
     });
-    return rewriteWithTrace(`/app${appPath === "/" ? "" : appFullPath}`);
+    const rewritten = rewriteWithTrace(rewriteTarget);
+    const siteMatch = appPath.match(/^\/site\/([^/?#]+)/);
+    if (siteMatch?.[1]) {
+      setLastSiteId(rewritten, decodeURIComponent(siteMatch[1]));
+      setLastAppPath(rewritten, appPath);
+    }
+    return rewritten;
   }
 
   // ✅ Keep setup route reachable on root domain.

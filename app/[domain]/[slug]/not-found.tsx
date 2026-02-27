@@ -8,6 +8,8 @@ import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildDetailPath } from "@/lib/permalink";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 
 export default async function NotFound() {
   const headersList = await headers();
@@ -24,6 +26,14 @@ export default async function NotFound() {
       getSiteWritingSettings(siteId),
     ]);
     if (themeTemplate) {
+      const kernel = await createKernelForRequest(siteId);
+      const baseHeaderMenu = await getSiteMenu(siteId, "header");
+      const filteredMenuItems = await kernel.applyFilters("nav:items", baseHeaderMenu, {
+        location: "header",
+        domain: host,
+        siteId,
+      });
+      const menuItems = normalizeMenuItemsForPermalinks(filteredMenuItems, writing);
       const themeRuntime = await getThemeRenderContext(siteId, "not_found", [
         themeTemplate.template,
         themeTemplate.partials?.header,
@@ -40,6 +50,7 @@ export default async function NotFound() {
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
+        theme_comments: themeTemplate.partials?.comments || "",
         site: {
           id: data?.id || "",
           name: data?.name || "Tooty Site",
@@ -64,6 +75,7 @@ export default async function NotFound() {
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
+        menu_items: menuItems,
         tooty: themeRuntime.tooty,
         auth: themeRuntime.auth,
         route_kind: "not_found",

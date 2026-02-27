@@ -11,6 +11,10 @@ import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { inArray } from "drizzle-orm";
 import { sites } from "@/lib/schema";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 export default async function Overview() {
   const session = await getSession();
   if (session) {

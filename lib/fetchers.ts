@@ -25,21 +25,29 @@ function parseSubdomainFromDomain(domain: string) {
     : null;
 }
 
+function shouldBypassDataCache() {
+  return process.env.NODE_ENV === "test" || process.env.TRACE_PROFILE === "Test";
+}
+
 export async function getSiteData(domain: string) {
   const normalizedDomain = normalizeDomainForLookup(domain);
   const subdomain = parseSubdomainFromDomain(normalizedDomain);
+  const query = async () =>
+    db.query.sites.findFirst({
+      where: subdomain
+        ? eq(sites.subdomain, subdomain)
+        : eq(sites.customDomain, normalizedDomain),
+      with: {
+        user: true,
+      },
+    });
+
+  if (shouldBypassDataCache()) {
+    return query();
+  }
 
   return unstable_cache(
-    async () => {
-      return db.query.sites.findFirst({
-        where: subdomain
-          ? eq(sites.subdomain, subdomain)
-          : eq(sites.customDomain, normalizedDomain),
-        with: {
-          user: true,
-        },
-      });
-    },
+    query,
     [`${domain}-metadata-v2`],
     {
       revalidate: 900,

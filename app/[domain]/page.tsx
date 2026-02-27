@@ -13,6 +13,8 @@ import { getInstallState } from "@/lib/install-state";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildArchivePath, buildDetailPath } from "@/lib/permalink";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 
 // Type Definitions
 interface SeriesLink {
@@ -119,6 +121,14 @@ export default async function SiteHomePage({ params }: { params: Params }) {
       themedTemplate.partials?.footer,
     ]);
     const writingSettings = await getSiteWritingSettings(data.id as string);
+    const kernel = await createKernelForRequest(data.id as string);
+    const baseHeaderMenu = await getSiteMenu(data.id as string, "header");
+    const filteredMenuItems = await kernel.applyFilters("nav:items", baseHeaderMenu, {
+      location: "header",
+      domain: decodedDomain,
+      siteId: data.id as string,
+    });
+    const menuItems = normalizeMenuItemsForPermalinks(filteredMenuItems, writingSettings);
     const isPrimary = Boolean((data as any).isPrimary) || (data as any).subdomain === "main";
     const configuredRootUrl = (await getSiteUrlSettingForSite(data.id as string, "")).value.trim();
     const derivedSiteUrl = getSitePublicUrl({
@@ -139,6 +149,7 @@ export default async function SiteHomePage({ params }: { params: Params }) {
     const html = renderThemeTemplate(themedTemplate.template, {
       theme_header: themedTemplate.partials?.header || "",
       theme_footer: themedTemplate.partials?.footer || "",
+      theme_comments: themedTemplate.partials?.comments || "",
       theme_comment_item: themedTemplate.partials?.commentItem || "",
       theme_password: themedTemplate.partials?.password || "",
       site: {
@@ -174,6 +185,7 @@ export default async function SiteHomePage({ params }: { params: Params }) {
         tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writingSettings)}`,
         privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writingSettings)}`,
       },
+      menu_items: menuItems,
       route_kind: "home",
       data_domain: "post",
       category_base: writingSettings.categoryBase || "c",
