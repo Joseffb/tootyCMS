@@ -487,16 +487,16 @@ async function createExportArtifactToken(input: {
   fileName: string;
 }) {
   await ensureExportArtifactsTable();
-  const token = crypto.randomUUID();
+  const artifactToken = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + exportLinkTtlMs());
   const table = sql.raw(quotedTable(exportArtifactsTableName()));
   await db.execute(sql`
     INSERT INTO ${table}
       (token, site_id, user_id, format, media_object_key, media_url, mime_type, file_name, expires_at, created_at)
     VALUES
-      (${token}, ${input.siteId || null}, ${input.userId}, ${input.format}, ${input.mediaObjectKey}, ${input.mediaUrl}, ${input.mimeType || null}, ${input.fileName || null}, ${expiresAt.toISOString()}::timestamptz, NOW())
+      (${artifactToken}, ${input.siteId || null}, ${input.userId}, ${input.format}, ${input.mediaObjectKey}, ${input.mediaUrl}, ${input.mimeType || null}, ${input.fileName || null}, ${expiresAt.toISOString()}::timestamptz, NOW())
   `);
-  return { token, expiresAt };
+  return { token: artifactToken, expiresAt };
 }
 
 async function sendExportDeliveryLinkToUser(input: {
