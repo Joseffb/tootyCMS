@@ -19,7 +19,7 @@ async function resolveDisplayName(userId: string) {
   return String(row?.username || row?.name || "").trim();
 }
 
-function resolveCorsHeaders(request: Request) {
+function resolveCorsHeaders(request: Request): Record<string, string> {
   const origin = String(request.headers.get("origin") || "").trim();
   if (!origin) return {};
   try {
@@ -40,13 +40,14 @@ function resolveCorsHeaders(request: Request) {
 
 export async function OPTIONS(request: Request) {
   const corsHeaders = resolveCorsHeaders(request);
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
   return new NextResponse(null, {
     status: 204,
-    headers: {
-      ...corsHeaders,
-      "Access-Control-Allow-Methods": "GET,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
+    headers,
   });
 }
 
