@@ -39,6 +39,7 @@ export type PluginWithSiteState = PluginWithState & {
 const DEFAULT_GLOBALLY_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
 const DEFAULT_SITE_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
 const PLUGIN_DISCOVERY_TTL_MS = process.env.NODE_ENV === "development" ? 2_000 : 30_000;
+const loggedDuplicatePluginSkips = new Set<string>();
 let pluginDiscoveryCache: { at: number; plugins: PluginManifest[] } | null = null;
 let pluginDiscoveryInFlight: Promise<PluginManifest[]> | null = null;
 let pluginCleanupAt = 0;
@@ -158,10 +159,14 @@ export async function getAvailablePlugins(): Promise<PluginManifest[]> {
           continue;
         }
         if (byId.has(validated.id)) {
-          trace("extensions", "plugin skipped due duplicate id in lower-priority path", {
-            pluginId: validated.id,
-            sourceDir: pluginsDir,
-          });
+          const duplicateKey = `${validated.id}::${pluginsDir}`;
+          if (!loggedDuplicatePluginSkips.has(duplicateKey)) {
+            loggedDuplicatePluginSkips.add(duplicateKey);
+            trace("extensions", "plugin skipped due duplicate id in lower-priority path", {
+              pluginId: validated.id,
+              sourceDir: pluginsDir,
+            });
+          }
           continue;
         }
         byId.set(validated.id, {

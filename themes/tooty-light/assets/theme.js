@@ -147,10 +147,10 @@
     block.innerHTML = `
       <div class="tooty-comments-card">
         <h3 class="tooty-comments-title">Comments</h3>
-        <p class="tooty-comments-note" data-comments-note></p>
-        <div class="tooty-comments-list" data-comments-list>Loading comments...</div>
+        <p class="tooty-comments-note" data-comments-note>Loading comments...</p>
+        <div class="tooty-comments-list" data-comments-list></div>
       </div>
-      <div class="tooty-comments-card tooty-comments-compose" data-comments-compose>
+      <div class="tooty-comments-card tooty-comments-compose" data-comments-compose style="display:none">
         <form class="tooty-comments-form" data-comments-form>
           <label data-comment-field="author-name" style="display:none">
             <span>Display Name</span>
@@ -194,14 +194,15 @@
         const canPostAsUser = Boolean(permissions.canPostAsUser);
         const canPostAnonymously = Boolean(permissions.canPostAnonymously);
         const canWriteComments = canPostAsUser || canPostAnonymously;
+        const requiresAnonymousIdentity = !canPostAsUser && canWriteComments && canPostAnonymously;
         const identityFields = permissions.anonymousIdentityFields || {};
         if (note) {
           note.textContent = !canViewComments
             ? "Comments are not visible for this audience."
             : canPostAsUser
             ? "You can post comments as a signed-in user."
-            : isAuthenticated && canPostAnonymously
-              ? "You are signed in. Comments will use your account identity."
+            : isAuthenticated && requiresAnonymousIdentity
+              ? "You are signed in, but this account cannot post as an internal user. Add name and email to post as guest."
             : canPostAnonymously
               ? "Guests can post comments. Display name and email are required (email is never shown)."
               : "Comments are read-only for your current access.";
@@ -212,13 +213,13 @@
           form.style.display = canWriteComments ? "" : "none";
         }
         if (nameInput instanceof HTMLInputElement) {
-          const enabled = !isAuthenticated && !canPostAsUser && canWriteComments && canPostAnonymously && Boolean(identityFields.name);
+          const enabled = requiresAnonymousIdentity && Boolean(identityFields.name);
           if (nameLabel instanceof HTMLElement) nameLabel.style.display = enabled ? "" : "none";
           else nameInput.style.display = enabled ? "" : "none";
           nameInput.required = enabled;
         }
         if (emailInput instanceof HTMLInputElement) {
-          const enabled = !isAuthenticated && !canPostAsUser && canWriteComments && canPostAnonymously && Boolean(identityFields.email);
+          const enabled = requiresAnonymousIdentity && Boolean(identityFields.email);
           if (emailLabel instanceof HTMLElement) emailLabel.style.display = enabled ? "" : "none";
           else emailInput.style.display = enabled ? "" : "none";
           emailInput.required = enabled;

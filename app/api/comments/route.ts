@@ -86,6 +86,14 @@ async function resolveValidAuthorUserId(userId: string | null | undefined) {
   return row?.id ? normalizedUserId : null;
 }
 
+async function resolveAuthorIdentity(sessionUserId: string, bridgeUserId: string) {
+  const sessionResolved = await resolveValidAuthorUserId(sessionUserId);
+  if (sessionResolved) return sessionResolved;
+  const bridgeResolved = await resolveValidAuthorUserId(bridgeUserId);
+  if (bridgeResolved) return bridgeResolved;
+  return null;
+}
+
 function toDisplayName(user: {
   displayName?: string;
   username: string | null;
@@ -192,9 +200,10 @@ export async function GET(request: Request) {
 
   try {
     const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
-    const sessionUserId = normalize(session?.user?.id || bridgeUser?.id);
-    const isAuthenticated = Boolean(sessionUserId);
-    const validAuthorUserId = await resolveValidAuthorUserId(sessionUserId);
+    const sessionUserId = normalize(session?.user?.id);
+    const bridgeUserId = normalize(bridgeUser?.id);
+    const isAuthenticated = Boolean(sessionUserId || bridgeUserId);
+    const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
     const canPostAsKnownUser = Boolean(validAuthorUserId);
     if (process.env.TRACE_PROFILE === "Test") {
       console.info("[trace:Test:comments.auth] permission inputs", {
@@ -311,9 +320,10 @@ export async function POST(request: Request) {
   }
   const capabilities = await getPublicCommentCapabilities(siteId, providerId);
   const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
-  const sessionUserId = normalize(session?.user?.id || bridgeUser?.id);
-  const isAuthenticated = Boolean(sessionUserId);
-  const validAuthorUserId = await resolveValidAuthorUserId(sessionUserId);
+  const sessionUserId = normalize(session?.user?.id);
+  const bridgeUserId = normalize(bridgeUser?.id);
+  const isAuthenticated = Boolean(sessionUserId || bridgeUserId);
+  const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
   const isAnonymous = !validAuthorUserId;
   const resolvedProfileDisplayName = sessionUserId ? await resolveUserDisplayName(sessionUserId) : "";
   const sessionDisplayName = resolveAuthenticatedDisplayName({

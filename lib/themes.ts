@@ -52,6 +52,7 @@ const siteThemeKey = (siteId: string) => `site_${siteId}_theme`;
 const themeEnabledKey = (themeId: string) => `theme_${themeId}_enabled`;
 const themeConfigKey = (themeId: string) => `theme_${themeId}_config`;
 const DEFAULT_SITE_THEME_ID = "tooty-light";
+const loggedDuplicateThemeSkips = new Set<string>();
 const LEGACY_THEME_ID_ALIASES: Record<string, string> = {
   "tooty-dark": "teety-dark",
 };
@@ -172,10 +173,14 @@ export async function getAvailableThemes(): Promise<ThemeManifest[]> {
           continue;
         }
         if (byId.has(validated.id)) {
-          trace("extensions", "theme skipped due duplicate id in lower-priority path", {
-            themeId: validated.id,
-            sourceDir: themesDir,
-          });
+          const duplicateKey = `${validated.id}::${themesDir}`;
+          if (!loggedDuplicateThemeSkips.has(duplicateKey)) {
+            loggedDuplicateThemeSkips.add(duplicateKey);
+            trace("extensions", "theme skipped due duplicate id in lower-priority path", {
+              themeId: validated.id,
+              sourceDir: themesDir,
+            });
+          }
           continue;
         }
         byId.set(validated.id, { ...validated, sourceDir: themesDir });

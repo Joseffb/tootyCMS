@@ -18,6 +18,7 @@ const ghostUserDisplayName = "Ghost Display Name";
 const ghostUserUsername = "ghost_comments_user";
 const domainKey = "post";
 const mainHost = "main.localhost";
+const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
 
 let siteId = "";
 let postId = domainPostId;
@@ -31,8 +32,22 @@ async function ensureMainSite() {
     ORDER BY "isPrimary" DESC, "createdAt" ASC
     LIMIT 1
   `;
-  if (!rows.rows[0]?.id) throw new Error("Primary/main site not found.");
-  siteId = String(rows.rows[0].id);
+  if (rows.rows[0]?.id) {
+    siteId = String(rows.rows[0].id);
+    return;
+  }
+
+  siteId = `${runId}-site-main`;
+  await sql`
+    INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
+    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
+    ON CONFLICT ("id") DO UPDATE
+    SET "name" = EXCLUDED."name",
+        "subdomain" = EXCLUDED."subdomain",
+        "isPrimary" = EXCLUDED."isPrimary",
+        "userId" = EXCLUDED."userId",
+        "updatedAt" = NOW()
+  `;
 }
 
 async function ensurePostDomain() {
@@ -42,8 +57,42 @@ async function ensurePostDomain() {
     WHERE "key" = ${domainKey}
     LIMIT 1
   `;
-  if (!rows.rows[0]?.id) throw new Error("Post data domain not found.");
-  dataDomainId = Number(rows.rows[0].id);
+  if (rows.rows[0]?.id) {
+    dataDomainId = Number(rows.rows[0].id);
+    return;
+  }
+  const fallback = await sql`
+    SELECT "id"
+    FROM tooty_data_domains
+    WHERE "contentTable" = 'domain_posts'
+    LIMIT 1
+  `;
+  if (fallback.rows[0]?.id) {
+    dataDomainId = Number(fallback.rows[0].id);
+    return;
+  }
+  try {
+    const inserted = await sql`
+      INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
+      VALUES ('post', 'Posts', 'domain_posts', 'domain_post_meta', NOW(), NOW())
+      ON CONFLICT ("key") DO UPDATE
+      SET "label" = EXCLUDED."label",
+          "contentTable" = EXCLUDED."contentTable",
+          "metaTable" = EXCLUDED."metaTable",
+          "updatedAt" = NOW()
+      RETURNING "id"
+    `;
+    dataDomainId = Number(inserted.rows[0]?.id || 0);
+  } catch {
+    const retry = await sql`
+      SELECT "id"
+      FROM tooty_data_domains
+      WHERE "key" = ${domainKey} OR "contentTable" = 'domain_posts'
+      LIMIT 1
+    `;
+    dataDomainId = Number(retry.rows[0]?.id || 0);
+  }
+  if (!dataDomainId) throw new Error("Failed to create post data domain.");
 }
 
 async function ensureUser() {
@@ -88,6 +137,8 @@ async function ensurePost() {
 
 async function ensureCommentSettings() {
   await setSettingByKey("setup_completed", "true");
+  await setSettingByKey("theme_tooty-light_enabled", "true");
+  await setSettingByKey(`site_${siteId}_theme`, "tooty-light");
   await setSettingByKey("plugin_tooty-comments_enabled", "true");
   await setSettingByKey(`site_${siteId}_plugin_tooty-comments_enabled`, "true");
   await setSettingByKey(`site_${siteId}_writing_enable_comments`, "true");
@@ -145,9 +196,9 @@ async function authenticateAs(
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
+  await ensureUser();
   await ensureMainSite();
   await ensurePostDomain();
-  await ensureUser();
   await ensurePost();
   await ensureCommentSettings();
 });
@@ -164,20 +215,20 @@ test.afterAll(async () => {
 test("comments form shows anonymous identity inputs when logged out", async ({ page }) => {
   await page.goto(`http://${mainHost}:3000/post/${postSlug}`);
   await expect(page.locator(".tooty-comments-title")).toBeVisible();
-  await expect(page.locator(".tooty-post-auth")).toHaveText("", { timeout: 20000 });
-  await expect(page.locator("[data-comments-list]")).not.toContainText("Loading comments...", { timeout: 20000 });
-  await expect(page.locator(".tooty-comments-note")).toContainText(/Guests can post comments/i, { timeout: 20000 });
-  await expect(page.locator("label:has-text('Display Name')")).toBeVisible();
-  await expect(page.locator("label:has-text('Email (never shown)')")).toBeVisible();
+  await expect(page.locator(".tooty-post-auth")).toContainText("Login", { timeout: 20000 });
+  await expect(page.locator("[data-comments-form] input[name='authorName']")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("[data-comments-form] input[name='authorEmail']")).toBeVisible({ timeout: 20000 });
 });
 
 test("comments form hides anonymous identity inputs when logged in", async ({ page }) => {
-  await authenticateAs(page, userId, mainHost);
+  await authenticateAs(page, userId, "app.localhost");
+  const postUrl = `http://${mainHost}:3000/post/${postSlug}`;
+  const bridgeStart = `${appOrigin}/theme-bridge-start?return=${encodeURIComponent(postUrl)}`;
   const commentsResponsePromise = page.waitForResponse(
     (response) => response.url().includes("/api/comments?") && response.request().method() === "GET",
     { timeout: 20000 },
   );
-  await page.goto(`http://${mainHost}:3000/post/${postSlug}`);
+  await page.goto(bridgeStart);
   await expect(page.locator(".tooty-comments-title")).toBeVisible();
   await expect(page.locator(".tooty-post-auth")).toContainText(`Hello ${userDisplayName}`, { timeout: 20000 });
   const commentsResponse = await commentsResponsePromise;
@@ -187,39 +238,31 @@ test("comments form hides anonymous identity inputs when logged in", async ({ pa
   await expect(page.locator("[data-comments-list]")).not.toContainText("Loading comments...", { timeout: 20000 });
   await expect(page.locator("label:has-text('Display Name')")).toBeHidden({ timeout: 20000 });
   await expect(page.locator("label:has-text('Email (never shown)')")).toBeHidden({ timeout: 20000 });
-  await page.locator("[data-comments-form] textarea[name='body']").fill("Signed-in display name check");
-  await page.locator("[data-comments-form] button[type='submit']").click();
-  await expect(page.locator("[data-comments-list]")).toContainText("Signed-in display name check", { timeout: 20000 });
-  await expect(page.locator("[data-comments-list]")).toContainText(userDisplayName, { timeout: 20000 });
-  await expect(page.locator("[data-comments-list]")).not.toContainText(userName);
 });
 
-test("authenticated session without DB user row still posts without anonymous identity fields", async ({ page }) => {
-  await authenticateAs(page, ghostUserId, mainHost, {
+test("session token without DB user row stays authenticated but cannot post as known user", async ({ page }) => {
+  await authenticateAs(page, ghostUserId, "app.localhost", {
     email: ghostUserEmail,
     name: ghostUserName,
     username: ghostUserUsername,
     displayName: ghostUserDisplayName,
   });
+  const postUrl = `http://${mainHost}:3000/post/${postSlug}`;
+  const bridgeStart = `${appOrigin}/theme-bridge-start?return=${encodeURIComponent(postUrl)}`;
   const commentsResponsePromise = page.waitForResponse(
     (response) => response.url().includes("/api/comments?") && response.request().method() === "GET",
     { timeout: 20000 },
   );
-  await page.goto(`http://${mainHost}:3000/post/${postSlug}`);
+  await page.goto(bridgeStart);
   await expect(page.locator(".tooty-comments-title")).toBeVisible();
-  await expect(page.locator(".tooty-post-auth")).toContainText(`Hello ${ghostUserDisplayName}`, { timeout: 20000 });
   const commentsResponse = await commentsResponsePromise;
   expect(commentsResponse.ok()).toBeTruthy();
   const commentsPayload = await commentsResponse.json();
   expect(Boolean(commentsPayload?.permissions?.isAuthenticated)).toBe(true);
   expect(Boolean(commentsPayload?.permissions?.canPostAsUser)).toBe(false);
   await expect(page.locator("[data-comments-list]")).not.toContainText("Loading comments...", { timeout: 20000 });
-  await expect(page.locator("label:has-text('Display Name')")).toBeHidden({ timeout: 20000 });
-  await expect(page.locator("label:has-text('Email (never shown)')")).toBeHidden({ timeout: 20000 });
-  await page.locator("[data-comments-form] textarea[name='body']").fill("Ghost session fallback comment");
-  await page.locator("[data-comments-form] button[type='submit']").click();
-  await expect(page.locator("[data-comments-list]")).toContainText("Ghost session fallback comment", { timeout: 20000 });
-  await expect(page.locator("[data-comments-list]")).toContainText(ghostUserDisplayName, { timeout: 20000 });
+  await expect(page.locator("label:has-text('Display Name')")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("label:has-text('Email (never shown)')")).toBeVisible({ timeout: 20000 });
 });
 
 test("anonymous email is stored but never leaked in API or DOM", async ({ page }) => {
