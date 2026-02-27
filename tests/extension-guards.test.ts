@@ -95,4 +95,46 @@ describe("extension guardrails", () => {
     await expect(api.setSetting("foo", "bar")).rejects.toThrow(/theme-guard/i);
     await expect(api.setPluginSetting("foo", "bar")).rejects.toThrow(/theme-guard/i);
   });
+
+  it("throws when plugin registers comment provider without capability", () => {
+    const api = createPluginExtensionApi("guarded-plugin", {
+      capabilities: { commentProviders: false },
+      coreRegistry: {
+        registerCommentProvider: vi.fn(),
+      } as any,
+    });
+
+    expect(() =>
+      api.registerCommentProvider({
+        id: "comments-basic",
+        create: vi.fn() as any,
+        update: vi.fn() as any,
+        delete: vi.fn() as any,
+        list: vi.fn() as any,
+        moderate: vi.fn() as any,
+      }),
+    ).toThrow(/plugin-guard/i);
+  });
+
+  it("forwards comment provider when capability is enabled", () => {
+    const registerCommentProvider = vi.fn();
+    const api = createPluginExtensionApi("declared-plugin", {
+      capabilities: { commentProviders: true },
+      coreRegistry: {
+        registerCommentProvider,
+      } as any,
+    });
+
+    const registration = {
+      id: "comments-advanced",
+      create: vi.fn() as any,
+      update: vi.fn() as any,
+      delete: vi.fn() as any,
+      list: vi.fn() as any,
+      moderate: vi.fn() as any,
+    };
+    api.registerCommentProvider(registration);
+
+    expect(registerCommentProvider).toHaveBeenCalledWith(registration);
+  });
 });

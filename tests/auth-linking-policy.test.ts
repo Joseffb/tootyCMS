@@ -14,9 +14,6 @@ vi.mock("@/lib/db", () => ({
       users: {
         findFirst: usersFindFirst,
       },
-      cmsSettings: {
-        findFirst: vi.fn(async () => null),
-      },
     },
   },
 }));

@@ -1,7 +1,6 @@
 import db from "@/lib/db";
-import { eq } from "drizzle-orm";
-import { cmsSettings } from "@/lib/schema";
 import { resolveSetupLifecycleState, type SetupLifecycleState } from "@/lib/setup-lifecycle";
+import { getSettingByKey } from "@/lib/settings-store";
 
 export type InstallState = {
   setupRequired: boolean;
@@ -14,25 +13,19 @@ export type InstallState = {
 
 export async function getInstallState(): Promise<InstallState> {
   try {
-    const [user, site, setupCompletedRow, lifecycleStateRow] = await Promise.all([
+    const [user, site, setupCompletedValue, lifecycleStateValue] = await Promise.all([
       db.query.users.findFirst({ columns: { id: true } }),
       db.query.sites.findFirst({ columns: { id: true } }),
-      db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "setup_completed"),
-        columns: { value: true },
-      }),
-      db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "setup_lifecycle_state"),
-        columns: { value: true },
-      }),
+      getSettingByKey("setup_completed"),
+      getSettingByKey("setup_lifecycle_state"),
     ]);
 
     const hasUsers = Boolean(user);
     const hasSites = Boolean(site);
-    const explicitSetupCompleted = setupCompletedRow?.value === "true";
+    const explicitSetupCompleted = setupCompletedValue === "true";
     const setupCompleted = explicitSetupCompleted || (hasUsers && hasSites);
     const lifecycleState = resolveSetupLifecycleState({
-      storedState: lifecycleStateRow?.value ?? "",
+      storedState: lifecycleStateValue ?? "",
       setupCompleted,
       hasUsers,
       hasSites,

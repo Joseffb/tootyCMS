@@ -30,6 +30,8 @@ const FULL_COLUMNS = [
   { table_name: "tooty_posts", column_name: "imageBlurhash" },
   { table_name: "tooty_domain_posts", column_name: "image" },
   { table_name: "tooty_domain_posts", column_name: "imageBlurhash" },
+  { table_name: "tooty_domain_posts", column_name: "password" },
+  { table_name: "tooty_domain_posts", column_name: "usePassword" },
 ];
 
 const REQUIRED_TABLES = [
@@ -86,7 +88,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.02.26.1-version")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.02.26.3-version")).toBe(true);
   });
 
   it("applyPendingDatabaseMigrations updates tracked schema version", async () => {
@@ -94,5 +96,39 @@ describe("db health version tracking", () => {
 
     expect(mocks.setTextSetting).toHaveBeenCalledWith(DB_SCHEMA_VERSION_KEY, TARGET_DB_SCHEMA_VERSION);
     expect(mocks.setTextSetting).toHaveBeenCalledWith(DB_SCHEMA_TARGET_VERSION_KEY, TARGET_DB_SCHEMA_VERSION);
+  });
+
+  it("is idempotent across two migration runs with no duplicate state or version drift", async () => {
+    const settingState = new Map<string, string>();
+    mocks.setTextSetting.mockImplementation(async (key: string, value: string) => {
+      settingState.set(key, value);
+    });
+
+    await applyPendingDatabaseMigrations();
+    const executeCallsFirstRun = mocks.execute.mock.calls.length;
+    const updatedAtAfterFirstRun = settingState.get("db_schema_updated_at");
+
+    await applyPendingDatabaseMigrations();
+    const executeCallsSecondRun = mocks.execute.mock.calls.length - executeCallsFirstRun;
+    const updatedAtAfterSecondRun = settingState.get("db_schema_updated_at");
+
+    // 1) Runs migration twice.
+    expect(executeCallsFirstRun).toBeGreaterThan(0);
+    expect(executeCallsSecondRun).toBe(executeCallsFirstRun);
+
+    // 2) No duplicate state keys.
+    expect(Array.from(settingState.keys()).sort()).toEqual([
+      "db_schema_target_version",
+      "db_schema_updated_at",
+      "db_schema_version",
+    ]);
+
+    // 3) No version drift.
+    expect(settingState.get(DB_SCHEMA_VERSION_KEY)).toBe(TARGET_DB_SCHEMA_VERSION);
+    expect(settingState.get(DB_SCHEMA_TARGET_VERSION_KEY)).toBe(TARGET_DB_SCHEMA_VERSION);
+
+    // 4) No partial reapplication: each run fully reaches schema-current marker update.
+    expect(String(updatedAtAfterFirstRun || "").length).toBeGreaterThan(0);
+    expect(String(updatedAtAfterSecondRun || "").length).toBeGreaterThan(0);
   });
 });

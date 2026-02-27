@@ -38,6 +38,16 @@ export default async function ProfileSettingsPanel(props: { siteId?: string; for
             />
           </div>
           <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500">Display name</label>
+            <input
+              name="displayName"
+              defaultValue={data.user.displayName}
+              placeholder="How your name appears publicly"
+              maxLength={64}
+              className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-600 dark:bg-black dark:text-white"
+            />
+          </div>
+          <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500">Email</label>
             <input
               name="email"

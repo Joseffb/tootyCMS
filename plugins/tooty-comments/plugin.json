@@ -1,0 +1,35 @@
+{
+  "id": "tooty-comments",
+  "name": "Tooty Comments",
+  "description": "Baseline comment provider and governance controls for site content.",
+  "version": "0.1.0",
+  "minCoreVersion": "0.1.x",
+  "scope": "site",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "commentProviders": true
+  },
+  "menu": {
+    "label": "Tooty Comments",
+    "path": "/app/plugins/tooty-comments"
+  },
+  "settingsFields": [
+    {
+      "key": "requireModeration",
+      "label": "Require Moderation By Default",
+      "type": "checkbox",
+      "defaultValue": true
+    },
+    {
+      "key": "allowThreadReplies",
+      "label": "Allow Single-Level Replies",
+      "type": "checkbox",
+      "defaultValue": true
+    }
+  ],
+  "developer": "Tooty CMS",
+  "distribution": "core"
+}

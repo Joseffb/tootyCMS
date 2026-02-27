@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
+import { setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-rbac-${Date.now()}`;
 const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
@@ -12,11 +13,7 @@ const roleSlug = "seo-manager";
 const runRbacE2E = process.env.RUN_RBAC_E2E === "1";
 
 async function ensureSetupCompleted() {
-  await sql`
-    INSERT INTO tooty_cms_settings ("key", "value")
-    VALUES ('setup_completed', 'true')
-    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"
-  `;
+  await setSettingByKey("setup_completed", "true");
 }
 
 async function ensureAdminUser(passwordHash: string) {

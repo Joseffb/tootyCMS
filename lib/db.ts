@@ -1,9 +1,9 @@
 import { sql } from "@vercel/postgres";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import * as schema from "./schema";
-import { isDebugMode } from "./debug";
+import { isSqlDebugMode } from "./debug";
 
-const db = drizzle(sql, { schema, logger: isDebugMode() });
+const db = drizzle(sql, { schema, logger: isSqlDebugMode() });
 
 export default db;
 

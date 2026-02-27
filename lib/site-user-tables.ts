@@ -1,6 +1,6 @@
 import db from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
-import { siteUserTableRegistry } from "@/lib/schema";
+import { siteUserTableRegistry, users } from "@/lib/schema";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
@@ -18,8 +18,15 @@ function userMetaTableName(tableIndex: number) {
 }
 
 const siteRegistryTableName = `${normalizedPrefix}site_user_table_registry`;
+const siteUserTableCache = new Map<string, { tableIndex: number; usersTable: string; userMetaTable: string }>();
+const siteUserTableInFlight = new Map<string, Promise<{ tableIndex: number; usersTable: string; userMetaTable: string }>>();
+let registryEnsured = false;
+let registryEnsurePromise: Promise<void> | null = null;
 
 async function ensureRegistryTable() {
+  if (registryEnsured) return;
+  if (registryEnsurePromise) return registryEnsurePromise;
+  registryEnsurePromise = (async () => {
   const prefixedSites = `${normalizedPrefix}sites`;
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoted(siteRegistryTableName)} (
@@ -29,6 +36,11 @@ async function ensureRegistryTable() {
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `));
+    registryEnsured = true;
+  })().finally(() => {
+    if (!registryEnsured) registryEnsurePromise = null;
+  });
+  return registryEnsurePromise;
 }
 
 type QueryRows<T> = { rows?: T[] };
@@ -118,16 +130,36 @@ async function allocateSiteTableIndex(siteId: string) {
 }
 
 export async function ensureSiteUserTables(siteId: string) {
-  const tableIndex = await allocateSiteTableIndex(siteId);
-  await createPhysicalSiteUserTables(tableIndex);
-  return {
-    tableIndex,
-    usersTable: usersTableName(tableIndex),
-    userMetaTable: userMetaTableName(tableIndex),
-  };
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) throw new Error("siteId is required.");
+  const cached = siteUserTableCache.get(normalizedSiteId);
+  if (cached) return cached;
+  const inFlight = siteUserTableInFlight.get(normalizedSiteId);
+  if (inFlight) return inFlight;
+  const run = (async () => {
+    const tableIndex = await allocateSiteTableIndex(normalizedSiteId);
+    await createPhysicalSiteUserTables(tableIndex);
+    const resolved = {
+      tableIndex,
+      usersTable: usersTableName(tableIndex),
+      userMetaTable: userMetaTableName(tableIndex),
+    };
+    siteUserTableCache.set(normalizedSiteId, resolved);
+    return resolved;
+  })();
+  siteUserTableInFlight.set(normalizedSiteId, run);
+  return run.finally(() => {
+    siteUserTableInFlight.delete(normalizedSiteId);
+  });
 }
 
 export async function upsertSiteUserRole(siteId: string, userId: string, role: string) {
+  const existingUser = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { id: true },
+  });
+  if (!existingUser) return;
+
   const info = await ensureSiteUserTables(siteId);
   await db.execute(sql`
     INSERT INTO ${sql.raw(quoted(info.usersTable))} ("user_id", "role", "is_active")
@@ -138,17 +170,28 @@ export async function upsertSiteUserRole(siteId: string, userId: string, role: s
 }
 
 export async function getSiteUserRole(siteId: string, userId: string) {
-  await ensureRegistryTable();
-  const [registry] = await db
-    .select({ tableIndex: siteUserTableRegistry.tableIndex })
-    .from(siteUserTableRegistry)
-    .where(eq(siteUserTableRegistry.siteId, siteId))
-    .limit(1);
-  if (!registry) return null;
-
-  const usersTable = usersTableName(registry.tableIndex);
+  const normalizedSiteId = String(siteId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedSiteId || !normalizedUserId) return null;
+  const cached = siteUserTableCache.get(normalizedSiteId);
+  let usersTable = cached?.usersTable;
+  if (!usersTable) {
+    await ensureRegistryTable();
+    const [registry] = await db
+      .select({ tableIndex: siteUserTableRegistry.tableIndex })
+      .from(siteUserTableRegistry)
+      .where(eq(siteUserTableRegistry.siteId, normalizedSiteId))
+      .limit(1);
+    if (!registry) return null;
+    usersTable = usersTableName(registry.tableIndex);
+    siteUserTableCache.set(normalizedSiteId, {
+      tableIndex: registry.tableIndex,
+      usersTable,
+      userMetaTable: userMetaTableName(registry.tableIndex),
+    });
+  }
   const result = (await db.execute(
-    sql`SELECT "role", "is_active" FROM ${sql.raw(quoted(usersTable))} WHERE "user_id" = ${userId} LIMIT 1`
+    sql`SELECT "role", "is_active" FROM ${sql.raw(quoted(usersTable))} WHERE "user_id" = ${normalizedUserId} LIMIT 1`
   )) as QueryRows<{ role?: string | null; is_active?: boolean | null }>;
   const row = result.rows?.[0];
   if (!row || row.is_active === false) return null;

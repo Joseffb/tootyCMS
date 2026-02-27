@@ -1,6 +1,5 @@
 import db from "@/lib/db";
 import {
-  cmsSettings,
   domainPosts,
   dataDomains,
   siteDataDomains,
@@ -13,7 +12,9 @@ import {
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
+import { getSettingByKey, getSettingsByKeys, setSettingByKey } from "@/lib/settings-store";
 import type {
+  PluginCommentProviderRegistration,
   ContentStateRegistration,
   ContentTransitionRegistration,
   PluginAuthAdapterRegistration,
@@ -25,6 +26,14 @@ import type {
 } from "@/lib/kernel";
 import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateScheduleEntry } from "@/lib/scheduler";
 import { purgeCommunicationQueue, retryPendingCommunications, sendCommunication } from "@/lib/communications";
+import {
+  createComment,
+  deleteComment,
+  listComments,
+  listCommentsForExport,
+  moderateComment,
+  updateComment,
+} from "@/lib/comments-spine";
 import { dispatchWebcallback, listRecentWebcallbackEvents, purgeWebcallbackEvents } from "@/lib/webcallbacks";
 import {
   deleteWebhookSubscription,
@@ -55,6 +64,7 @@ export type PluginCapabilities = {
   authExtensions: boolean;
   scheduleJobs: boolean;
   communicationProviders: boolean;
+  commentProviders: boolean;
   webCallbacks: boolean;
 };
 
@@ -64,6 +74,7 @@ type PluginCoreRegistry = {
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
+  registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
   registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
   registerContentState: (registration: ContentStateRegistration) => void;
   registerContentTransition: (registration: ContentTransitionRegistration) => void;
@@ -153,6 +164,14 @@ type CoreServiceApi = {
     retryPending: typeof retryPendingCommunications;
     purge: typeof purgeCommunicationQueue;
   };
+  comments: {
+    create: typeof createComment;
+    list: typeof listComments;
+    update: typeof updateComment;
+    delete: typeof deleteComment;
+    moderate: typeof moderateComment;
+    listForExport: typeof listCommentsForExport;
+  };
   webcallbacks: {
     dispatch: typeof dispatchWebcallback;
     listRecent: typeof listRecentWebcallbackEvents;
@@ -179,6 +198,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
   registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
+  registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
   registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
   registerContentState: (registration: ContentStateRegistration) => void;
   registerContentTransition: (registration: ContentTransitionRegistration) => void;
@@ -244,6 +264,7 @@ const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
   authExtensions: false,
   scheduleJobs: false,
   communicationProviders: false,
+  commentProviders: false,
   webCallbacks: false,
 };
 
@@ -310,21 +331,11 @@ function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOption
       return site ?? null;
     },
     async getSetting(key: string, fallback = "") {
-      const row = await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, key),
-        columns: { value: true },
-      });
-      return row?.value ?? fallback;
+      return (await getSettingByKey(key)) ?? fallback;
     },
     async getPluginSetting(key: string, fallback = "") {
       const finalKey = pluginSettingKey(pluginId, key);
-      if (!pluginId) {
-        const row = await db.query.cmsSettings.findFirst({
-          where: eq(cmsSettings.key, finalKey),
-          columns: { value: true },
-        });
-        return row?.value ?? fallback;
-      }
+      if (!pluginId) return (await getSettingByKey(finalKey)) ?? fallback;
 
       const globalConfigLookupKey = pluginConfigKey(pluginId);
       const siteConfigLookupKey = boundSiteId ? sitePluginConfigKey(boundSiteId, pluginId) : "";
@@ -335,11 +346,7 @@ function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOption
         lookupKeys.push(siteConfigLookupKey);
       }
 
-      const rows = await db
-        .select({ key: cmsSettings.key, value: cmsSettings.value })
-        .from(cmsSettings)
-        .where(inArray(cmsSettings.key, lookupKeys));
-      const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+      const byKey = await getSettingsByKeys(lookupKeys);
 
       if (boundSiteId && !useGlobalOnly) {
         const siteLegacyValue = byKey[siteLegacyLookupKey];
@@ -396,24 +403,12 @@ export function createPluginExtensionApi(
     }
   };
   const setSetting: PluginExtensionApi["setSetting"] = async (key, value) => {
-    await db
-      .insert(cmsSettings)
-      .values({ key, value })
-      .onConflictDoUpdate({
-        target: cmsSettings.key,
-        set: { value },
-      });
+    await setSettingByKey(key, value);
   };
 
   const setPluginSetting: PluginExtensionApi["setPluginSetting"] = async (key, value) => {
     const finalKey = pluginSettingKey(pluginId, key);
-    await db
-      .insert(cmsSettings)
-      .values({ key: finalKey, value })
-      .onConflictDoUpdate({
-        target: cmsSettings.key,
-        set: { value },
-      });
+    await setSettingByKey(finalKey, value);
   };
 
   const registerContentType: PluginExtensionApi["registerContentType"] = (registration) => {
@@ -464,6 +459,16 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerCommunicationProvider(registration);
+    };
+
+  const registerCommentProvider: PluginExtensionApi["registerCommentProvider"] = (registration) => {
+      requireCapability("commentProviders", "registerCommentProvider()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerCommentProvider() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerCommentProvider(registration);
     };
 
   const registerWebcallbackHandler: PluginExtensionApi["registerWebcallbackHandler"] = (registration) => {
@@ -790,6 +795,14 @@ export function createPluginExtensionApi(
       retryPending: retryPendingCommunications,
       purge: purgeCommunicationQueue,
     },
+    comments: {
+      create: createComment,
+      list: listComments,
+      update: updateComment,
+      delete: deleteComment,
+      moderate: moderateComment,
+      listForExport: listCommentsForExport,
+    },
     webcallbacks: {
       dispatch: dispatchWebcallback,
       listRecent: listRecentWebcallbackEvents,
@@ -817,6 +830,7 @@ export function createPluginExtensionApi(
     registerAuthAdapter,
     registerScheduleHandler,
     registerCommunicationProvider,
+    registerCommentProvider,
     registerWebcallbackHandler,
     registerContentState,
     registerContentTransition,
@@ -944,7 +958,11 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
 // Backward-compatible alias for plugin runtime call sites.
 export const createExtensionApi = createPluginExtensionApi;
 
-export async function getThemeContextApi(siteId: string, queryRequests: ThemeQueryRequest[] = []) {
+export async function getThemeContextApi(
+  siteId: string,
+  queryRequests: ThemeQueryRequest[] = [],
+  actor: { userId?: string | null } = {},
+) {
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
     columns: {
@@ -957,48 +975,20 @@ export async function getThemeContextApi(siteId: string, queryRequests: ThemeQue
   });
 
   const domains = await createThemeExtensionApi().listDataDomains(siteId);
-  const siteUrl =
-    (
-      await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "site_url"),
-        columns: { value: true },
-      })
-    )?.value ?? "";
-
-  const seoMetaTitle =
-    (
-      await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "seo_meta_title"),
-        columns: { value: true },
-      })
-    )?.value ?? "";
-
-  const seoMetaDescription =
-    (
-      await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "seo_meta_description"),
-        columns: { value: true },
-      })
-    )?.value ?? "";
-
-  const publicPluginSettingsAllowlist =
-    (
-      await db.query.cmsSettings.findFirst({
-        where: eq(cmsSettings.key, "theme_public_plugin_setting_keys"),
-        columns: { value: true },
-      })
-    )?.value ?? "";
-  const allowedPluginSettingKeys = publicPluginSettingsAllowlist
+  const [siteUrl, seoMetaTitle, seoMetaDescription, publicPluginSettingsAllowlist] = await Promise.all([
+    getSettingByKey("site_url"),
+    getSettingByKey("seo_meta_title"),
+    getSettingByKey("seo_meta_description"),
+    getSettingByKey("theme_public_plugin_setting_keys"),
+  ]);
+  const allowedPluginSettingKeys = String(publicPluginSettingsAllowlist ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter((item) => item.startsWith("plugin_"));
   const pluginSettings = allowedPluginSettingKeys.length
-    ? await db
-        .select({ key: cmsSettings.key, value: cmsSettings.value })
-        .from(cmsSettings)
-        .where(inArray(cmsSettings.key, allowedPluginSettingKeys))
-    : [];
-  const query = await runThemeQueries(siteId, queryRequests);
+    ? await getSettingsByKeys(allowedPluginSettingKeys)
+    : {};
+  const query = await runThemeQueries(siteId, queryRequests, actor);
 
   return {
     site,
@@ -1008,7 +998,7 @@ export async function getThemeContextApi(siteId: string, queryRequests: ThemeQue
       seoMetaDescription,
     },
     domains,
-    pluginSettings: Object.fromEntries(pluginSettings.map((row) => [row.key, row.value])),
+    pluginSettings,
     query,
   };
 }

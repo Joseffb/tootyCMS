@@ -21,7 +21,26 @@ async function resetTootyTables() {
   await sql`DELETE FROM "tooty_verificationTokens"`;
   await sql`DELETE FROM tooty_sites`;
   await sql`DELETE FROM tooty_users`;
-  await sql`DELETE FROM tooty_cms_settings`;
+  await sql`DELETE FROM tooty_system_settings`;
+  await sql`
+    DO $$
+    DECLARE
+      record_row RECORD;
+    BEGIN
+      FOR record_row IN
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename ~ '^tooty_site_[0-9]+_settings$'
+      LOOP
+        EXECUTE format('DROP TABLE IF EXISTS %I CASCADE', record_row.tablename);
+      END LOOP;
+      IF to_regclass('public.tooty_site_settings_table_registry') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM tooty_site_settings_table_registry';
+      END IF;
+    END
+    $$;
+  `;
 }
 
 test.describe.configure({ mode: "serial" });

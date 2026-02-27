@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { getDomainPostsForSite, getPostData, getSiteData } from "@/lib/fetchers";
 import SitePostContent from "./page-content";
 import db from "@/lib/db";
@@ -19,17 +20,33 @@ import { isDomainArchiveSegment, normalizeDomainKeyFromSegment, normalizeDomainS
 import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
 import { buildArchivePath, buildDetailPath, domainPluralSegment, resolveNoDomainPrefixDomain } from "@/lib/permalink";
 import { trace } from "@/lib/debug";
+import { hasEnabledCommentProvider } from "@/lib/comments-spine";
+import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
+import { getThemeRenderContext } from "@/lib/theme-render-context";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
 
+function readBooleanMeta(entries: Array<{ key?: string; value?: string }> | undefined, key: string, fallback = true) {
+  const match = (entries || []).find((entry) => String(entry?.key || "").trim().toLowerCase() === key.toLowerCase());
+  if (!match) return fallback;
+  const normalized = String(match.value || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+
 export default async function SitePostPage({
                                              params,
+                                             searchParams,
                                            }: {
   params: Params;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   // Await the entire params object.
   const resolvedParams = await params;
+  const resolvedSearchParams = (await searchParams) || {};
 
   const decodedDomain = decodeURIComponent(resolvedParams.domain);
   const decodedSlug = decodeURIComponent(resolvedParams.slug);
@@ -114,6 +131,11 @@ export default async function SitePostPage({
             archiveCandidates,
           );
           if (themeTemplate) {
+            const themeRuntime = await getThemeRenderContext(siteId, "domain_archive", [
+              themeTemplate.template,
+              themeTemplate.partials?.header,
+              themeTemplate.partials?.footer,
+            ]);
             const html = renderThemeTemplate(themeTemplate.template, {
               theme_header: themeTemplate.partials?.header || "",
               theme_footer: themeTemplate.partials?.footer || "",
@@ -141,6 +163,8 @@ export default async function SitePostPage({
                 privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
               },
               menu_items: menuItems,
+              tooty: themeRuntime.tooty,
+              auth: themeRuntime.auth,
               theme: {
                 id: themeTemplate.themeId || "",
                 name: themeTemplate.themeName || "",
@@ -189,6 +213,49 @@ export default async function SitePostPage({
   if (!data) {
     notFound();
   }
+  const detailPath = buildDetailPath("post", decodedSlug, writing);
+  const passwordError = String(resolvedSearchParams?.pw || "") === "invalid";
+  const isPasswordProtected = requiresPostPasswordGate({
+    usePassword: (data as any)?.usePassword,
+    password: (data as any)?.password,
+  });
+  if (isPasswordProtected) {
+    const cookieStore = await cookies();
+    const unlocked = hasPostPasswordAccess(cookieStore, {
+      postId: String((data as any)?.id || ""),
+      password: String((data as any)?.password || ""),
+    });
+    if (!unlocked) {
+      return (
+        <main className="mx-auto min-h-screen w-full max-w-xl px-5 py-14">
+          <div className="rounded-2xl border border-stone-300 bg-white p-6 shadow-sm">
+            <h1 className="text-2xl font-semibold text-stone-900">This post is password protected</h1>
+            <p className="mt-2 text-sm text-stone-600">Enter the password to view content and comments.</p>
+            <form method="post" action="/api/post-password" className="mt-5 space-y-3">
+              <input type="hidden" name="postId" value={String((data as any)?.id || "")} />
+              <input type="hidden" name="returnTo" value={detailPath} />
+              <label className="block text-sm font-medium text-stone-700">
+                Password
+                <input
+                  name="password"
+                  type="password"
+                  required
+                  className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900"
+                />
+              </label>
+              {passwordError ? <p className="text-sm text-red-600">Incorrect password. Please try again.</p> : null}
+              <button
+                type="submit"
+                className="inline-flex items-center rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700"
+              >
+                View post
+              </button>
+            </form>
+          </div>
+        </main>
+      );
+    }
+  }
 
   const layout = await kernel.applyFilters("render:layout", (data as any)?.layout ?? "post", {
     domain: decodedDomain,
@@ -231,6 +298,10 @@ export default async function SitePostPage({
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
+  const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
+  const commentsPluginEnabled = siteId ? await hasEnabledCommentProvider(siteId) : false;
+  const commentsGateEnabled = commentsPluginEnabled && Boolean(writing.enableComments);
+  const useComments = readBooleanMeta(postMeta, "use_comments", commentsGateEnabled);
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
@@ -242,6 +313,11 @@ export default async function SitePostPage({
       (await getThemeLayoutTemplateForSite(siteId, { layout: normalizedLayout })) ||
       (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"]));
     if (themeTemplate) {
+      const themeRuntime = await getThemeRenderContext(siteId, "domain_detail", [
+        themeTemplate.template,
+        themeTemplate.partials?.header,
+        themeTemplate.partials?.footer,
+      ]);
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
@@ -254,6 +330,7 @@ export default async function SitePostPage({
           domain: siteUrl.replace(/^https?:\/\//, ""),
         },
         post: {
+          id: (data as any)?.id || "",
           title: (data as any)?.title || "Untitled",
           description: (data as any)?.description || "",
           slug: (data as any)?.slug || decodedSlug,
@@ -261,7 +338,10 @@ export default async function SitePostPage({
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
           content_html: toThemePostHtml((data as any)?.content || ""),
+          use_comments: useComments,
         },
+        comments_enabled: commentsPluginEnabled,
+        comments_gate_enabled: commentsGateEnabled,
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
         content: toThemePostHtml((data as any)?.content || ""),
         links: {
@@ -273,6 +353,8 @@ export default async function SitePostPage({
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
         menu_items: menuItems,
+        tooty: themeRuntime.tooty,
+        auth: themeRuntime.auth,
         theme: {
           id: themeTemplate.themeId || "",
           name: themeTemplate.themeName || "",

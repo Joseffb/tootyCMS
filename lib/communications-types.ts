@@ -1,0 +1,20 @@
+export type CommunicationListItem = {
+  id: string;
+  siteId: string | null;
+  siteName: string | null;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  channel: string;
+  to: string;
+  subject: string | null;
+  body: string;
+  metadata: unknown;
+  status: string;
+  providerId: string | null;
+  externalId: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};

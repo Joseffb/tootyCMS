@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
+import { setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-auth-break-${Date.now()}`;
 const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
@@ -15,11 +16,7 @@ const adminEmail = `${runId}-admin@example.com`;
 const editorEmail = `${runId}-editor@example.com`;
 
 async function upsertSetting(key: string, value: string) {
-  await sql`
-    INSERT INTO tooty_cms_settings ("key", "value")
-    VALUES (${key}, ${value})
-    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"
-  `;
+  await setSettingByKey(key, value);
 }
 
 async function ensureUser(params: {

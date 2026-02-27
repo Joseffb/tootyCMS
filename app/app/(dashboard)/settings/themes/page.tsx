@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { listThemesWithState, saveThemeConfig, setThemeEnabled } from "@/lib/themes";
 import { revalidatePath } from "next/cache";
 import CatalogTabs from "@/components/catalog-tabs";
@@ -161,7 +162,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
 
       {activeTab === "installed" ? (
       <div className="flex items-center gap-2">
-        <a
+        <Link
           href="/settings/themes?tab=installed&view=all"
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "all"
@@ -170,8 +171,8 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
           }`}
         >
           View All
-        </a>
-        <a
+        </Link>
+        <Link
           href="/settings/themes?tab=installed&view=enabled"
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "enabled"
@@ -180,8 +181,8 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
           }`}
         >
           View Enabled
-        </a>
-        <a
+        </Link>
+        <Link
           href="/settings/themes?tab=installed&view=disabled"
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "disabled"
@@ -190,7 +191,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
           }`}
         >
           View Disabled
-        </a>
+        </Link>
       </div>
       ) : null}
 

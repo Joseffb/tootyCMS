@@ -3,6 +3,7 @@ import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { getAvailablePlugins } from "../../lib/plugins";
 import { randomUUID } from "node:crypto";
+import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-plugins-${Date.now()}`;
 const password = "password123";
@@ -32,16 +33,11 @@ const globalNetworkRequiredKey = () => `plugin_${pluginId}_network_required`;
 const siteEnabledKey = (siteId: string) => `site_${siteId}_plugin_${pluginId}_enabled`;
 
 async function upsertSetting(key: string, value: string) {
-  await sql`
-    INSERT INTO tooty_cms_settings ("key", "value")
-    VALUES (${key}, ${value})
-    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"
-  `;
+  await setSettingByKey(key, value);
 }
 
 async function readSetting(key: string) {
-  const result = await sql`SELECT "value" FROM tooty_cms_settings WHERE "key" = ${key} LIMIT 1`;
-  return String(result.rows[0]?.value ?? "");
+  return String((await getSettingByKey(key)) ?? "");
 }
 
 async function ensureUser(params: {

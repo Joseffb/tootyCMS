@@ -1,7 +1,5 @@
-import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { eq } from "drizzle-orm";
 import { withLocalDevPort } from "@/lib/site-url";
+import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 
 export const RANDOM_DEFAULT_IMAGES_KEY = "random_default_images_enabled";
 export const SITE_URL_KEY = "site_url";
@@ -15,6 +13,7 @@ export const MAIN_HEADER_ENABLED_KEY = "main_header_enabled";
 export const MAIN_HEADER_SHOW_NETWORK_SITES_KEY = "main_header_show_network_sites";
 export const WRITING_PERMALINK_STYLE_KEY = "writing_permalink_style";
 export const WRITING_EDITOR_MODE_KEY = "writing_editor_mode";
+export const WRITING_ENABLE_COMMENTS_KEY = "writing_enable_comments";
 export const WRITING_CATEGORY_BASE_KEY = "writing_category_base";
 export const WRITING_TAG_BASE_KEY = "writing_tag_base";
 export const WRITING_PERMALINK_MODE_KEY = "writing_permalink_mode";
@@ -35,10 +34,8 @@ function siteScopedSettingKey(siteId: string, key: string) {
 }
 
 async function getSettingRow(key: string) {
-  return db.query.cmsSettings.findFirst({
-    where: eq(cmsSettings.key, key),
-    columns: { value: true },
-  });
+  const value = await getSettingByKey(key);
+  return value === undefined ? null : { value };
 }
 
 export async function getBooleanSetting(key: string, fallback: boolean) {
@@ -48,13 +45,7 @@ export async function getBooleanSetting(key: string, fallback: boolean) {
 }
 
 export async function setBooleanSetting(key: string, value: boolean) {
-  await db
-    .insert(cmsSettings)
-    .values({ key, value: value ? "true" : "false" })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: value ? "true" : "false" },
-    });
+  await setSettingByKey(key, value ? "true" : "false");
 }
 
 export async function getTextSetting(key: string, fallback = "") {
@@ -64,13 +55,7 @@ export async function getTextSetting(key: string, fallback = "") {
 
 export async function setTextSetting(key: string, rawValue: string) {
   const value = rawValue.trim();
-  await db
-    .insert(cmsSettings)
-    .values({ key, value })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value },
-    });
+  await setSettingByKey(key, value);
 }
 
 export async function getSiteTextSetting(siteId: string, key: string, fallback = "") {
@@ -255,13 +240,14 @@ export async function getWritingSettings() {
 
 export async function getSiteWritingSettings(siteId: string) {
   const global = await getWritingSettings();
-  const [permalinkMode, singlePattern, listPattern, noDomainPrefix, noDomainDataDomain, editorMode] = await Promise.all([
+  const [permalinkMode, singlePattern, listPattern, noDomainPrefix, noDomainDataDomain, editorMode, enableComments] = await Promise.all([
     getSiteTextSetting(siteId, WRITING_PERMALINK_MODE_KEY, "default"),
     getSiteTextSetting(siteId, WRITING_SINGLE_PATTERN_KEY, "/%domain%/%slug%"),
     getSiteTextSetting(siteId, WRITING_LIST_PATTERN_KEY, "/%domain_plural%"),
     getSiteTextSetting(siteId, WRITING_NO_DOMAIN_PREFIX_KEY, ""),
     getSiteTextSetting(siteId, WRITING_NO_DOMAIN_DATA_DOMAIN_KEY, "post"),
     getSiteTextSetting(siteId, WRITING_EDITOR_MODE_KEY, global.editorMode),
+    getSiteBooleanSetting(siteId, WRITING_ENABLE_COMMENTS_KEY, true),
   ]);
 
   const permalinkModeValue: "default" | "custom" = permalinkMode === "custom" ? "custom" : "default";
@@ -273,6 +259,7 @@ export async function getSiteWritingSettings(siteId: string) {
     noDomainPrefix: noDomainPrefix.trim().toLowerCase(),
     noDomainDataDomain: noDomainDataDomain.trim().toLowerCase() || "post",
     editorMode: editorMode || global.editorMode,
+    enableComments,
     categoryBase: global.categoryBase,
     tagBase: global.tagBase,
   };

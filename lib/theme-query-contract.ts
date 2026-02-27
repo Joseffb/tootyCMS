@@ -16,5 +16,6 @@ export function resolveThemeQueryRequests(theme: ThemeContract | null | undefine
       source: query.source,
       scope: query.scope || "site",
       params: query.params || {},
+      requiresCapability: query.requiresCapability,
     }));
 }

@@ -1,6 +1,3 @@
-import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { eq } from "drizzle-orm";
 import { createKernel, type MenuItem } from "@/lib/kernel";
 import { createPluginExtensionApi, type PluginCapabilities } from "@/lib/extension-api";
 import {
@@ -19,6 +16,7 @@ import {
 } from "@/lib/plugins";
 import { pathToFileURL } from "url";
 import { trace } from "@/lib/debug";
+import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 
 function isAuthFilterName(name: unknown) {
   return (
@@ -40,61 +38,28 @@ function parseJson<T>(raw: string | undefined, fallback: T): T {
 }
 
 export async function setPluginEnabled(pluginId: string, enabled: boolean) {
-  await db
-    .insert(cmsSettings)
-    .values({ key: pluginEnabledKey(pluginId), value: enabled ? "true" : "false" })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: enabled ? "true" : "false" },
-    });
+  await setSettingByKey(pluginEnabledKey(pluginId), enabled ? "true" : "false");
 }
 
 export async function setPluginNetworkRequired(pluginId: string, networkRequired: boolean) {
-  await db
-    .insert(cmsSettings)
-    .values({ key: pluginNetworkRequiredKey(pluginId), value: networkRequired ? "true" : "false" })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: networkRequired ? "true" : "false" },
-    });
+  await setSettingByKey(pluginNetworkRequiredKey(pluginId), networkRequired ? "true" : "false");
 }
 
 export async function setSitePluginEnabled(siteId: string, pluginId: string, enabled: boolean) {
-  await db
-    .insert(cmsSettings)
-    .values({ key: sitePluginEnabledKey(siteId, pluginId), value: enabled ? "true" : "false" })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: enabled ? "true" : "false" },
-    });
+  await setSettingByKey(sitePluginEnabledKey(siteId, pluginId), enabled ? "true" : "false");
 }
 
 export async function saveSitePluginConfig(siteId: string, pluginId: string, config: Record<string, unknown>) {
-  await db
-    .insert(cmsSettings)
-    .values({ key: sitePluginConfigKey(siteId, pluginId), value: JSON.stringify(config) })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: JSON.stringify(config) },
-    });
+  await setSettingByKey(sitePluginConfigKey(siteId, pluginId), JSON.stringify(config));
 }
 
 export async function savePluginConfig(pluginId: string, config: Record<string, unknown>) {
-  await db
-    .insert(cmsSettings)
-    .values({ key: pluginConfigKey(pluginId), value: JSON.stringify(config) })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: JSON.stringify(config) },
-    });
+  await setSettingByKey(pluginConfigKey(pluginId), JSON.stringify(config));
 }
 
 export async function getPluginConfig(pluginId: string) {
-  const row = await db.query.cmsSettings.findFirst({
-    where: eq(cmsSettings.key, pluginConfigKey(pluginId)),
-    columns: { value: true },
-  });
-  return parseJson<Record<string, unknown>>(row?.value, {});
+  const value = await getSettingByKey(pluginConfigKey(pluginId));
+  return parseJson<Record<string, unknown>>(value, {});
 }
 
 function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
@@ -107,6 +72,7 @@ function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
     authExtensions: Boolean(caps.authExtensions ?? false),
     scheduleJobs: Boolean(caps.scheduleJobs ?? false),
     communicationProviders: Boolean(caps.communicationProviders ?? false),
+    commentProviders: Boolean(caps.commentProviders ?? false),
     webCallbacks: Boolean(caps.webCallbacks ?? false),
   };
 }
@@ -135,6 +101,23 @@ function createGuardedKernelView(
       if (isAuthFilterName(args[0])) {
         ensure(capabilities.authExtensions, `kernel.addFilter(${String(args[0])})`);
       }
+      if (args[0] === "domain:query" && pluginId !== "export-import") {
+        const originalCallback = args[1];
+        const wrappedCallback = (async (value: unknown, context?: unknown) => {
+          const queryName = String((context as any)?.name || "")
+            .trim()
+            .toLowerCase();
+          if (queryName.startsWith("export_import.")) {
+            trace("plugins", "blocked export/import query handler for non-migration plugin", {
+              pluginId,
+              queryName,
+            });
+            return value;
+          }
+          return originalCallback(value as any, context);
+        }) as Parameters<typeof kernel.addFilter>[1];
+        return kernel.addFilter(args[0], wrappedCallback, args[2]);
+      }
       return kernel.addFilter(...args);
     },
     registerMenuLocation: (...args: Parameters<typeof kernel.registerMenuLocation>) => {
@@ -144,6 +127,18 @@ function createGuardedKernelView(
     addMenuItems: (...args: Parameters<typeof kernel.addMenuItems>) => {
       ensure(capabilities.adminExtensions, "kernel.addMenuItems");
       return kernel.addMenuItems(...args);
+    },
+    enqueueScript: (...args: Parameters<typeof kernel.enqueueScript>) => {
+      ensure(capabilities.hooks, "kernel.enqueueScript");
+      return kernel.enqueueScript(...args);
+    },
+    enqueueStyle: (...args: Parameters<typeof kernel.enqueueStyle>) => {
+      ensure(capabilities.hooks, "kernel.enqueueStyle");
+      return kernel.enqueueStyle(...args);
+    },
+    getEnqueuedAssets: (...args: Parameters<typeof kernel.getEnqueuedAssets>) => {
+      ensure(capabilities.hooks, "kernel.getEnqueuedAssets");
+      return kernel.getEnqueuedAssets(...args);
     },
     getMenuItems: (...args: Parameters<typeof kernel.getMenuItems>) => kernel.getMenuItems(...args),
   };
@@ -193,6 +188,9 @@ async function maybeRegisterPluginHooks(
           },
           registerCommunicationProvider(registration) {
             kernel.registerPluginCommunicationProvider(pluginId, registration);
+          },
+          registerCommentProvider(registration) {
+            kernel.registerPluginCommentProvider(pluginId, registration);
           },
           registerWebcallbackHandler(registration) {
             kernel.registerPluginWebcallbackHandler(pluginId, registration);

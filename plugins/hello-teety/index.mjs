@@ -148,15 +148,18 @@ export async function register(kernel, api) {
     return quotes[index] || defaultQuotes[0];
   };
 
-  const pickQuotes = (quotes, count) => {
-    const pool = Array.isArray(quotes) ? [...quotes] : [];
-    const out = [];
-    while (pool.length > 0 && out.length < count) {
-      const index = Math.floor(Math.random() * pool.length);
-      const [picked] = pool.splice(index, 1);
-      if (picked) out.push(picked);
-    }
-    return out;
+  const toSingleLineQuote = (value, fallback = defaultQuotes[0]) => {
+    const normalizeLine = (line) =>
+      String(line || "")
+        .replace(/^\s*(?:[-*•]\s+|\d+\.\s+)/, "")
+        .trim();
+    const lines = String(value ?? "")
+      .split(/\r?\n/)
+      .map((line) => normalizeLine(line))
+      .filter(Boolean);
+    if (lines.length === 0) return fallback;
+    const idx = Math.floor(Math.random() * lines.length);
+    return lines[idx] || lines[0] || fallback;
   };
 
   const isTweetyContext = (context = {}) => {
@@ -213,9 +216,10 @@ export async function register(kernel, api) {
     const siteThemeId = await resolveSiteThemeId(context?.siteId);
     const use_type = String(context?.use_type || resolveTweetyUseType(context, siteThemeId));
     const is_tweety = use_type === "theme" || use_type === "utility";
-    const quote = is_tweety
-      ? pickQuotes(use_type === "theme" ? themeQuotes : utilityQuotes, 15).map((line) => `- ${line}`).join("\n")
+    const rawQuote = is_tweety
+      ? pickQuote(use_type === "theme" ? themeQuotes : utilityQuotes)
       : pickQuote(defaultQuotes);
+    const quote = toSingleLineQuote(rawQuote);
     return [
       ...widgets,
       {

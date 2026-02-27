@@ -24,9 +24,9 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
   const plugin = await getPluginById(pluginId);
   if (!plugin) notFound();
   const pluginData = plugin;
+  const config = (await getPluginConfig(pluginData.id)) as Record<string, unknown>;
   const migrationRedirectSuffix = selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : "";
 
-  const config = await getPluginConfig(pluginData.id);
   const isDevTools = pluginData.id === "dev-tools";
   const isMigrationKit = pluginData.id === "export-import";
   const canUseSendMessageTool = await userCan("network.plugins.manage", session.user.id);
@@ -112,18 +112,6 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
     revalidatePath(`/plugins/${pluginData.id}`);
     revalidatePath(`/app/plugins/${pluginData.id}`);
     redirect(`/app/plugins/${pluginData.id}?tab=settings&saved=1`);
-  }
-
-  async function saveMigrationSettings(formData: FormData) {
-    "use server";
-    const nextConfig = { ...(await getPluginConfig("export-import")) } as Record<string, unknown>;
-    nextConfig.defaultFormat = String(formData.get("defaultFormat") || "snapshot").trim() || "snapshot";
-    nextConfig.allowImportApply = formData.get("allowImportApply") === "on";
-    nextConfig.allowChildProviders = formData.get("allowChildProviders") === "on";
-    await savePluginConfig("export-import", nextConfig);
-    revalidatePath("/plugins/export-import");
-    revalidatePath("/app/plugins/export-import");
-    redirect(`/app/plugins/export-import?tab=settings&saved=1${migrationRedirectSuffix}`);
   }
 
   async function toggleMigrationProvider(formData: FormData) {
@@ -281,34 +269,32 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       {isMigrationKit ? (
         <>
-          <MigrationKitConsole siteId={selectedSiteId || null} providers={migrationProviders} />
-
-          <div className="flex gap-2 border-b border-stone-200 pb-2 dark:border-stone-700">
+          <div className="flex gap-2 border-b border-stone-200 pb-2">
             <Link
               href={`/plugins/${pluginData.id}?tab=settings${selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : ""}`}
-              className={`rounded border px-3 py-1 text-sm ${tab === "settings" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black dark:border-stone-600 dark:bg-stone-900 dark:text-white"}`}
+              className={`rounded border px-3 py-1 text-sm ${tab === "settings" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black"}`}
             >
               Settings
             </Link>
             <Link
               href={`/plugins/${pluginData.id}?tab=providers${selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : ""}`}
-              className={`rounded border px-3 py-1 text-sm ${tab === "providers" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black dark:border-stone-600 dark:bg-stone-900 dark:text-white"}`}
+              className={`rounded border px-3 py-1 text-sm ${tab === "providers" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black"}`}
             >
               Providers
             </Link>
           </div>
 
           {tab === "providers" ? (
-            <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
+            <div className="space-y-3 rounded-lg border border-stone-200 bg-white p-5 text-black">
               <div>
-                <h2 className="font-cal text-xl dark:text-white">Child Providers</h2>
-                <p className="text-xs text-stone-500 dark:text-stone-400">
+                <h2 className="font-cal text-xl text-black">Child Providers</h2>
+                <p className="text-xs text-black">
                   Child plugins install normally, then appear here for enable/disable control.
                 </p>
               </div>
-              <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
+              <div className="overflow-x-auto rounded-lg border border-stone-200 bg-white">
                 <table className="min-w-full text-sm">
-                  <thead className="bg-stone-50 text-left text-stone-700 dark:bg-stone-900 dark:text-stone-200">
+                  <thead className="bg-white text-left text-black">
                     <tr>
                       <th className="px-3 py-2">Provider</th>
                       <th className="px-3 py-2">Source</th>
@@ -319,15 +305,15 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   </thead>
                   <tbody>
                     {migrationProviders.map((provider) => (
-                      <tr key={provider.id} className="border-t border-stone-200 dark:border-stone-700">
+                      <tr key={provider.id} className="border-t border-stone-200">
                         <td className="px-3 py-2 align-top">
-                          <p className="font-medium text-stone-900 dark:text-stone-100">{provider.label || provider.id}</p>
-                          <p className="text-xs text-stone-500">{provider.id}</p>
+                          <p className="font-medium text-black">{provider.label || provider.id}</p>
+                          <p className="text-xs text-black">{provider.id}</p>
                         </td>
-                        <td className="px-3 py-2 align-top text-xs text-stone-600 dark:text-stone-300">
+                        <td className="px-3 py-2 align-top text-xs text-black">
                           {(provider.source || "plugin").toString()}
                         </td>
-                        <td className="px-3 py-2 align-top text-xs text-stone-600 dark:text-stone-300">
+                        <td className="px-3 py-2 align-top text-xs text-black">
                           {[
                             provider.capabilities?.export ? "export" : null,
                             provider.capabilities?.import ? "import" : null,
@@ -393,7 +379,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                     ))}
                     {migrationProviders.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-3 py-4 text-sm text-stone-500 dark:text-stone-400">
+                        <td colSpan={5} className="px-3 py-4 text-sm text-black">
                           No providers registered yet.
                         </td>
                       </tr>
@@ -403,47 +389,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
               </div>
             </div>
           ) : (
-            <form
-              action={saveMigrationSettings}
-              className="grid gap-3 rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black"
-            >
-              <div>
-                <h2 className="font-cal text-xl dark:text-white">Migration Kit Settings</h2>
-                <p className="text-xs text-stone-500 dark:text-stone-400">Your data&apos;s go bag. Configure behavior here.</p>
-              </div>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="font-medium text-stone-800 dark:text-stone-100">Default Format</span>
-                <select
-                  name="defaultFormat"
-                  defaultValue={String(config.defaultFormat || "snapshot")}
-                  className="rounded-md border border-stone-300 bg-white px-2 py-1 dark:border-stone-600 dark:bg-black dark:text-white"
-                >
-                  <option value="snapshot">Snapshot</option>
-                  <option value="articles-json">Articles JSON</option>
-                </select>
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-stone-800 dark:text-stone-100">
-                <input
-                  type="checkbox"
-                  name="allowImportApply"
-                  defaultChecked={Boolean(config.allowImportApply)}
-                  className="h-4 w-4 rounded border-stone-400 text-stone-700 focus:ring-stone-500"
-                />
-                Allow Apply Import (not dry-run)
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-stone-800 dark:text-stone-100">
-                <input
-                  type="checkbox"
-                  name="allowChildProviders"
-                  defaultChecked={config.allowChildProviders === undefined ? true : Boolean(config.allowChildProviders)}
-                  className="h-4 w-4 rounded border-stone-400 text-stone-700 focus:ring-stone-500"
-                />
-                Allow Child Provider Extensions
-              </label>
-              <button className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm font-semibold text-white">
-                Save Migration Kit
-              </button>
-            </form>
+            <MigrationKitConsole siteId={selectedSiteId || null} providers={migrationProviders} />
           )}
         </>
       ) : isDevTools ? (
@@ -522,7 +468,16 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                 <label key={field.key} className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-stone-800">{field.label}</span>
                   {field.type === "checkbox" ? (
-                    <input type="checkbox" name={field.key} defaultChecked={Boolean(config[field.key])} className="h-4 w-4" />
+                    <input
+                      type="checkbox"
+                      name={field.key}
+                      defaultChecked={
+                        config[field.key] === undefined || config[field.key] === null
+                          ? ["true", "1", "yes", "on"].includes(String(field.defaultValue ?? "").trim().toLowerCase())
+                          : Boolean(config[field.key])
+                      }
+                      className="h-4 w-4"
+                    />
                   ) : field.type === "select" ? (
                     <select
                       name={field.key}
@@ -568,7 +523,16 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
             <label key={field.key} className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-stone-800">{field.label}</span>
               {field.type === "checkbox" ? (
-                <input type="checkbox" name={field.key} defaultChecked={Boolean(config[field.key])} className="h-4 w-4" />
+                <input
+                  type="checkbox"
+                  name={field.key}
+                  defaultChecked={
+                    config[field.key] === undefined || config[field.key] === null
+                      ? ["true", "1", "yes", "on"].includes(String(field.defaultValue ?? "").trim().toLowerCase())
+                      : Boolean(config[field.key])
+                  }
+                  className="h-4 w-4"
+                />
               ) : field.type === "select" ? (
                 <select
                   name={field.key}

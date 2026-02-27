@@ -1,6 +1,4 @@
 import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { eq, inArray } from "drizzle-orm";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 import type { ThemeTokens } from "@/lib/theme-system";
@@ -13,6 +11,13 @@ import {
 } from "@/lib/extension-contracts";
 import { CORE_VERSION, CORE_VERSION_SERIES, isCoreVersionCompatible } from "@/lib/core-version";
 import { trace } from "@/lib/debug";
+import {
+  deleteSettingsByKeys,
+  getSettingByKey,
+  getSettingsByKeys,
+  listSettingsByLikePatterns,
+  setSettingByKey,
+} from "@/lib/settings-store";
 
 export type ThemeSettingsField = ExtensionSettingsField;
 
@@ -68,6 +73,45 @@ function parseJson<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseThemeIdFromThemeKey(key: string): string | null {
+  const match = key.match(/^theme_(.+)_(enabled|config)$/);
+  if (!match) return null;
+  const themeId = String(match[1] || "").trim();
+  return themeId || null;
+}
+
+async function cleanupStaleThemeSettings(themes: ThemeManifest[]) {
+  const installedThemeIds = new Set(themes.map((theme) => theme.id));
+  for (const [legacyId, currentId] of Object.entries(LEGACY_THEME_ID_ALIASES)) {
+    if (installedThemeIds.has(currentId)) installedThemeIds.add(legacyId);
+  }
+  const rows = await listSettingsByLikePatterns([
+    "theme_%_enabled",
+    "theme_%_config",
+    "site_%_theme",
+  ]);
+
+  const staleKeys = rows
+    .filter((row) => {
+      const key = row.key;
+      if (key.startsWith("site_") && key.endsWith("_theme")) {
+        const selectedThemeId = String(row.value || "").trim();
+        if (!selectedThemeId) return false;
+        return !installedThemeIds.has(resolveThemeIdAlias(selectedThemeId));
+      }
+      const themeId = parseThemeIdFromThemeKey(key);
+      if (!themeId) return false;
+      return !installedThemeIds.has(themeId);
+    })
+    .map((row) => row.key);
+  if (!staleKeys.length) return;
+
+  await deleteSettingsByKeys(staleKeys);
+  trace("extensions", "removed stale theme settings for missing themes", {
+    removedKeys: staleKeys.length,
+  });
 }
 
 function normalizeThemeConfig(raw: Record<string, unknown>) {
@@ -162,6 +206,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
       },
     ];
   }
+  await cleanupStaleThemeSettings(themes);
 
   const keys = themes.flatMap((theme) => {
     const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
@@ -169,8 +214,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
       ? [themeEnabledKey(theme.id), themeConfigKey(theme.id), themeEnabledKey(legacyId), themeConfigKey(legacyId)]
       : [themeEnabledKey(theme.id), themeConfigKey(theme.id)];
   });
-  const rows = await db.select({ key: cmsSettings.key, value: cmsSettings.value }).from(cmsSettings).where(inArray(cmsSettings.key, keys));
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const byKey = await getSettingsByKeys(keys);
 
   return themes.map((theme) => {
     const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
@@ -197,34 +241,21 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
 
 export async function setThemeEnabled(themeId: string, enabled: boolean) {
   const resolvedThemeId = resolveThemeIdAlias(themeId);
-  await db
-    .insert(cmsSettings)
-    .values({ key: themeEnabledKey(resolvedThemeId), value: enabled ? "true" : "false" })
-    .onConflictDoUpdate({ target: cmsSettings.key, set: { value: enabled ? "true" : "false" } });
+  await setSettingByKey(themeEnabledKey(resolvedThemeId), enabled ? "true" : "false");
 }
 
 export async function saveThemeConfig(themeId: string, config: Record<string, unknown>) {
   const resolvedThemeId = resolveThemeIdAlias(themeId);
-  await db
-    .insert(cmsSettings)
-    .values({ key: themeConfigKey(resolvedThemeId), value: JSON.stringify(config) })
-    .onConflictDoUpdate({ target: cmsSettings.key, set: { value: JSON.stringify(config) } });
+  await setSettingByKey(themeConfigKey(resolvedThemeId), JSON.stringify(config));
 }
 
 export async function setSiteTheme(siteId: string, themeId: string) {
   const resolvedThemeId = resolveThemeIdAlias(themeId);
-  await db
-    .insert(cmsSettings)
-    .values({ key: siteThemeKey(siteId), value: resolvedThemeId })
-    .onConflictDoUpdate({ target: cmsSettings.key, set: { value: resolvedThemeId } });
+  await setSettingByKey(siteThemeKey(siteId), resolvedThemeId);
 }
 
 export async function getSiteThemeId(siteId: string) {
-  const row = await db.query.cmsSettings.findFirst({
-    where: eq(cmsSettings.key, siteThemeKey(siteId)),
-    columns: { value: true },
-  });
-  const stored = String(row?.value || "").trim();
+  const stored = String((await getSettingByKey(siteThemeKey(siteId))) || "").trim();
   if (!stored) return DEFAULT_SITE_THEME_ID;
   return resolveThemeIdAlias(stored);
 }

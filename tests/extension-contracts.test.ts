@@ -16,6 +16,19 @@ describe("extension contracts", () => {
     expect(plugin?.minCoreVersion).toBe("0.1.x");
   });
 
+  it("normalizes commentProviders capability flag", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "comments-provider-plugin",
+        name: "Comments Provider",
+        capabilities: { commentProviders: true },
+      },
+      "comments-provider-plugin",
+    );
+    expect(plugin).not.toBeNull();
+    expect(plugin?.capabilities?.commentProviders).toBe(true);
+  });
+
   it("preserves plugin developer metadata", () => {
     const plugin = validatePluginContract(
       {

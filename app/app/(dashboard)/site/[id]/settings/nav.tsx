@@ -72,6 +72,11 @@ export default function SiteSettingsNav() {
       segment: "plugins",
     },
     {
+      name: "Comments",
+      href: `/site/${id}/settings/comments`,
+      segment: "comments",
+    },
+    {
       name: "Users",
       href: `/site/${id}/settings/users`,
       segment: "users",

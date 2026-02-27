@@ -33,6 +33,7 @@ describe("middleware routing", () => {
   });
 
   it("redirects authenticated users away from login page", async () => {
+    mockedToken = { sub: "user-1" };
     const req = makeRequest(
       "http://app.example.com/login",
       "app.example.com",
@@ -46,6 +47,7 @@ describe("middleware routing", () => {
   });
 
   it("rewrites authenticated app requests to /app", async () => {
+    mockedToken = { sub: "user-1" };
     const req = makeRequest(
       "http://app.example.com/settings?tab=profile",
       "app.example.com",
@@ -60,6 +62,7 @@ describe("middleware routing", () => {
   });
 
   it("rewrites authenticated app root path to /app", async () => {
+    mockedToken = { sub: "user-1" };
     const req = makeRequest(
       "http://app.example.com/",
       "app.example.com",
@@ -72,7 +75,7 @@ describe("middleware routing", () => {
   });
 
   it("redirects authenticated users to profile when password change is required", async () => {
-    mockedToken = { forcePasswordChange: true };
+    mockedToken = { sub: "user-1", forcePasswordChange: true };
     const req = makeRequest(
       "http://app.example.com/settings/users",
       "app.example.com",
@@ -86,7 +89,7 @@ describe("middleware routing", () => {
   });
 
   it("allows profile page when password change is required", async () => {
-    mockedToken = { forcePasswordChange: true };
+    mockedToken = { sub: "user-1", forcePasswordChange: true };
     const req = makeRequest(
       "http://app.example.com/settings/profile",
       "app.example.com",

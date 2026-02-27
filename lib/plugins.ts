@@ -1,6 +1,4 @@
 import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { inArray } from "drizzle-orm";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { getPluginsDirs } from "@/lib/extension-paths";
@@ -14,6 +12,7 @@ import {
 } from "@/lib/extension-contracts";
 import { CORE_VERSION, isCoreVersionCompatible } from "@/lib/core-version";
 import { trace } from "@/lib/debug";
+import { deleteSettingsByKeys, getSettingsByKeys, listSettingsByLikePatterns } from "@/lib/settings-store";
 
 export type PluginFieldType = ExtensionFieldType;
 
@@ -36,6 +35,13 @@ export type PluginWithSiteState = PluginWithState & {
   siteConfig: Record<string, unknown>;
   effectiveConfig: Record<string, unknown>;
 };
+
+const DEFAULT_GLOBALLY_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
+const DEFAULT_SITE_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
+const PLUGIN_DISCOVERY_TTL_MS = process.env.NODE_ENV === "development" ? 2_000 : 30_000;
+let pluginDiscoveryCache: { at: number; plugins: PluginManifest[] } | null = null;
+let pluginDiscoveryInFlight: Promise<PluginManifest[]> | null = null;
+let pluginCleanupAt = 0;
 
 export function pluginEnabledKey(pluginId: string) {
   return `plugin_${pluginId}_enabled`;
@@ -75,7 +81,55 @@ function parseJsonObject<T>(raw: string, fallback: T): T {
   }
 }
 
+function parsePluginIdFromGlobalKey(key: string): string | null {
+  const match = key.match(/^plugin_(.+)_(enabled|network_required|config)$/);
+  if (!match) return null;
+  const pluginId = String(match[1] || "").trim();
+  return pluginId || null;
+}
+
+function parsePluginIdFromSiteKey(key: string): string | null {
+  if (!key.startsWith("site_")) return null;
+  const pluginMarker = key.indexOf("_plugin_");
+  if (pluginMarker < 0) return null;
+  const suffix =
+    key.endsWith("_enabled") ? "_enabled" : key.endsWith("_config") ? "_config" : "";
+  if (!suffix) return null;
+  const pluginId = key.slice(pluginMarker + "_plugin_".length, key.length - suffix.length).trim();
+  return pluginId || null;
+}
+
+async function cleanupStalePluginSettings(plugins: PluginManifest[]) {
+  const installedPluginIds = new Set(plugins.map((plugin) => plugin.id));
+  const rows = await listSettingsByLikePatterns([
+    "plugin_%_enabled",
+    "plugin_%_network_required",
+    "plugin_%_config",
+    "site_%_plugin_%_enabled",
+    "site_%_plugin_%_config",
+  ]);
+  const staleKeys = rows
+    .map((row) => row.key)
+    .filter((key) => {
+      const pluginId = parsePluginIdFromGlobalKey(key) || parsePluginIdFromSiteKey(key);
+      if (!pluginId) return false;
+      return !installedPluginIds.has(pluginId);
+    });
+  if (!staleKeys.length) return;
+
+  await deleteSettingsByKeys(staleKeys);
+  trace("extensions", "removed stale plugin settings for missing plugins", {
+    removedKeys: staleKeys.length,
+  });
+}
+
 export async function getAvailablePlugins(): Promise<PluginManifest[]> {
+  const now = Date.now();
+  if (pluginDiscoveryCache && now - pluginDiscoveryCache.at < PLUGIN_DISCOVERY_TTL_MS) {
+    return pluginDiscoveryCache.plugins;
+  }
+  if (pluginDiscoveryInFlight) return pluginDiscoveryInFlight;
+  pluginDiscoveryInFlight = (async () => {
   const pluginDirs = getPluginsDirs();
   const byId = new Map<string, PluginManifestResolved>();
 
@@ -126,7 +180,15 @@ export async function getAvailablePlugins(): Promise<PluginManifest[]> {
     }
   }
 
-  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+    const plugins = Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+    pluginDiscoveryCache = { at: Date.now(), plugins };
+    return plugins;
+  })();
+  try {
+    return await pluginDiscoveryInFlight;
+  } finally {
+    pluginDiscoveryInFlight = null;
+  }
 }
 
 export async function getPluginById(pluginId: string) {
@@ -144,21 +206,21 @@ export async function getPluginEntryPath(pluginId: string): Promise<string> {
 export async function listPluginsWithState() {
   const plugins = await getAvailablePlugins();
   if (plugins.length === 0) return [] as PluginWithState[];
+  const now = Date.now();
+  if (now - pluginCleanupAt > PLUGIN_DISCOVERY_TTL_MS) {
+    await cleanupStalePluginSettings(plugins);
+    pluginCleanupAt = now;
+  }
 
   const keys = plugins.flatMap((plugin) => [pluginEnabledKey(plugin.id), pluginConfigKey(plugin.id), pluginNetworkRequiredKey(plugin.id)]);
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(inArray(cmsSettings.key, keys));
-
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const byKey = await getSettingsByKeys(keys);
 
   return plugins.map((plugin) => {
     const enabledRaw = byKey[pluginEnabledKey(plugin.id)];
     const configRaw = byKey[pluginConfigKey(plugin.id)];
     const networkRequiredRaw = byKey[pluginNetworkRequiredKey(plugin.id)];
     const isNetworkScope = plugin.scope === "network";
-    const enabled = enabledRaw === "true";
+    const enabled = enabledRaw ? enabledRaw === "true" : DEFAULT_GLOBALLY_ENABLED_PLUGIN_IDS.has(plugin.id);
     return {
       ...plugin,
       enabled,
@@ -185,18 +247,18 @@ export async function listPluginsWithSiteState(siteId: string): Promise<PluginWi
   if (!plugins.length) return [];
 
   const keys = plugins.flatMap((plugin) => [sitePluginEnabledKey(siteId, plugin.id), sitePluginConfigKey(siteId, plugin.id)]);
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(inArray(cmsSettings.key, keys));
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const byKey = await getSettingsByKeys(keys);
 
   return plugins.map((plugin) => {
     const enabledRaw = byKey[sitePluginEnabledKey(siteId, plugin.id)];
     const siteConfigRaw = byKey[sitePluginConfigKey(siteId, plugin.id)];
     const siteConfig = siteConfigRaw ? parseJsonObject<Record<string, unknown>>(siteConfigRaw, {}) : {};
     const effectiveConfig = plugin.networkRequired ? { ...plugin.config } : { ...plugin.config, ...siteConfig };
-    const siteEnabled = plugin.networkRequired ? enabledRaw !== "false" : enabledRaw === "true";
+    const siteEnabled = plugin.networkRequired
+      ? enabledRaw !== "false"
+      : enabledRaw
+        ? enabledRaw === "true"
+        : DEFAULT_SITE_ENABLED_PLUGIN_IDS.has(plugin.id);
     return {
       ...plugin,
       siteEnabled,

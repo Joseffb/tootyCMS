@@ -8,13 +8,14 @@ import db from "./db";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { Adapter } from "next-auth/adapters";
 import { eq, inArray } from "drizzle-orm";
-import { accounts, cmsSettings, sessions, users, verificationTokens } from "./schema";
+import { accounts, sessions, users, verificationTokens } from "./schema";
 import { verifyPassword } from "@/lib/password";
 import { AUTH_PLUGIN_PROVIDER_MAP } from "@/lib/auth-provider-plugins";
 import { NETWORK_ADMIN_ROLE, type SiteCapability } from "@/lib/rbac";
 import { getAuthorizedSiteForUser } from "@/lib/authorization";
 import { getUserMetaValue } from "@/lib/user-meta";
 import { cookies } from "next/headers";
+import { getSettingByKey, getSettingsByKeys } from "@/lib/settings-store";
 import {
   DefaultPostgresAccountsTable,
   DefaultPostgresSessionsTable,
@@ -46,6 +47,37 @@ const OAUTH_ENV_KEYS: Record<OAuthProviderId, { id: string; secret: string }> = 
   apple: { id: "AUTH_APPLE_ID", secret: "AUTH_APPLE_SECRET" },
 };
 
+function normalizeCookieDomain(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+}
+
+export function deriveLocalCookieDomainForUrl(nextAuthUrl: string) {
+  const normalized = String(nextAuthUrl || "").trim();
+  if (!normalized) return undefined;
+  try {
+    const hostname = new URL(normalized).hostname.toLowerCase();
+    // Browsers inconsistently accept Domain=.localhost cookies.
+    // For local development, prefer host-only cookies unless explicitly configured
+    // with NEXTAUTH_COOKIE_DOMAIN.
+    if (hostname === "localhost" || hostname.endsWith(".localhost")) return undefined;
+    const parts = hostname.split(".").filter(Boolean);
+    if (parts.length >= 3) {
+      return `.${parts.slice(1).join(".")}`;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deriveLocalCookieDomain() {
+  const explicit = normalizeCookieDomain(String(process.env.NEXTAUTH_COOKIE_DOMAIN || ""));
+  if (explicit) return explicit;
+  return deriveLocalCookieDomainForUrl(String(process.env.NEXTAUTH_URL || ""));
+}
+
 function parseJsonObject(raw: string | undefined): Record<string, unknown> {
   if (!raw) return {};
   try {
@@ -60,12 +92,7 @@ async function getOauthProviderRuntimeConfig() {
   const configKeys = SUPPORTED_OAUTH_PROVIDERS.map(
     (id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_config`,
   );
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(inArray(cmsSettings.key, configKeys));
-
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const byKey = await getSettingsByKeys(configKeys);
   const runtime = {} as Record<OAuthProviderId, OAuthProviderRuntimeConfig>;
 
   for (const providerId of SUPPORTED_OAUTH_PROVIDERS) {
@@ -104,15 +131,8 @@ async function getOauthProviderRuntimeConfig() {
 }
 
 async function getOauthProviderFlags() {
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(
-      inArray(
-        cmsSettings.key,
-        SUPPORTED_OAUTH_PROVIDERS.map((id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`),
-      ),
-    );
+  const keys = SUPPORTED_OAUTH_PROVIDERS.map((id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`);
+  const byKey = await getSettingsByKeys(keys);
 
   const result: Record<OAuthProviderId, boolean> = {
     github: true,
@@ -122,22 +142,15 @@ async function getOauthProviderFlags() {
   };
 
   for (const id of SUPPORTED_OAUTH_PROVIDERS) {
-    const row = rows.find((item) => item.key === `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`);
-    if (row) {
-      result[id] = row.value === "true";
-    } else {
-      result[id] = false;
-    }
+    result[id] = byKey[`plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`] === "true";
   }
   return result;
 }
 
 async function getBootstrapAdminEmail() {
-  const row = await db.query.cmsSettings.findFirst({
-    where: (table, { eq }) => eq(table.key, "bootstrap_admin_email"),
-    columns: { value: true },
-  });
-  return row?.value?.trim().toLowerCase() || "";
+  return String((await getSettingByKey("bootstrap_admin_email")) || "")
+    .trim()
+    .toLowerCase();
 }
 
 function fallbackOauthRuntimeConfig(): Record<OAuthProviderId, OAuthProviderRuntimeConfig> {
@@ -337,10 +350,10 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           httpOnly: true,
           sameSite: "lax",
           path: "/",
-          // When working on localhost, the cookie domain must be omitted entirely (https://stackoverflow.com/a/1188145)
+          // In local subdomain dev (e.g. app.localhost/main.localhost), share auth cookies across subdomains.
           domain: VERCEL_DEPLOYMENT
             ? `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`
-            : undefined,
+            : deriveLocalCookieDomain(),
           secure: VERCEL_DEPLOYMENT,
         },
       },
@@ -385,7 +398,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       },
       jwt: async ({ token, user }) => {
         if (user) {
-          token.user = user;
+          const displayName = await getUserMetaValue(String((user as any).id || ""), "display_name");
+          token.user = {
+            ...user,
+            displayName: String(displayName || "").trim() || (user as any).username || "",
+          };
         }
         if (token.sub) {
           const mustRotate = await getUserMetaValue(token.sub, "force_password_change");
@@ -409,6 +426,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           // @ts-expect-error
           username: token?.user?.username || token?.user?.gh_username,
           role: userRole?.role ?? "author",
+          displayName: String((token as any)?.user?.displayName || "").trim(),
           forcePasswordChange: Boolean((token as any)?.forcePasswordChange),
         };
         return session;

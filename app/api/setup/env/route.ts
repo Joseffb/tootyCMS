@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getInstallState } from "@/lib/install-state";
 import { saveSetupEnvValues } from "@/lib/setup-env";
 import db from "@/lib/db";
-import { cmsSettings, sites, users } from "@/lib/schema";
+import { sites, users } from "@/lib/schema";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { trace } from "@/lib/debug";
@@ -13,6 +13,7 @@ import { advanceSetupLifecycleTo } from "@/lib/setup-lifecycle";
 import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 import { ensureMainSiteForUser } from "@/lib/bootstrap";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { setSettingByKey } from "@/lib/settings-store";
 import {
   applyPendingDatabaseMigrations,
   getDatabaseHealthReport,
@@ -162,7 +163,7 @@ const ALL_EXPECTED_TABLE_SUFFIXES = [
   "webhook_deliveries",
 ] as const;
 
-const DEFAULT_ENABLED_PLUGINS = ["hello-teety"] as const;
+const DEFAULT_ENABLED_PLUGINS = ["hello-teety", "tooty-comments"] as const;
 
 async function tableExists(tableName: string) {
   const result = (await db.execute(
@@ -328,54 +329,18 @@ export async function POST(req: Request) {
   if (!ensuredUserId) {
     throw new Error("Failed to create or resolve setup admin user.");
   }
-  await db
-    .insert(cmsSettings)
-    .values({ key: "bootstrap_admin_name", value: adminName })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: adminName, updatedAt: new Date() },
-    });
-  await db
-    .insert(cmsSettings)
-    .values({ key: "bootstrap_admin_email", value: adminEmail })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: adminEmail, updatedAt: new Date() },
-    });
-  await db
-    .insert(cmsSettings)
-    .values({ key: "bootstrap_admin_phone", value: adminPhone })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: adminPhone, updatedAt: new Date() },
-    });
-  await db
-    .insert(cmsSettings)
-    .values({ key: "setup_completed", value: "true" })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: "true", updatedAt: new Date() },
-    });
-  await db
-    .insert(cmsSettings)
-    .values({ key: "setup_completed_at", value: new Date().toISOString() })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: new Date().toISOString(), updatedAt: new Date() },
-    });
+  await setSettingByKey("bootstrap_admin_name", adminName);
+  await setSettingByKey("bootstrap_admin_email", adminEmail);
+  await setSettingByKey("bootstrap_admin_phone", adminPhone);
+  await setSettingByKey("setup_completed", "true");
+  await setSettingByKey("setup_completed_at", new Date().toISOString());
   const inferredSiteUrl = inferSiteUrl(normalized);
   if (inferredSiteUrl) {
-    await db
-      .insert(cmsSettings)
-      .values({ key: "site_url", value: inferredSiteUrl })
-      .onConflictDoNothing();
+    await setSettingByKey("site_url", inferredSiteUrl);
   }
 
   for (const pluginId of DEFAULT_ENABLED_PLUGINS) {
-    await db
-      .insert(cmsSettings)
-      .values({ key: `plugin_${pluginId}_enabled`, value: "true" })
-      .onConflictDoNothing();
+    await setSettingByKey(`plugin_${pluginId}_enabled`, "true");
   }
 
   await ensureDefaultCoreDataDomains();

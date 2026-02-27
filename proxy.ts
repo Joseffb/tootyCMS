@@ -39,6 +39,18 @@ function hasSessionCookie(req: NextRequest) {
   );
 }
 
+function isAllowedAppCallback(rawUrl: string) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const hostname = String(url.hostname || "").toLowerCase();
+    return hostname === "localhost" || hostname.endsWith(".localhost");
+  } catch {
+    return false;
+  }
+}
+
 export const config = {
   matcher: [
     "/((?!api/|_next/|_static/|_vercel|media/|sitemap\\.xml|robots\\.txt|.*\\..*).*)",
@@ -137,24 +149,33 @@ export default async function middleware(req: NextRequest) {
       traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
       return preserveWithTrace("/setup");
     }
-    const session = hasSessionCookie(req);
-    const sessionToken = session
+    const hasCookie = hasSessionCookie(req);
+    const sessionToken = hasCookie
       ? await getToken({
           req,
           secret: process.env.NEXTAUTH_SECRET,
         })
       : null;
+    const isAuthenticated = Boolean(sessionToken);
     const forcePasswordChange = Boolean((sessionToken as any)?.forcePasswordChange);
-    if (!session && appPath !== "/login") {
+    const isPublicBridgePath = appPath === "/theme-bridge-client" || appPath === "/theme-bridge-start";
+    if (!isAuthenticated && appPath !== "/login" && !isPublicBridgePath) {
       traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });
       return redirectWithTrace("/login");
     }
-    if (session && appPath === "/login") {
+    if (isAuthenticated && appPath === "/login") {
+      const callbackUrl = String(req.nextUrl.searchParams.get("callbackUrl") || "").trim();
+      if (callbackUrl && isAllowedAppCallback(callbackUrl)) {
+        traceEdge("middleware", "redirect authenticated app user to callback", { traceId, to: callbackUrl });
+        const res = NextResponse.redirect(callbackUrl);
+        res.headers.set("x-trace-id", traceId);
+        return res;
+      }
       traceEdge("middleware", "redirect authenticated app user", { traceId, to: "/" });
       return redirectWithTrace("/");
     }
     if (
-      session &&
+      isAuthenticated &&
       forcePasswordChange &&
       appPath !== "/settings/profile" &&
       !appPath.startsWith("/settings/profile?")

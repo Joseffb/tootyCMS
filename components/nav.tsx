@@ -12,10 +12,11 @@ import {
   Menu,
   Monitor,
   Settings,
+  X,
   User,
 } from "lucide-react";
 import { useParams, usePathname, useSelectedLayoutSegments } from "next/navigation";
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { getSitePublicUrl } from "@/lib/site-url";
 
@@ -28,6 +29,24 @@ type NavTab = {
   isChild?: boolean;
   childLevel?: 1 | 2;
 };
+
+type FloatingWidget = {
+  id: string;
+  title: string;
+  content: string;
+  position: "top-right" | "bottom-right";
+  dismissSetting?: {
+    pluginId: string;
+    key: string;
+    value: unknown;
+  };
+};
+
+const FLOATING_WIDGET_DISMISS_KEY = "tooty:floating-widgets:dismissed:v1";
+
+function buildFloatingWidgetDismissKey(widget: FloatingWidget) {
+  return `${widget.id}::${widget.content}`;
+}
 
 const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }> = [
   { name: "Sites", href: "/settings/sites", match: "/settings/sites" },
@@ -80,9 +99,8 @@ export default function Nav({ children }: { children: ReactNode }) {
     label: "",
     environment: "production",
   });
-  const [floatingWidgets, setFloatingWidgets] = useState<
-    Array<{ id: string; title: string; content: string; position: "bottom-right" }>
-  >([]);
+  const [floatingWidgets, setFloatingWidgets] = useState<FloatingWidget[]>([]);
+  const [dismissedFloatingWidgets, setDismissedFloatingWidgets] = useState<Set<string>>(new Set());
   const [hasAnalyticsProviders, setHasAnalyticsProviders] = useState(false);
   const [teetyAnimatedQuote, setTeetyAnimatedQuote] = useState("");
   const [teetyAnimationPhase, setTeetyAnimationPhase] = useState<"dots" | "typing" | "done">("done");
@@ -96,8 +114,41 @@ export default function Nav({ children }: { children: ReactNode }) {
     () => floatingWidgets.find((widget) => widget.id === "hello-teety-quote")?.content || "",
     [floatingWidgets],
   );
+  const teetyDisplayQuote = useMemo(() => {
+    const normalizeLine = (line: string) =>
+      String(line || "")
+        .replace(/^\s*(?:[-*•]\s+|\d+\.\s+)/, "")
+        .trim();
+    const lines = String(teetyQuote || "")
+      .split(/\r?\n/)
+      .map((line) => normalizeLine(line))
+      .filter(Boolean);
+    if (lines.length <= 1) return lines[0] || "";
+    const index = Math.abs(teetyAnimationRun % lines.length);
+    return lines[index] || lines[0] || "";
+  }, [teetyQuote, teetyAnimationRun]);
+  const teetyDisplayQuoteStyled = useMemo(() => {
+    const trimmed = String(teetyDisplayQuote || "")
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+      .trim();
+    return trimmed ? `“${trimmed}”` : "";
+  }, [teetyDisplayQuote]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = window.localStorage.getItem(FLOATING_WIDGET_DISMISS_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) return;
+      const keys = parsed.map((value: any) => String(value || "").trim()).filter(Boolean);
+      setDismissedFloatingWidgets(new Set(keys));
+    } catch {
+      setDismissedFloatingWidgets(new Set());
+    }
+  }, []);
+
+  const loadPluginTabs = useCallback(() => {
     const query = !singleSiteMode && effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
     fetch(`/api/plugins/menu${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
@@ -123,6 +174,14 @@ export default function Nav({ children }: { children: ReactNode }) {
       })
       .catch(() => setPluginTabs([]));
   }, [effectiveSiteId, singleSiteMode]);
+
+  useEffect(() => {
+    loadPluginTabs();
+    const onPluginSettingsPage = pathname?.includes("/settings/plugins");
+    if (!onPluginSettingsPage) return;
+    const timer = setInterval(() => loadPluginTabs(), 1500);
+    return () => clearInterval(timer);
+  }, [loadPluginTabs, pathname]);
 
   useEffect(() => {
     const querySiteId = segments[0] === "site" && id ? id : navContext.mainSiteId || "";
@@ -215,7 +274,17 @@ export default function Nav({ children }: { children: ReactNode }) {
                   id: String(widget?.id || ""),
                   title: String(widget?.title || ""),
                   content: String(widget?.content || ""),
-                  position: "bottom-right" as const,
+                  position: widget?.position === "top-right" ? ("top-right" as const) : ("bottom-right" as const),
+                  dismissSetting:
+                    widget?.dismissSetting &&
+                    String(widget.dismissSetting.pluginId || "").trim() &&
+                    String(widget.dismissSetting.key || "").trim()
+                      ? {
+                          pluginId: String(widget.dismissSetting.pluginId || "").trim(),
+                          key: String(widget.dismissSetting.key || "").trim(),
+                          value: widget.dismissSetting.value,
+                        }
+                      : undefined,
                 }))
                 .filter((widget: any) => widget.id && widget.content)
             : [],
@@ -238,15 +307,37 @@ export default function Nav({ children }: { children: ReactNode }) {
     };
   }, [effectiveSiteId, pathname]);
 
-  useEffect(() => {
-    if (!teetyQuote) {
-      setTeetyAnimatedQuote("");
-      setTeetyAnimationPhase("done");
+  const dismissFloatingWidget = useCallback((widget: FloatingWidget) => {
+    if (widget.dismissSetting?.pluginId && widget.dismissSetting?.key) {
+      fetch("/api/plugins/widget-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pluginId: widget.dismissSetting.pluginId,
+          key: widget.dismissSetting.key,
+          value: widget.dismissSetting.value,
+        }),
+      }).catch(() => {
+        // Keep UI responsive even if persistence fails.
+      });
+      setFloatingWidgets((prev) => prev.filter((item) => item.id !== widget.id));
       return;
     }
-    if (teetyQuote.includes("\n")) {
+    const key = buildFloatingWidgetDismissKey(widget);
+    setDismissedFloatingWidgets((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(FLOATING_WIDGET_DISMISS_KEY, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!teetyDisplayQuoteStyled) {
+      setTeetyAnimatedQuote("");
       setTeetyAnimationPhase("done");
-      setTeetyAnimatedQuote(teetyQuote);
       return;
     }
     if (!teetyImageLoaded) {
@@ -266,8 +357,8 @@ export default function Nav({ children }: { children: ReactNode }) {
 
     const typeTick = () => {
       idx += 1;
-      setTeetyAnimatedQuote(teetyQuote.slice(0, idx));
-      if (idx < teetyQuote.length) {
+      setTeetyAnimatedQuote(teetyDisplayQuoteStyled.slice(0, idx));
+      if (idx < teetyDisplayQuoteStyled.length) {
         timer = setTimeout(typeTick, 50);
       } else {
         setTeetyAnimationPhase("done");
@@ -291,7 +382,7 @@ export default function Nav({ children }: { children: ReactNode }) {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [teetyQuote, teetyImageLoaded, teetyAnimationRun]);
+  }, [teetyDisplayQuoteStyled, teetyImageLoaded, teetyAnimationRun]);
 
   const globalSettingsWithChildren = useMemo<NavTab[]>(() => {
     const parent: NavTab = {
@@ -433,6 +524,11 @@ export default function Nav({ children }: { children: ReactNode }) {
           match: `/site/${id}/settings/messages`,
         },
         {
+          name: "Comments",
+          href: `/site/${id}/settings/comments`,
+          match: `/site/${id}/settings/comments`,
+        },
+        {
           name: "Users",
           href: `/site/${id}/settings/users`,
           match: `/site/${id}/settings/users`,
@@ -532,6 +628,7 @@ export default function Nav({ children }: { children: ReactNode }) {
           { name: "Themes", href: `/site/${navContext.mainSiteId}/settings/themes`, match: `/site/${navContext.mainSiteId}/settings/themes` },
           { name: "Plugins", href: `/site/${navContext.mainSiteId}/settings/plugins`, match: `/site/${navContext.mainSiteId}/settings/plugins` },
           { name: "Messages", href: `/site/${navContext.mainSiteId}/settings/messages`, match: `/site/${navContext.mainSiteId}/settings/messages` },
+          { name: "Comments", href: `/site/${navContext.mainSiteId}/settings/comments`, match: `/site/${navContext.mainSiteId}/settings/comments` },
           { name: "Users", href: `/site/${navContext.mainSiteId}/settings/users`, match: `/site/${navContext.mainSiteId}/settings/users` },
           { name: "Migrations", href: `/site/${navContext.mainSiteId}/settings/database`, match: `/site/${navContext.mainSiteId}/settings/database` },
           { name: "RBAC", href: `/site/${navContext.mainSiteId}/settings/rbac`, match: `/site/${navContext.mainSiteId}/settings/rbac` },
@@ -790,18 +887,49 @@ export default function Nav({ children }: { children: ReactNode }) {
         </div>
       </div>
       {floatingWidgets
-        .filter((widget) => widget.position === "bottom-right")
+        .filter(
+          (widget) =>
+            widget.position === "top-right" &&
+            (widget.dismissSetting ? true : !dismissedFloatingWidgets.has(buildFloatingWidgetDismissKey(widget))),
+        )
+        .map((widget, idx) => (
+          (() => {
+            const top = `${1 + idx * 5.5}rem`;
+            return (
+              <div key={widget.id} className="fixed right-4 z-30 max-w-xs" style={{ top }}>
+                <div className="relative rounded-lg border border-stone-300 bg-white/95 px-3 py-2 pr-8 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200">
+                  <button
+                    type="button"
+                    aria-label="Dismiss widget"
+                    className="absolute right-1 top-1 rounded p-0.5 text-stone-500 hover:bg-stone-200 hover:text-stone-800 dark:text-stone-300 dark:hover:bg-stone-700 dark:hover:text-stone-100"
+                    onClick={() => dismissFloatingWidget(widget)}
+                  >
+                    <X width={14} height={14} />
+                  </button>
+                  <p className="font-semibold">{widget.title || "Plugin Widget"}</p>
+                  <p className="mt-1 italic">{widget.content}</p>
+                </div>
+              </div>
+            );
+          })()
+        ))}
+      {floatingWidgets
+        .filter(
+          (widget) =>
+            widget.position === "bottom-right" &&
+            (widget.dismissSetting ? true : !dismissedFloatingWidgets.has(buildFloatingWidgetDismissKey(widget))),
+        )
         .map((widget, idx) => (
           (() => {
             const isTeety = widget.id === "hello-teety-quote";
             const bottom = `${1 + idx * 5.5}rem`;
             return (
-              <div key={widget.id} className="pointer-events-none fixed right-4 z-20 max-w-xs" style={{ bottom }}>
+              <div key={widget.id} className="fixed right-4 z-20 max-w-xs" style={{ bottom }}>
                 {isTeety ? (
                   <div className="relative overflow-visible rounded-lg border border-stone-600 bg-stone-800 px-3 py-2 pr-14 text-xs text-stone-100 shadow-lg">
                     <p className="whitespace-pre-line italic">
-                      {teetyImageLoaded ? (teetyAnimatedQuote || (teetyAnimationPhase === "done" ? widget.content : "")) : ""}
-                      {teetyAnimationPhase === "typing" && teetyAnimatedQuote.length < widget.content.length ? <span className="ml-0.5 animate-pulse">|</span> : null}
+                      {teetyImageLoaded ? (teetyAnimatedQuote || (teetyAnimationPhase === "done" ? teetyDisplayQuoteStyled : "")) : ""}
+                      {teetyAnimationPhase === "typing" && teetyAnimatedQuote.length < teetyDisplayQuoteStyled.length ? <span className="ml-0.5 animate-pulse">|</span> : null}
                     </p>
                     <Image
                       src="/plugin-assets/hello-teety/teety.png"
@@ -814,7 +942,15 @@ export default function Nav({ children }: { children: ReactNode }) {
                     />
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-stone-300 bg-white/95 px-3 py-2 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200">
+                  <div className="relative rounded-lg border border-stone-300 bg-white/95 px-3 py-2 pr-8 text-xs text-stone-700 shadow-lg backdrop-blur dark:border-stone-700 dark:bg-stone-900/90 dark:text-stone-200">
+                    <button
+                      type="button"
+                      aria-label="Dismiss widget"
+                      className="absolute right-1 top-1 rounded p-0.5 text-stone-500 hover:bg-stone-200 hover:text-stone-800 dark:text-stone-300 dark:hover:bg-stone-700 dark:hover:text-stone-100"
+                      onClick={() => dismissFloatingWidget(widget)}
+                    >
+                      <X width={14} height={14} />
+                    </button>
                     <p className="font-semibold">{widget.title || "Plugin Widget"}</p>
                     <p className="mt-1 italic">{widget.content}</p>
                   </div>

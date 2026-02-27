@@ -3,7 +3,6 @@ import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
 import { and, eq, inArray, like, or } from "drizzle-orm";
 import {
-  cmsSettings,
   dataDomains,
   domainPosts,
   siteDataDomains,
@@ -13,6 +12,7 @@ import {
   terms,
   users,
 } from "../../lib/schema";
+import { deleteSettingsByKeys, getSettingByKey, setSettingByKey } from "../../lib/settings-store";
 
 const db = drizzle(sql);
 const runId = `e2e-url-${Date.now()}`;
@@ -84,17 +84,14 @@ async function gotoWithBodyTextRetry(
 
 async function setSiteSetting(siteId: string, key: string, value: string) {
   const scopedKey = settingKey(siteId, key);
-  await db
-    .insert(cmsSettings)
-    .values({ key: scopedKey, value })
-    .onConflictDoUpdate({ target: cmsSettings.key, set: { value } });
+  await setSettingByKey(scopedKey, value);
 }
 
 async function captureCurrentSettings(siteId: string) {
   for (const key of PERMALINK_KEYS) {
     const scopedKey = settingKey(siteId, key);
-    const rows = await db.select({ value: cmsSettings.value }).from(cmsSettings).where(eq(cmsSettings.key, scopedKey)).limit(1);
-    previousSettings.set(scopedKey, rows[0]?.value ?? null);
+    const value = await getSettingByKey(scopedKey);
+    previousSettings.set(scopedKey, value ?? null);
   }
 }
 
@@ -103,13 +100,10 @@ async function restoreSettings(siteId: string) {
     const scopedKey = settingKey(siteId, key);
     const value = previousSettings.get(scopedKey);
     if (value === null || value === undefined) {
-      await db.delete(cmsSettings).where(eq(cmsSettings.key, scopedKey));
+      await deleteSettingsByKeys([scopedKey]);
       continue;
     }
-    await db
-      .insert(cmsSettings)
-      .values({ key: scopedKey, value })
-      .onConflictDoUpdate({ target: cmsSettings.key, set: { value } });
+    await setSettingByKey(scopedKey, value);
   }
 }
 

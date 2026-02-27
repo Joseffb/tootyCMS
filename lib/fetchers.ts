@@ -210,7 +210,7 @@ export async function getPostData(domain: string, slug: string) {
       }
       const typedData = data as any;
 
-      const [mdxSource, adjacentPosts] = await Promise.all([
+      const [mdxSource, adjacentPosts, metaRows] = await Promise.all([
         getMdxSource(typedData.content!),
         db
           .select({
@@ -234,12 +234,20 @@ export async function getPostData(domain: string, slug: string) {
                 : eq(sites.customDomain, normalizedDomain),
             ),
           ),
+        db
+          .select({
+            key: domainPostMeta.key,
+            value: domainPostMeta.value,
+          })
+          .from(domainPostMeta)
+          .where(eq(domainPostMeta.domainPostId, typedData.id)),
       ]);
       console.log("mdxSource");
       return {
         ...typedData,
         mdxSource,
         adjacentPosts,
+        meta: metaRows,
       };
     },
     [`${domain}-${slug}-v3`],

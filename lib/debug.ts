@@ -7,7 +7,7 @@ const TRACE_MAX_FILES = Number(process.env.TRACE_MAX_FILES || 60);
 let traceWriteChain = Promise.resolve();
 let traceFsUnavailable = false;
 let lastPruneKey = "";
-let fsPromisesLoader: Promise<any> | null = null;
+let fsPromisesLoader: Promise<{ appendFile: (...args: any[]) => Promise<void>; mkdir: (...args: any[]) => Promise<void>; readdir: (...args: any[]) => Promise<any>; rm: (...args: any[]) => Promise<void> } | null> | null = null;
 
 export type TraceLevel = "info" | "warn" | "error";
 
@@ -33,6 +33,12 @@ export function isDebugMode() {
   const raw = process.env.DEBUG_MODE || process.env.NEXT_PUBLIC_DEBUG_MODE || "";
   if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) return true;
   return process.env.NODE_ENV === "development";
+}
+
+export function isSqlDebugMode() {
+  const raw = process.env.DEBUG_SQL || process.env.DB_QUERY_DEBUG || "";
+  if (!raw) return false;
+  return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
 }
 
 type TraceTier = "Test" | "Dev" | "Prod";
@@ -153,15 +159,17 @@ export function trace(scope: string, message: string, payload?: unknown, levelIn
 
 async function getFsPromises() {
   if (!fsPromisesLoader) {
-    fsPromisesLoader = (async () => {
-      try {
-        return await import("node:fs/promises");
-      } catch {
-        return import("fs/promises");
-      }
-    })();
+    fsPromisesLoader = Promise.resolve(loadFsPromisesModule());
   }
   return fsPromisesLoader;
+}
+
+function loadFsPromisesModule() {
+  const proc = (globalThis as { process?: { getBuiltinModule?: (name: string) => unknown } }).process;
+  if (!proc || typeof proc.getBuiltinModule !== "function") return null;
+  const loaded = proc.getBuiltinModule("fs/promises");
+  if (!loaded || typeof loaded !== "object") return null;
+  return loaded as { appendFile: (...args: any[]) => Promise<void>; mkdir: (...args: any[]) => Promise<void>; readdir: (...args: any[]) => Promise<any>; rm: (...args: any[]) => Promise<void> };
 }
 
 export function traceInfo(scope: string, message: string, payload?: unknown) {

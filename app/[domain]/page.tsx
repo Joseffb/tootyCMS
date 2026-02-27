@@ -6,13 +6,13 @@ import BlogCard from "@/components/blog-card";
 import { getPostsForSite, getSiteData } from "@/lib/fetchers";
 import Image from "next/image";
 import db from "@/lib/db";
-import { getThemeQueryRequestsForSite, getThemeTemplateForSite } from "@/lib/theme-runtime";
+import { getThemeTemplateForSite } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getInstallState } from "@/lib/install-state";
-import { getThemeContextApi } from "@/lib/extension-api";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildArchivePath, buildDetailPath } from "@/lib/permalink";
+import { getThemeRenderContext } from "@/lib/theme-render-context";
 
 // Type Definitions
 interface SeriesLink {
@@ -113,8 +113,11 @@ export default async function SiteHomePage({ params }: { params: Params }) {
   if (themedTemplate) {
     const rootUrl = getRootSiteUrl();
     const installState = await getInstallState();
-    const routeThemeQueries = await getThemeQueryRequestsForSite(data.id as string, "home");
-    const themeApi = await getThemeContextApi(data.id as string, routeThemeQueries);
+    const themeRuntime = await getThemeRenderContext(data.id as string, "home", [
+      themedTemplate.template,
+      themedTemplate.partials?.header,
+      themedTemplate.partials?.footer,
+    ]);
     const writingSettings = await getSiteWritingSettings(data.id as string);
     const isPrimary = Boolean((data as any).isPrimary) || (data as any).subdomain === "main";
     const configuredRootUrl = (await getSiteUrlSettingForSite(data.id as string, "")).value.trim();
@@ -136,6 +139,8 @@ export default async function SiteHomePage({ params }: { params: Params }) {
     const html = renderThemeTemplate(themedTemplate.template, {
       theme_header: themedTemplate.partials?.header || "",
       theme_footer: themedTemplate.partials?.footer || "",
+      theme_comment_item: themedTemplate.partials?.commentItem || "",
+      theme_password: themedTemplate.partials?.password || "",
       site: {
         id: data.id,
         name: data.name || "Tooty Site",
@@ -158,7 +163,8 @@ export default async function SiteHomePage({ params }: { params: Params }) {
         name: themedTemplate.themeName || "",
         ...(themedTemplate.config || {}),
       },
-      tooty: themeApi,
+      tooty: themeRuntime.tooty,
+      auth: themeRuntime.auth,
       links: {
         root: rootUrl,
         main_site: siteUrl,

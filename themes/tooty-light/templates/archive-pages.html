@@ -1,0 +1,37 @@
+<section class="tooty-landing">
+  {{theme_header | safe}}
+
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <p class="hero-kicker">{{data_domain or 'Archive'}}</p>
+        <h1>Archive</h1>
+        <p class="hero-tagline">Browse published entries for this section.</p>
+        <div class="hero-actions">
+          <a class="btn btn-secondary" href="{{links.main_site}}">Back Home</a>
+        </div>
+      </div>
+      <div class="hero-mascot">
+        <img src="/theme-assets/tooty-light/mascots/tooty-camera.png" alt="Theme graphic" />
+      </div>
+    </div>
+  </header>
+
+  <section class="content-preview">
+    <div class="post-grid">
+      {% if posts and posts.length > 0 %}
+      {% for post in posts %}
+      <article class="mini-post">
+        <h4><a href="{{post.href}}">{{post.title}}</a></h4>
+        {% if post.description %}<p>{{post.description}}</p>{% endif %}
+        {% if post.created_at %}<p class="post-meta">{{post.created_at}}</p>{% endif %}
+      </article>
+      {% endfor %}
+      {% else %}
+      <p class="empty-state">No entries yet.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  {{theme_footer | safe}}
+</section>

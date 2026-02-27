@@ -34,6 +34,8 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  Eye,
+  EyeOff,
   ExternalLink,
   Link2,
   Unlink2,
@@ -92,6 +94,8 @@ type PostWithSite = {
   title: string | null;
   description: string | null;
   content: string | null;
+  password?: string | null;
+  usePassword?: boolean | null;
   layout: string | null;
   slug: string;
   published: boolean;
@@ -124,6 +128,8 @@ type SavePostAction = (data: {
   description?: string | null;
   slug?: string;
   content?: string | null;
+  password?: string | null;
+  usePassword?: boolean | null;
   layout?: string | null;
   categoryIds?: number[];
   tagIds?: number[];
@@ -207,9 +213,21 @@ function normalizeSlugInput(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+function readMetaBoolean(entries: PostMetaEntry[], key: string, fallback = true) {
+  const match = entries.find((entry) => String(entry.key || "").trim().toLowerCase() === key.toLowerCase());
+  if (!match) return fallback;
+  const normalized = String(match.value || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+
 export default function Editor({
   post,
   defaultEditorMode = "rich-text",
+  defaultEnableComments = true,
+  commentsPluginEnabled = true,
   onSave = updateDomainPost,
   onUpdateMetadata = updateDomainPostMetadata,
   enableThumbnail = true,
@@ -218,6 +236,8 @@ export default function Editor({
 }: {
   post: PostWithSite;
   defaultEditorMode?: EditorMode;
+  defaultEnableComments?: boolean;
+  commentsPluginEnabled?: boolean;
   onSave?: SavePostAction;
   onUpdateMetadata?: UpdatePostMetadataAction;
   enableThumbnail?: boolean;
@@ -227,6 +247,7 @@ export default function Editor({
   const [initialContent, setInitialContent] = useState<JSONContent | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showPostPassword, setShowPostPassword] = useState(false);
   const [charsCount, setCharsCount] = useState<number>();
   const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>([]);
   const [taxonomyTermsByKey, setTaxonomyTermsByKey] = useState<Record<string, TaxonomyTerm[]>>({});
@@ -293,6 +314,7 @@ export default function Editor({
     setMetaEntries(nextMeta);
     metaEntriesRef.current = nextMeta;
     lastImageCountRef.current = countImageNodes(content);
+    setShowPostPassword(false);
   }, [post]);
 
   const [data, setData] = useState<PostWithSite>(post);
@@ -460,6 +482,8 @@ export default function Editor({
         description: string;
         slug: string;
         content: string;
+        password: string;
+        usePassword: boolean;
         layout: string | null;
         categoryIds: number[];
         tagIds: number[];
@@ -531,6 +555,8 @@ export default function Editor({
       description: latest.description ?? "",
       slug: latest.slug ?? "",
       content,
+      password: latest.password ?? "",
+      usePassword: Boolean(latest.usePassword),
       layout: latest.layout ?? null,
       categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
       tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
@@ -549,6 +575,8 @@ export default function Editor({
         description: latest.description ?? "",
         slug: latest.slug ?? "",
         content,
+        password: latest.password ?? "",
+        usePassword: Boolean(latest.usePassword),
         layout: latest.layout ?? null,
         categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
         tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
@@ -571,6 +599,8 @@ export default function Editor({
       description: latest.description ?? "",
       slug: latest.slug ?? "",
       content,
+      password: latest.password ?? "",
+      usePassword: Boolean(latest.usePassword),
       layout: latest.layout ?? null,
       categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
       tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
@@ -587,6 +617,8 @@ export default function Editor({
         description: latest.description ?? "",
         slug: latest.slug ?? "",
         content,
+        password: latest.password ?? "",
+        usePassword: Boolean(latest.usePassword),
         layout: latest.layout ?? null,
         categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
         tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
@@ -722,12 +754,29 @@ export default function Editor({
     enqueueSave(true);
   };
 
+  const useComments = readMetaBoolean(metaEntries, "use_comments", defaultEnableComments);
+
+  const setUseComments = (enabled: boolean) => {
+    if (!canEdit) return;
+    const nextValue = enabled ? "true" : "false";
+    setMetaEntries((prev) => {
+      const next = [...prev];
+      const index = next.findIndex((entry) => entry.key.toLowerCase() === "use_comments");
+      if (index >= 0) {
+        next[index] = { key: "use_comments", value: nextValue };
+        return next;
+      }
+      return [...next, { key: "use_comments", value: nextValue }];
+    });
+    enqueueSave(true);
+  };
+
   useEffect(() => {
     if (!canEdit) return;
     if (!data?.id) return;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.title, data.description, data.slug, data.layout, selectedTermsByTaxonomy, metaEntries]);
+  }, [data.title, data.description, data.slug, data.password, data.usePassword, data.layout, selectedTermsByTaxonomy, metaEntries]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1228,6 +1277,56 @@ export default function Editor({
               <option value="page">Page Layout</option>
               <option value="gallery">Gallery Layout (media grid)</option>
             </select>
+            <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2 py-2 text-xs text-stone-700">
+              <input
+                type="checkbox"
+                checked={Boolean(data.usePassword)}
+                onChange={(e) => {
+                  setData((prev) => ({ ...prev, usePassword: e.target.checked }));
+                  if (!e.target.checked) {
+                    setShowPostPassword(false);
+                  }
+                }}
+                className="h-4 w-4 accent-black"
+              />
+              Password Protect
+            </label>
+            {Boolean(data.usePassword) ? (
+              <label className="space-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">
+                  Post Password
+                </span>
+                <div className="flex items-center gap-1">
+                  <input
+                    type={showPostPassword ? "text" : "password"}
+                    value={data.password ?? ""}
+                    onChange={(e) => setData({ ...data, password: e.target.value })}
+                    placeholder="Enter password"
+                    className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPostPassword((prev) => !prev)}
+                    className="rounded border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-700 hover:bg-stone-100"
+                    aria-label={showPostPassword ? "Hide password" : "Show password"}
+                    title={showPostPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPostPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </label>
+            ) : null}
+            {commentsPluginEnabled ? (
+              <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2 py-2 text-xs text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={useComments}
+                  onChange={(e) => setUseComments(e.target.checked)}
+                  className="h-4 w-4 accent-black"
+                />
+                Use comments
+              </label>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("bulletList") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleBulletList().run())}>Bulleted</button>
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("orderedList") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleOrderedList().run())}>Numbered</button>

@@ -5,7 +5,7 @@ import { getTextSetting, setTextSetting } from "@/lib/cms-config";
 
 type RequiredColumn = {
   tableSuffix: "posts" | "domain_posts";
-  column: "image" | "imageBlurhash";
+  column: "image" | "imageBlurhash" | "password" | "usePassword";
 };
 
 export type MissingDbColumn = {
@@ -16,7 +16,7 @@ export type MissingDbColumn = {
 export const DB_SCHEMA_VERSION_KEY = "db_schema_version";
 export const DB_SCHEMA_TARGET_VERSION_KEY = "db_schema_target_version";
 export const DB_SCHEMA_UPDATED_AT_KEY = "db_schema_updated_at";
-export const TARGET_DB_SCHEMA_VERSION = "2026.02.26.1";
+export const TARGET_DB_SCHEMA_VERSION = "2026.02.26.3";
 
 async function safeGetSetting(key: string, fallback: string) {
   try {
@@ -31,6 +31,8 @@ const REQUIRED_COLUMNS: RequiredColumn[] = [
   { tableSuffix: "posts", column: "imageBlurhash" },
   { tableSuffix: "domain_posts", column: "image" },
   { tableSuffix: "domain_posts", column: "imageBlurhash" },
+  { tableSuffix: "domain_posts", column: "password" },
+  { tableSuffix: "domain_posts", column: "usePassword" },
 ];
 
 const REQUIRED_TABLE_SUFFIXES = [
@@ -110,15 +112,15 @@ export async function getDatabaseHealthReport() {
       ? [
           {
             id: "2026.02.24.1-columns",
-            title: "Add image columns to legacy content tables",
-            reason: "Missing required image/imageBlurhash columns.",
+            title: "Add required columns to content tables",
+            reason: "Missing required image/imageBlurhash/password/usePassword columns.",
           },
         ]
       : []),
     ...(versionBehind
       ? [
           {
-            id: "2026.02.26.1-version",
+            id: "2026.02.26.3-version",
             title: "Record schema version",
             reason: "Installed schema version is not at current target.",
           },
@@ -172,6 +174,16 @@ export async function applyDatabaseCompatibilityFixes() {
   await db.execute(
     sql.raw(
       `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "imageBlurhash" text`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "password" text DEFAULT ''`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "usePassword" boolean NOT NULL DEFAULT false`,
     ),
   );
   await db.execute(

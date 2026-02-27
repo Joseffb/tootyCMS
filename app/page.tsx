@@ -5,6 +5,7 @@ import { getThemeAssetsForSite } from "@/lib/theme-runtime";
 import Script from "next/script";
 import { getInstallState } from "@/lib/install-state";
 import { redirect } from "next/navigation";
+import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 
 export const metadata: Metadata = {
   title: "Tooty CMS",
@@ -29,6 +30,7 @@ export default async function RootPage() {
       {themeAssets.styles.map((href: string) => (
         <link key={href} rel="stylesheet" href={href} />
       ))}
+      <FrontendAuthBridge />
       <SiteHomePage params={Promise.resolve({ domain: mainDomain })} />
       {themeAssets.scripts.map((src: string) => (
         <Script key={src} src={src} strategy="afterInteractive" />

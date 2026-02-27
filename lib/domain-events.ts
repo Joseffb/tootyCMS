@@ -27,6 +27,10 @@ const CORE_DOMAIN_EVENT_NAMES = [
   "communication.sent",
   "communication.failed",
   "communication.dead",
+  "comment.created",
+  "comment.updated",
+  "comment.deleted",
+  "comment.moderated",
   "rbac.role.changed",
 ] as const;
 

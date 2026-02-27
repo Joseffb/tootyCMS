@@ -34,6 +34,7 @@ import {
   setTextSetting,
   WRITING_CATEGORY_BASE_KEY,
   WRITING_EDITOR_MODE_KEY,
+  WRITING_ENABLE_COMMENTS_KEY,
   WRITING_LIST_PATTERN_KEY,
   WRITING_NO_DOMAIN_DATA_DOMAIN_KEY,
   WRITING_NO_DOMAIN_PREFIX_KEY,
@@ -49,7 +50,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { cookies } from "next/headers";
 import { withSiteAuth } from "./auth";
 import db from "./db";
-import { SelectSite, accounts, cmsSettings, sites, users } from "./schema";
+import { SelectSite, accounts, sites, users } from "./schema";
 import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, termTaxonomyMeta, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
 import {
@@ -84,6 +85,8 @@ import {
 } from "@/lib/authorization";
 import { canTransitionContentState, stateFromPublishedFlag } from "@/lib/content-state-engine";
 import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
+import { getSettingsByKeys, listSettingsByLikePatterns, setSettingByKey } from "@/lib/settings-store";
+import { getCommentProviderWritingOptions, hasEnabledCommentProvider } from "@/lib/comments-spine";
 
 function emitCmsLifecycleEvent(input: {
   name: "content_published" | "content_deleted" | "custom_event";
@@ -720,10 +723,7 @@ export const getTaxonomyOverview = async () => {
     merged.set("category", { taxonomy: "category", termCount: 0, usageCount: 0 });
   }
 
-  const labelRows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(like(cmsSettings.key, "taxonomy_label_%"));
+  const labelRows = await listSettingsByLikePatterns(["taxonomy_label_%"]);
   const labelMap = new Map(
     labelRows.map((row) => [row.key.replace(/^taxonomy_label_/, ""), row.value]),
   );
@@ -749,15 +749,7 @@ export const setTaxonomyLabel = async (input: { taxonomy: string; label: string 
   const label = input.label.trim();
   if (!taxonomy || !label) return { error: "taxonomy and label are required" };
   await db
-    .insert(cmsSettings)
-    .values({
-      key: `taxonomy_label_${taxonomy}`,
-      value: label,
-    })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: label },
-    });
+  await setSettingByKey(`taxonomy_label_${taxonomy}`, label);
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
@@ -1355,6 +1347,8 @@ export const updateDomainPost = async (
     title?: string | null;
     description?: string | null;
     content?: string | null;
+    password?: string | null;
+    usePassword?: boolean | null;
     layout?: string | null;
     categoryIds?: number[];
     tagIds?: number[];
@@ -1381,6 +1375,8 @@ export const updateDomainPost = async (
           title: data.title,
           description: data.description,
           content: data.content,
+          password: data.password ?? "",
+          ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
           layout: data.layout ?? null,
         })
         .where(eq(domainPosts.id, data.id))
@@ -1886,11 +1882,7 @@ async function getEnabledConfiguredOauthProviders() {
     `plugin_${providerToPlugin[id]}_enabled`,
     `plugin_${providerToPlugin[id]}_config`,
   ]);
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(inArray(cmsSettings.key, keys));
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const byKey = await getSettingsByKeys(keys);
 
   return oauthIds.filter((id) => {
     const pluginId = providerToPlugin[id];
@@ -1945,16 +1937,11 @@ async function getOauthProviderSettingsInternal() {
   const providerToPlugin = Object.fromEntries(
     Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
   ) as Record<(typeof oauthIds)[number], string>;
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(
-      inArray(
-        cmsSettings.key,
-        oauthIds.map((id) => `plugin_${providerToPlugin[id]}_enabled`),
-      ),
-    );
-  return parseAuthProviderAvailability(rows);
+  const keys = oauthIds.map((id) => `plugin_${providerToPlugin[id]}_enabled`);
+  const byKey = await getSettingsByKeys(keys);
+  return parseAuthProviderAvailability(
+    keys.map((key) => ({ key, value: byKey[key] ?? "false" })),
+  );
 }
 
 export const getProfile = async (siteId?: string) => {
@@ -1986,6 +1973,7 @@ export const getProfile = async (siteId?: string) => {
   });
   const linkedSet = new Set(linkedAccounts.map((account) => String(account.provider || "").trim()).filter(Boolean));
   const forcePasswordChange = (await getUserMetaValue(self.id, "force_password_change")) === "true";
+  const displayName = (await getUserMetaValue(self.id, "display_name")) || self.name || "";
   const kernel = await createKernelForRequest(siteId);
   const extensionSectionsRaw = await kernel.applyFilters<ProfileSection[]>("admin:profile:sections", [], {
     siteId: siteId || null,
@@ -1997,6 +1985,7 @@ export const getProfile = async (siteId?: string) => {
     user: {
       id: self.id,
       name: self.name ?? "",
+      displayName,
       email: self.email,
       role: self.role,
       hasNativePassword: Boolean(self.passwordHash),
@@ -2026,6 +2015,7 @@ export const updateProfile = async (formData: FormData) => {
   }
 
   const name = normalizeOptionalString(formData.get("name"));
+  const displayName = normalizeOptionalString(formData.get("displayName")) || "";
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
   if (!email || !validateEmail(email)) {
@@ -2040,6 +2030,7 @@ export const updateProfile = async (formData: FormData) => {
         email,
       })
       .where(eq(users.id, session.user.id));
+    await setUserMetaValue(session.user.id, "display_name", displayName);
   } catch (error: any) {
     if (error?.code === "23505") {
       return { error: "Another account already uses that email" };
@@ -2417,13 +2408,7 @@ export const updateOauthProviderSettings = async (formData: FormData) => {
   for (const id of oauthIds) {
     const key = `plugin_${providerToPlugin[id]}_enabled`;
     const enabled = formData.get(`oauth_provider_${id}`) === "on";
-    await db
-      .insert(cmsSettings)
-      .values({ key, value: enabled ? "true" : "false" })
-      .onConflictDoUpdate({
-        target: cmsSettings.key,
-        set: { value: enabled ? "true" : "false" },
-      });
+    await setSettingByKey(key, enabled ? "true" : "false");
   }
 
   revalidateSettingsPath("/settings/users");
@@ -2687,9 +2672,15 @@ export const getSiteEditorSettingsAdmin = async (siteIdRaw: string) => {
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
   const writing = await getSiteWritingSettings(site.id);
+  const commentsPluginEnabled = await hasEnabledCommentProvider(site.id);
+  const effectiveEnableComments = commentsPluginEnabled ? writing.enableComments : false;
+  const commentWritingOptions = commentsPluginEnabled ? await getCommentProviderWritingOptions(site.id) : [];
   return {
     siteId: site.id,
     editorMode: writing.editorMode,
+    defaultEnableComments: effectiveEnableComments,
+    commentsPluginEnabled,
+    commentWritingOptions,
   };
 };
 
@@ -2700,7 +2691,19 @@ export const updateSiteEditorSettings = async (formData: FormData) => {
   const { site } = owned;
 
   const editorMode = ((formData.get("writing_editor_mode") as string | null) ?? "rich-text").trim() || "rich-text";
-  await setSiteTextSetting(site.id, WRITING_EDITOR_MODE_KEY, editorMode);
+  const enableComments = formData.get("writing_enable_comments") === "on";
+  const commentsPluginEnabled = await hasEnabledCommentProvider(site.id);
+  const commentWritingOptions = commentsPluginEnabled ? await getCommentProviderWritingOptions(site.id) : [];
+
+  const updates: Array<Promise<unknown>> = [
+    setSiteTextSetting(site.id, WRITING_EDITOR_MODE_KEY, editorMode),
+    setSiteBooleanSetting(site.id, WRITING_ENABLE_COMMENTS_KEY, commentsPluginEnabled ? enableComments : false),
+  ];
+  for (const option of commentWritingOptions) {
+    const checked = formData.get(option.formField) === "on";
+    updates.push(setSiteBooleanSetting(site.id, option.settingKey, checked));
+  }
+  await Promise.all(updates);
 
   revalidatePath(`/site/${site.id}/settings/writing`);
   revalidatePath(`/app/site/${site.id}/settings/writing`);

@@ -40,8 +40,11 @@ describe("hello-teety plugin", () => {
     expect(widgets).toHaveLength(1);
     expect(widgets[0].id).toBe("hello-teety-quote");
     expect(widgets[0].title).toBe("Hello Teety");
-    expect(typeof widgets[0].content).toBe("string");
-    expect(widgets[0].content.length).toBeGreaterThan(0);
+    const lines = String(widgets[0].content || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(lines).toHaveLength(1);
   });
 
   it("adds floating widget on global admin pages without site context", async () => {
@@ -76,43 +79,32 @@ describe("hello-teety plugin", () => {
     expect(String((context.trace as string[])[0])).toContain("hello-teety:");
   });
 
-  it("uses theme quote mode only on theme settings paths", async () => {
+  it("uses theme use_type only on theme settings paths", async () => {
     const { kernel, filters } = createKernel();
     getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "teety-dark" : ""));
     await register(kernel as any, { getPluginSetting, getSetting });
 
-    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
-    const widgets = await widgetFilter!([], { siteId: "site_123", path: "/site/site_123/settings/themes" });
-    expect(widgets).toHaveLength(1);
-    const quote = String(widgets[0].content);
-    const lines = quote.split("\n").map((line) => line.trim()).filter(Boolean);
-    expect(lines).toHaveLength(12);
+    const useTypeFilter = filters.get("admin:context-use-type")?.[0];
+    const useType = await useTypeFilter!("default", { siteId: "site_123", path: "/site/site_123/settings/themes" });
+    expect(useType).toBe("theme");
   });
 
-  it("does not use theme quote mode off theme pages", async () => {
+  it("does not use theme use_type off theme pages", async () => {
     const { kernel, filters } = createKernel();
     getSetting.mockImplementation(async (key: string) => (key === "site_site_123_theme" ? "teety-dark" : ""));
     await register(kernel as any, { getPluginSetting, getSetting });
 
-    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
-    const widgets = await widgetFilter!([], { siteId: "site_123", path: "/site/site_123/settings/menus" });
-    expect(widgets).toHaveLength(1);
-    const quote = String(widgets[0].content);
-    expect(quote.includes("\n")).toBe(false);
+    const useTypeFilter = filters.get("admin:context-use-type")?.[0];
+    const useType = await useTypeFilter!("default", { siteId: "site_123", path: "/site/site_123/settings/menus" });
+    expect(useType).toBe("default");
   });
 
-  it("emits 15 comments when migration kit plugin page is open", async () => {
+  it("uses utility use_type when migration kit plugin page is open", async () => {
     const { kernel, filters } = createKernel();
     await register(kernel as any, { getPluginSetting, getSetting });
 
-    const widgetFilter = filters.get("admin:floating-widgets")?.[0];
-    const widgets = await widgetFilter!([], { path: "/plugins/export-import" });
-    expect(widgets).toHaveLength(1);
-    const lines = String(widgets[0].content || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    expect(lines).toHaveLength(15);
-    expect(lines.some((line) => line.includes("Moving the docs huh?"))).toBe(true);
+    const useTypeFilter = filters.get("admin:context-use-type")?.[0];
+    const useType = await useTypeFilter!("default", { path: "/plugins/export-import" });
+    expect(useType).toBe("utility");
   });
 });

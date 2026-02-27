@@ -13,6 +13,7 @@ import {
   SOCIAL_META_TITLE_KEY,
 } from "@/lib/cms-config";
 import Script from "next/script";
+import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 
 export async function generateMetadata({
   params,
@@ -124,16 +125,56 @@ export default async function SiteLayout({
   });
   await kernel.doAction("render:after", { domain: decoded, siteId, location: "header" });
   await kernel.doAction("request:end", { domain: decoded, siteId });
+  const enqueuedAssets = kernel.getEnqueuedAssets();
+  const enqueuedStyles = enqueuedAssets.filter((asset) => asset.kind === "style");
+  const enqueuedScripts = enqueuedAssets.filter((asset) => asset.kind === "script");
 
   return (
     <>
       {themeAssets.styles.map((href: string) => (
         <link key={href} rel="stylesheet" href={href} />
       ))}
+      {enqueuedStyles.map((asset) =>
+        asset.inline ? (
+          <style
+            key={asset.id}
+            {...(asset.attrs || {})}
+            dangerouslySetInnerHTML={{ __html: asset.inline || "" }}
+          />
+        ) : (
+          <link
+            key={asset.id}
+            rel={(asset.attrs || {}).rel || "stylesheet"}
+            href={asset.src || ""}
+            {...(asset.attrs || {})}
+          />
+        ),
+      )}
+      <FrontendAuthBridge />
       {children}
       {themeAssets.scripts.map((src: string) => (
         <Script key={src} src={src} strategy="afterInteractive" />
       ))}
+      {enqueuedScripts.map((asset) =>
+        asset.src ? (
+          <Script
+            key={asset.id}
+            id={asset.id}
+            src={asset.src}
+            strategy={asset.strategy || "afterInteractive"}
+            {...(asset.attrs || {})}
+          />
+        ) : (
+          <Script
+            key={asset.id}
+            id={asset.id}
+            strategy={asset.strategy || "afterInteractive"}
+            {...(asset.attrs || {})}
+          >
+            {asset.inline || ""}
+          </Script>
+        ),
+      )}
     </>
   );
 }

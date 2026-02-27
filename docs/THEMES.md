@@ -183,6 +183,7 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.domains`
 - `tooty.pluginSettings`
 - `tooty.query` (Core-resolved, read-only query results)
+- `auth` (current viewer snapshot: `logged_in`, `display_name`, `username`, `role`)
 
 ### Theme Query Contract
 
@@ -197,11 +198,30 @@ Example request shape (declared in `theme.json` under `queries`):
 - `source`: `"content.list"`
 - `scope`: `"site"` or `"network"`
 - `route`: optional route selector (`home`, `domain_archive`, `domain_detail`, etc.)
-- `params`: whitelisted query params (`dataDomain`, `taxonomy`, `withTerm`, `limit`, `metaKeys`)
+- `requiresCapability`: optional site capability gate (for example `site.users.manage`)
+- `params`: query params (WP-style aliases supported):
+  - `dataDomain` or `data_domain`
+  - `limit` or `posts_per_page`
+  - `orderBy`/`orderby`
+  - `order` (`asc`/`desc`)
+  - `taxonomy`, `withTerm`/`with_term`
+  - `metaKeys`/`meta_keys`
+  - `where` (single rule or nested `clauses` with `modifier: and|or`)
+  - optional `options` wrapper containing the same keys
+
+`where` operators currently supported:
+- `eq`, `neq`
+- `in`, `nin`
+- `like`, `ilike`
+- `contains`
+- `gt`, `gte`, `lt`, `lte`
+- `is_null`, `is_not_null`
 
 Governance:
 - Queries are read-only.
 - Params are normalized and bounded.
+- Capability-gated queries are evaluated against the authenticated actor for that request.
+- Anonymous viewers have a bare permission set and will receive empty results for gated queries.
 - `scope="network"` is enabled only through global settings and only for main site or permissioned site IDs.
 - Network results are restricted to the same owner network.
 

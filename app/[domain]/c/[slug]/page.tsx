@@ -7,6 +7,7 @@ import { getActiveThemeForSite, getThemeTemplateByHierarchy } from "@/lib/theme-
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildDetailPath } from "@/lib/permalink";
+import { getThemeRenderContext } from "@/lib/theme-render-context";
 
 type Params = Promise<{ domain: string; slug: string }>;
 
@@ -44,9 +45,16 @@ export default async function CategoryArchivePage({ params }: { params: Params }
       slug: decodedSlug,
     });
     if (categoryTemplate) {
+      const themeRuntime = await getThemeRenderContext(site.id, "category_archive", [
+        categoryTemplate.template,
+        categoryTemplate.partials?.header,
+        categoryTemplate.partials?.footer,
+      ]);
       const html = renderThemeTemplate(categoryTemplate.template, {
         theme_header: categoryTemplate.partials?.header || "",
         theme_footer: categoryTemplate.partials?.footer || "",
+        theme_comment_item: categoryTemplate.partials?.commentItem || "",
+        theme_password: categoryTemplate.partials?.password || "",
         site: {
           id: site.id,
           name: site.name || "Tooty CMS",
@@ -72,6 +80,8 @@ export default async function CategoryArchivePage({ params }: { params: Params }
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
+        tooty: themeRuntime.tooty,
+        auth: themeRuntime.auth,
       });
       return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
     }

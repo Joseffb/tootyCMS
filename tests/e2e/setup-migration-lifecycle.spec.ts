@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { TARGET_DB_SCHEMA_VERSION } from "../../lib/db-health";
 import { encode } from "next-auth/jwt";
+import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-setup-migrate-${Date.now()}`;
 const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
@@ -12,16 +13,11 @@ const adminSiteId = `${runId}-admin-site`;
 const adminEmail = `${runId}@example.com`;
 
 async function upsertSetting(key: string, value: string) {
-  await sql`
-    INSERT INTO tooty_cms_settings ("key", "value")
-    VALUES (${key}, ${value})
-    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"
-  `;
+  await setSettingByKey(key, value);
 }
 
 async function readSetting(key: string) {
-  const result = await sql`SELECT "value" FROM tooty_cms_settings WHERE "key" = ${key} LIMIT 1`;
-  return String(result.rows[0]?.value ?? "");
+  return String((await getSettingByKey(key)) ?? "");
 }
 
 async function ensureAdminUserAndSite() {

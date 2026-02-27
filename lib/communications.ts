@@ -1,13 +1,14 @@
 import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or } from "drizzle-orm";
 import { createId } from "@paralleldrive/cuid2";
 import db from "@/lib/db";
-import { communicationAttempts, communicationMessages, sites } from "@/lib/schema";
+import { communicationAttempts, communicationMessages, sites, users } from "@/lib/schema";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import type { CommunicationChannel, CommunicationMessagePayload } from "@/lib/kernel";
 import { trace } from "@/lib/debug";
 import { getSiteCommunicationGovernance } from "@/lib/cms-config";
 import { emitDomainEvent } from "@/lib/domain-dispatch";
 import type { DomainEventName } from "@/lib/domain-events";
+import type { CommunicationListItem } from "@/lib/communications-types";
 
 export type CommunicationStatus = "queued" | "retrying" | "sent" | "failed" | "dead" | "logged";
 export type CommunicationCategory = "transactional" | "marketing";
@@ -543,25 +544,9 @@ export async function applyCommunicationCallback(input: {
   return { ok: true, messageId: row.id };
 }
 
-export type CommunicationListItem = {
-  id: string;
-  siteId: string | null;
-  siteName: string | null;
-  channel: string;
-  to: string;
-  subject: string | null;
-  status: string;
-  providerId: string | null;
-  externalId: string | null;
-  attemptCount: number;
-  maxAttempts: number;
-  lastError: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export async function listCommunicationMessages(input?: {
   siteId?: string;
+  includeGlobal?: boolean;
   search?: string;
   status?: string;
   providerId?: string;
@@ -574,9 +559,16 @@ export async function listCommunicationMessages(input?: {
   const status = String(input?.status || "").trim();
   const providerId = String(input?.providerId || "").trim();
   const siteId = String(input?.siteId || "").trim();
+  const includeGlobal = Boolean(input?.includeGlobal);
 
   const where = [];
-  if (siteId) where.push(eq(communicationMessages.siteId, siteId));
+  if (siteId) {
+    where.push(
+      includeGlobal
+        ? or(eq(communicationMessages.siteId, siteId), isNull(communicationMessages.siteId))
+        : eq(communicationMessages.siteId, siteId),
+    );
+  }
   if (status) where.push(eq(communicationMessages.status, status));
   if (providerId) where.push(eq(communicationMessages.providerId, providerId));
   if (search) {
@@ -595,9 +587,13 @@ export async function listCommunicationMessages(input?: {
       id: communicationMessages.id,
       siteId: communicationMessages.siteId,
       siteName: sites.name,
+      createdByUserId: communicationMessages.createdByUserId,
+      createdByEmail: users.email,
       channel: communicationMessages.channel,
       to: communicationMessages.to,
       subject: communicationMessages.subject,
+      body: communicationMessages.body,
+      metadata: communicationMessages.metadata,
       status: communicationMessages.status,
       providerId: communicationMessages.providerId,
       externalId: communicationMessages.externalId,
@@ -609,6 +605,7 @@ export async function listCommunicationMessages(input?: {
     })
     .from(communicationMessages)
     .leftJoin(sites, eq(sites.id, communicationMessages.siteId))
+    .leftJoin(users, eq(users.id, communicationMessages.createdByUserId))
     .where(where.length ? and(...where) : undefined)
     .orderBy(desc(communicationMessages.createdAt), desc(communicationMessages.id))
     .limit(limit + 1)
@@ -621,4 +618,32 @@ export async function listCommunicationMessages(input?: {
     hasMore,
     nextOffset: hasMore ? offset + limit : null,
   };
+}
+
+export async function adminSetCommunicationStatus(input: {
+  messageId: string;
+  status: CommunicationStatus;
+  error?: string | null;
+}) {
+  const messageId = String(input.messageId || "").trim();
+  if (!messageId) throw new Error("messageId is required.");
+  await updateMessageWithTransition({
+    messageId,
+    nextStatus: input.status,
+    nextAttemptAt: null,
+    ...(input.error !== undefined ? { lastError: input.error } : {}),
+  });
+  return { ok: true as const, messageId, status: input.status };
+}
+
+export async function adminRetryCommunicationMessage(messageId: string) {
+  const id = String(messageId || "").trim();
+  if (!id) throw new Error("messageId is required.");
+  await updateMessageWithTransition({
+    messageId: id,
+    nextStatus: "queued",
+    nextAttemptAt: null,
+    lastError: null,
+  });
+  return deliverMessage(id);
 }

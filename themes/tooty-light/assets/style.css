@@ -377,6 +377,13 @@
   color: #57534e;
 }
 
+.tooty-post-auth {
+  margin: 0 0 0 auto;
+  color: #57534e;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
 .tooty-post-hero {
   border-color: #fdba74;
   background: radial-gradient(circle at top left, #fff8df 0%, #ffe9c8 45%, #fef4df 100%);
@@ -426,6 +433,108 @@
 
 .tooty-post-prose a:hover {
   color: #9a3412;
+}
+
+.tooty-comments-block {
+  margin-top: 1rem;
+}
+
+.tooty-comments-card {
+  border: 1px solid #e7e5e4;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  padding: 1rem;
+}
+
+.tooty-comments-compose {
+  margin-top: 0.75rem;
+}
+
+.tooty-comments-title {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #111827;
+}
+
+.tooty-comments-note {
+  margin: 0.35rem 0 0.85rem;
+  color: #374151;
+  font-size: 0.9rem;
+}
+
+.tooty-comments-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tooty-comment-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.6rem;
+  background: #ffffff;
+  padding: 0.7rem;
+}
+
+.tooty-comment-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  color: #4b5563;
+  font-size: 0.75rem;
+}
+
+.tooty-comment-status {
+  text-transform: capitalize;
+  font-weight: 600;
+  color: #111827;
+}
+
+.tooty-comment-item p {
+  margin: 0;
+  color: #111827;
+  white-space: pre-wrap;
+}
+
+.tooty-comments-empty {
+  margin: 0;
+  color: #4b5563;
+}
+
+.tooty-comments-form {
+  margin-top: 0.75rem;
+}
+
+.tooty-comments-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  font: inherit;
+  color: #111827;
+  background: #ffffff;
+}
+
+.tooty-comments-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tooty-comments-actions button {
+  border: 1px solid #111827;
+  border-radius: 0.45rem;
+  background: #111827;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+}
+
+.tooty-comments-actions span {
+  color: #4b5563;
+  font-size: 0.85rem;
 }
 
 /* Global body-text contract for light theme */

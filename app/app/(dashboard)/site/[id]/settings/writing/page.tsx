@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getSiteEditorSettingsAdmin, updateSiteEditorSettings } from "@/lib/actions";
+import CommentProviderOptions from "@/components/settings/comment-provider-options";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -42,6 +43,12 @@ export default async function SiteWritingSettingsPage({ params }: Props) {
             <option value="html-css-first">HTML/CSS-first</option>
           </select>
         </label>
+
+        <CommentProviderOptions
+          commentsPluginEnabled={result.commentsPluginEnabled}
+          defaultEnableComments={result.defaultEnableComments}
+          options={result.commentWritingOptions}
+        />
 
         <button className="rounded-md border border-black bg-black px-3 py-2 text-sm text-white hover:bg-white hover:text-black">
           Save Writing Settings

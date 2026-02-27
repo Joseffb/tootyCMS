@@ -1,7 +1,5 @@
-import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { inArray } from "drizzle-orm";
 import { checkBotId } from "botid/server";
+import { getSettingsByKeys } from "@/lib/settings-store";
 
 const BOTID_PLUGIN_ID = "botid-shield";
 const BOTID_ENABLED_KEY = `plugin_${BOTID_PLUGIN_ID}_enabled`;
@@ -70,14 +68,9 @@ function parseConfig(raw: string | undefined): BotIdGuardConfig {
 }
 
 async function getBotIdConfig(): Promise<BotIdGuardConfig> {
-  const rows = await db
-    .select({ key: cmsSettings.key, value: cmsSettings.value })
-    .from(cmsSettings)
-    .where(inArray(cmsSettings.key, [BOTID_ENABLED_KEY, BOTID_CONFIG_KEY]));
-
-  const byKey = new Map(rows.map((row) => [row.key, row.value]));
-  const config = parseConfig(byKey.get(BOTID_CONFIG_KEY));
-  config.enabled = byKey.get(BOTID_ENABLED_KEY) === "true";
+  const byKey = await getSettingsByKeys([BOTID_ENABLED_KEY, BOTID_CONFIG_KEY]);
+  const config = parseConfig(byKey[BOTID_CONFIG_KEY]);
+  config.enabled = byKey[BOTID_ENABLED_KEY] === "true";
   if (!config.enabled) config.mode = "off";
   return config;
 }

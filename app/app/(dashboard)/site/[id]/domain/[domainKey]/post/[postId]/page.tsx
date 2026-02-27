@@ -12,6 +12,8 @@ import { domainPostMeta, domainPosts, termRelationships, termTaxonomies, terms }
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { canUserMutateDomainPost, userCan } from "@/lib/authorization";
+import { getSiteWritingSettings } from "@/lib/cms-config";
+import { hasEnabledCommentProvider } from "@/lib/comments-spine";
 
 type Props = {
   params: Promise<{
@@ -103,11 +105,16 @@ export default async function DomainPostPage({ params }: Props) {
       name: row.name,
     })),
   };
+  const writingSettings = await getSiteWritingSettings(siteId);
+  const commentsPluginEnabled = await hasEnabledCommentProvider(siteId);
+  const commentsGateEnabled = commentsPluginEnabled && writingSettings.enableComments;
 
   return (
     <Editor
       post={hydratedPost}
       defaultEditorMode="rich-text"
+      defaultEnableComments={commentsGateEnabled}
+      commentsPluginEnabled={commentsGateEnabled}
       onSave={updateDomainPost}
       onUpdateMetadata={updateDomainPostMetadata}
       canEdit={canEdit.allowed}

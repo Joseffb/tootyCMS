@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createGlobalRbacRole, deleteGlobalRbacRole, getGlobalRbacSettingsAdmin, listUsersAdmin, updateGlobalRbacCapability, updateUserAdmin } from "@/lib/actions";
 import RbacAssignmentsTable from "@/components/settings/rbac-assignments-table";
 import RbacRoleControls from "@/components/settings/rbac-role-controls";
@@ -53,7 +54,7 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
       </p>
 
       <div className="mt-5 flex items-center gap-2 border-b border-stone-200 pb-3 dark:border-stone-700">
-        <a
+        <Link
           href="/app/settings/rbac?tab=roles"
           className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
             tab === "roles"
@@ -62,8 +63,8 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
           }`}
         >
           Assignments
-        </a>
-        <a
+        </Link>
+        <Link
           href={`/app/settings/rbac?tab=matrix&role=${encodeURIComponent(selectedRole)}`}
           className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
             tab === "matrix"
@@ -72,7 +73,7 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
           }`}
         >
           Access Control
-        </a>
+        </Link>
       </div>
 
       {tab === "matrix" ? (

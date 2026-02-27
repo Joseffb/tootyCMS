@@ -7,6 +7,7 @@ import { renderThemeTemplate } from "@/lib/theme-template";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { buildDetailPath } from "@/lib/permalink";
+import { getThemeRenderContext } from "@/lib/theme-render-context";
 
 export default async function NotFound() {
   const headersList = await headers();
@@ -23,6 +24,11 @@ export default async function NotFound() {
       getSiteWritingSettings(siteId),
     ]);
     if (themeTemplate) {
+      const themeRuntime = await getThemeRenderContext(siteId, "not_found", [
+        themeTemplate.template,
+        themeTemplate.partials?.header,
+        themeTemplate.partials?.footer,
+      ]);
       const isPrimary = Boolean(data?.isPrimary) || data?.subdomain === "main";
       const siteUrl =
         configuredRootUrl.value.trim() ||
@@ -58,6 +64,8 @@ export default async function NotFound() {
           tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
           privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
         },
+        tooty: themeRuntime.tooty,
+        auth: themeRuntime.auth,
         route_kind: "not_found",
         data_domain: "404",
       });

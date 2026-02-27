@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { putMock } = vi.hoisted(() => ({
+const {
+  putMock,
+  findSiteMock,
+  selectWhereMock,
+  getSessionMock,
+  userCanMock,
+  evaluateBotIdRouteMock,
+  buildMediaVariantsMock,
+} = vi.hoisted(() => ({
   putMock: vi.fn(),
-}));
-
-vi.mock("@vercel/blob", () => ({
-  put: putMock,
-}));
-
-vi.mock("@/lib/media-variants", () => ({
-  buildMediaVariants: vi.fn(async (file: File) => ({
+  findSiteMock: vi.fn(async () => ({ id: "site-1" })),
+  selectWhereMock: vi.fn(async () => []),
+  getSessionMock: vi.fn(async () => ({ user: { id: "user-1" } })),
+  userCanMock: vi.fn(async () => true),
+  evaluateBotIdRouteMock: vi.fn(async () => ({ allowed: true })),
+  buildMediaVariantsMock: vi.fn(async (file: File) => ({
     hash: "deadbeefdeadbeef",
     extension:
       file.type === "image/png" ? "png" : file.type === "image/jpeg" ? "jpg" : "bin",
@@ -31,12 +37,20 @@ vi.mock("@/lib/media-variants", () => ({
   })),
 }));
 
+vi.mock("@vercel/blob", () => ({
+  put: putMock,
+}));
+
+vi.mock("@/lib/media-variants", () => ({
+  buildMediaVariants: buildMediaVariantsMock,
+}));
+
 vi.mock("@/lib/auth", () => ({
-  getSession: vi.fn(async () => ({ user: { id: "user-1" } })),
+  getSession: getSessionMock,
 }));
 
 vi.mock("@/lib/authorization", () => ({
-  userCan: vi.fn(async () => true),
+  userCan: userCanMock,
 }));
 
 const { assertSiteMediaQuotaAvailableMock } = vi.hoisted(() => ({
@@ -51,16 +65,20 @@ vi.mock("@/lib/media-governance", () => ({
   assertSiteMediaQuotaAvailable: assertSiteMediaQuotaAvailableMock,
 }));
 
+vi.mock("@/lib/botid", () => ({
+  evaluateBotIdRoute: evaluateBotIdRouteMock,
+}));
+
 vi.mock("@/lib/db", () => ({
   default: {
     query: {
       sites: {
-        findFirst: vi.fn(async () => ({ id: "site-1" })),
+        findFirst: findSiteMock,
       },
     },
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(async () => []),
+        where: selectWhereMock,
       })),
     })),
     insert: vi.fn(() => ({
@@ -83,12 +101,44 @@ function makeRequest(formData: FormData) {
 describe("POST /api/uploadImage", () => {
   beforeEach(() => {
     putMock.mockReset();
+    findSiteMock.mockReset();
+    selectWhereMock.mockReset();
+    getSessionMock.mockReset();
+    userCanMock.mockReset();
+    evaluateBotIdRouteMock.mockReset();
+    buildMediaVariantsMock.mockReset();
+    findSiteMock.mockResolvedValue({ id: "site-1" });
+    selectWhereMock.mockResolvedValue([]);
+    getSessionMock.mockResolvedValue({ user: { id: "user-1" } });
+    userCanMock.mockResolvedValue(true);
+    evaluateBotIdRouteMock.mockResolvedValue({ allowed: true });
+    buildMediaVariantsMock.mockImplementation(async (file: File) => ({
+      hash: "deadbeefdeadbeef",
+      extension:
+        file.type === "image/png" ? "png" : file.type === "image/jpeg" ? "jpg" : "bin",
+      mimeType: file.type || "application/octet-stream",
+      variants: [
+        {
+          suffix: "original",
+          width: null,
+          mimeType: file.type || "application/octet-stream",
+          buffer: new Uint8Array([1, 2, 3]),
+        },
+        {
+          suffix: "sm",
+          width: 480,
+          mimeType: file.type || "application/octet-stream",
+          buffer: new Uint8Array([1, 2, 3]),
+        },
+      ],
+    }));
     assertSiteMediaQuotaAvailableMock.mockClear();
     assertSiteMediaQuotaAvailableMock.mockResolvedValue({
       allowed: true,
       maxItems: 0,
       currentItems: 0,
     });
+    delete process.env.NO_IMAGE_MODE;
     process.env.BLOB_READ_WRITE_TOKEN = "token";
   });
 
@@ -269,5 +319,197 @@ describe("POST /api/uploadImage", () => {
     expect(response.status).toBe(429);
     expect(json.code).toBe("media_quota_exceeded");
     expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when BotID blocks request", async () => {
+    evaluateBotIdRouteMock.mockResolvedValue({ allowed: false });
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(403);
+  });
+
+  it("returns 400 when NO_IMAGE_MODE is enabled", async () => {
+    process.env.NO_IMAGE_MODE = "true";
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 404 when site does not exist", async () => {
+    findSiteMock.mockResolvedValue(null);
+    const formData = new FormData();
+    formData.append("siteId", "site-404");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(json.error).toBe("Site not found");
+  });
+
+  it("returns 401 when session is missing", async () => {
+    getSessionMock.mockResolvedValue(null);
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(401);
+  });
+
+  it("returns 401 when session lookup throws", async () => {
+    getSessionMock.mockRejectedValue(new Error("session failure"));
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(401);
+  });
+
+  it("returns 403 when user lacks media.create capability for site", async () => {
+    userCanMock.mockResolvedValue(false);
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(json.error).toBe("Forbidden");
+  });
+
+  it("continues upload when existing media lookup fails", async () => {
+    selectWhereMock.mockRejectedValueOnce(new Error("lookup failed"));
+    putMock.mockResolvedValue({ url: "https://blob.example/asset.png" });
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.url).toBe("https://blob.example/asset.png");
+    expect(putMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses existing media keys without uploading duplicates", async () => {
+    selectWhereMock.mockResolvedValue([
+      {
+        objectKey: "site-1/deadbeefdeadbeef.png",
+        url: "https://blob.example/original.png",
+      },
+      {
+        objectKey: "site-1/deadbeefdeadbeef-sm.png",
+        url: "https://blob.example/sm.png",
+      },
+    ]);
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.url).toBe("https://blob.example/original.png");
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("uses empty original url fallback when no original variant exists", async () => {
+    putMock.mockResolvedValue({ url: "https://blob.example/sm.png" });
+    buildMediaVariantsMock.mockResolvedValue({
+      hash: "deadbeefdeadbeef",
+      extension: "png",
+      mimeType: "image/png",
+      variants: [
+        {
+          suffix: "sm",
+          width: 480,
+          mimeType: "image/png",
+          buffer: new Uint8Array([1, 2, 3]),
+        },
+      ],
+    });
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.url).toBe("");
+  });
+
+  it("handles non-Error throw types and still returns 500", async () => {
+    putMock.mockRejectedValue("boom");
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(500);
+  });
+
+  it("continues when session user id becomes undefined after capability check", async () => {
+    const sharedSession: { user: { id: string | undefined } } = { user: { id: "user-1" } };
+    getSessionMock.mockResolvedValue(sharedSession);
+    userCanMock.mockImplementation(async () => {
+      sharedSession.user.id = undefined;
+      return true;
+    });
+    putMock.mockResolvedValue({ url: "https://blob.example/asset.png" });
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("name", "heroImage");
+    formData.append(
+      "file",
+      new File([new Uint8Array([1, 2, 3])], "cover.png", { type: "image/png" }),
+    );
+    const response = await POST(makeRequest(formData));
+    expect(response.status).toBe(200);
   });
 });

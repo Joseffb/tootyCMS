@@ -2,8 +2,8 @@
   <div class="tooty-post-nav">
     <a class="tooty-post-link" href="{{links.root}}">{{theme.site_title or site.name}}</a>
     <nav class="tooty-post-nav-links" aria-label="Primary">
-      <a class="tooty-post-link" href="{{links.main_site}}">Main Site</a>
-      <a class="tooty-post-link" href="{{links.documentation}}">Documentation</a>
+      <a class="tooty-post-link" href="{{links.about}}">About</a>
     </nav>
+    <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or auth.username or "there" }}{% endif %}</p>
   </div>
 </section>

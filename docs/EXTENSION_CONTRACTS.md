@@ -55,7 +55,7 @@ Plugins may:
 - Register content-type and server behavior only through Core contract surfaces
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
-- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`, `communicationProviders`, `webCallbacks`)
+- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`, `communicationProviders`, `commentProviders`, `webCallbacks`)
 - Extend admin profile UI through filter hooks (for example `admin:profile:sections`)
 - Declare plugin scope explicitly:
   - `scope: "network"` = network-governed plugin. Network enablement is global and treated as network-required for sites.
@@ -191,6 +191,21 @@ Implications:
 - plugin providers extend or replace delivery/query behavior through declared contracts
 - core baseline behavior remains available even when no plugin provider is enabled
 - new spine systems (for example search, comments, messaging, analytics adapters) must adopt this same pattern
+
+### Comment Provider Writing Options UI Contract (MUST)
+
+When a comment provider exposes `writingOptions`, Core renders them in site writing settings using provider metadata:
+
+- Section title uses the active provider name/id (for example: `Tooty Comments Options`).
+- Options are rendered as a dependency tree using `dependsOn` links.
+- Child options are nested under the parent option they depend on.
+- Visibility is controlled by dependency state (`dependsOn.key` and `dependsOn.value`), not hardcoded Core key checks.
+
+`CommentProviderWritingOption` supports:
+
+- `dependsOn?: { key: string; value: boolean }`
+
+Provider authors should define dependencies in option metadata so Core can render provider-specific settings behavior without custom UI logic.
 
 ## Theme Contract
 

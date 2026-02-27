@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("home page renders without runtime errors", async ({ page }) => {
   const response = await page.goto("/");
   if (!response?.ok()) {
-    const loginResponse = await page.goto("/app/login");
+    const loginResponse = (await page.goto("/login")) ?? (await page.goto("/app/login"));
     expect(loginResponse?.ok()).toBeTruthy();
     await expect(page.locator("body")).toContainText(/login|auth|provider|configured/i);
     return;

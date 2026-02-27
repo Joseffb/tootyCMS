@@ -1,5 +1,6 @@
 import type { ThemeTokens } from "@/lib/theme-system";
 import { normalizeExtensionTags } from "@/lib/extension-tags";
+import { SITE_CAPABILITIES, type SiteCapability } from "@/lib/rbac";
 
 export type ExtensionKind = "plugin" | "theme";
 
@@ -48,6 +49,7 @@ export type PluginContract = {
     authExtensions?: boolean;
     scheduleJobs?: boolean;
     communicationProviders?: boolean;
+    commentProviders?: boolean;
     webCallbacks?: boolean;
   };
   menu?: {
@@ -91,6 +93,7 @@ export type ThemeContract = {
     scope?: "site" | "network";
     route?: string;
     params?: Record<string, unknown>;
+    requiresCapability?: SiteCapability;
   }>;
   settingsFields?: ExtensionSettingsField[];
 };
@@ -188,6 +191,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
       communicationProviders: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).communicationProviders ?? false)
         : false,
+      commentProviders: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).commentProviders ?? false)
+        : false,
       webCallbacks: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).webCallbacks ?? false)
         : false,
@@ -267,6 +273,10 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
         const scope = scopeRaw === "network" ? "network" : "site";
         const route = String(entry.route ?? "").trim().toLowerCase();
         const params = entry.params && typeof entry.params === "object" ? (entry.params as Record<string, unknown>) : {};
+        const requiresCapabilityRaw = String(entry.requiresCapability ?? "").trim();
+        const requiresCapability = SITE_CAPABILITIES.includes(requiresCapabilityRaw as SiteCapability)
+          ? (requiresCapabilityRaw as SiteCapability)
+          : undefined;
         return [
           {
             key,
@@ -274,6 +284,7 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
             scope,
             route,
             params,
+            requiresCapability,
           },
         ];
       }),

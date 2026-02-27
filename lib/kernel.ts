@@ -9,6 +9,10 @@ export type KernelActionName =
   | "communication:queued"
   | "request:begin"
   | "content:load"
+  | "comment:created"
+  | "comment:updated"
+  | "comment:deleted"
+  | "comment:moderated"
   | "render:before"
   | "render:after"
   | "request:end";
@@ -47,6 +51,34 @@ export type MenuItem = {
   external?: boolean;
   order?: number;
 };
+
+export type KernelEnqueuedAsset = {
+  id: string;
+  kind: "script" | "style";
+  src?: string;
+  inline?: string;
+  strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive";
+  attrs?: Record<string, string>;
+};
+
+export type KernelEnqueueScriptInput =
+  | string
+  | {
+      id?: string;
+      src?: string;
+      inline?: string;
+      strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive";
+      attrs?: Record<string, string>;
+    };
+
+export type KernelEnqueueStyleInput =
+  | string
+  | {
+      id?: string;
+      href?: string;
+      inline?: string;
+      attrs?: Record<string, string>;
+    };
 
 export type PluginContentTypeRegistration = {
   key: string;
@@ -165,6 +197,93 @@ export type PluginWebcallbackHandlerRegistration = {
   };
 };
 
+export type CommentContextType = "entry" | "group" | "discussion";
+export type CommentStatus = "pending" | "approved" | "rejected" | "spam" | "deleted";
+
+export type CommentRecord = {
+  id: string;
+  siteId: string;
+  contextType: CommentContextType;
+  contextId: string;
+  authorId: string | null;
+  body: string;
+  status: CommentStatus;
+  parentId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type CommentCreateInput = {
+  siteId: string;
+  contextType: CommentContextType;
+  contextId: string;
+  authorId?: string | null;
+  body: string;
+  status?: CommentStatus;
+  parentId?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CommentUpdateInput = {
+  id: string;
+  siteId: string;
+  actorUserId?: string | null;
+  body?: string;
+  status?: CommentStatus;
+  metadata?: Record<string, unknown>;
+};
+
+export type CommentDeleteInput = {
+  id: string;
+  siteId: string;
+  actorUserId?: string | null;
+};
+
+export type CommentListInput = {
+  siteId: string;
+  contextType?: CommentContextType;
+  contextId?: string;
+  status?: CommentStatus;
+  limit?: number;
+  offset?: number;
+};
+
+export type CommentModerateInput = {
+  id: string;
+  siteId: string;
+  status: CommentStatus;
+  actorUserId?: string | null;
+  reason?: string;
+};
+
+export type CommentProviderWritingOption = {
+  key: string;
+  label: string;
+  type: "checkbox";
+  description?: string;
+  defaultValue?: boolean;
+  dependsOn?: {
+    key: string;
+    value: boolean;
+  };
+};
+
+export type PluginCommentProviderRegistration = {
+  id: string;
+  supportsAnonymousCreate?: boolean;
+  anonymousIdentityFields?: {
+    name?: boolean;
+    email?: boolean;
+  };
+  writingOptions?: CommentProviderWritingOption[];
+  create: (input: CommentCreateInput) => Promise<CommentRecord> | CommentRecord;
+  update: (input: CommentUpdateInput) => Promise<CommentRecord> | CommentRecord;
+  delete: (input: CommentDeleteInput) => Promise<{ ok: boolean }> | { ok: boolean };
+  list: (input: CommentListInput) => Promise<CommentRecord[]> | CommentRecord[];
+  moderate: (input: CommentModerateInput) => Promise<CommentRecord> | CommentRecord;
+};
+
 export type ContentStateRegistration = {
   key: string;
   label: string;
@@ -194,8 +313,10 @@ export class Kernel {
   private pluginScheduleHandlers = new Map<string, PluginScheduleHandlerRegistration[]>();
   private pluginCommunicationProviders = new Map<string, PluginCommunicationProviderRegistration[]>();
   private pluginWebcallbackHandlers = new Map<string, PluginWebcallbackHandlerRegistration[]>();
+  private pluginCommentProviders = new Map<string, PluginCommentProviderRegistration[]>();
   private contentStates = new Map<string, ContentStateRegistration>();
   private contentTransitions = new Map<string, ContentTransitionRegistration>();
+  private enqueuedAssets = new Map<string, KernelEnqueuedAsset>();
 
   addAction(name: KernelActionName, callback: ActionCallback, priority = 10) {
     const existing = this.actions.get(name) ?? [];
@@ -361,6 +482,28 @@ export class Kernel {
     return rows;
   }
 
+  registerPluginCommentProvider(pluginId: string, registration: PluginCommentProviderRegistration) {
+    const list = this.pluginCommentProviders.get(pluginId) ?? [];
+    list.push(registration);
+    this.pluginCommentProviders.set(pluginId, list);
+    trace("kernel", "plugin comment provider registered", {
+      pluginId,
+      id: registration.id,
+    });
+  }
+
+  getPluginCommentProviders(pluginId: string) {
+    return [...(this.pluginCommentProviders.get(pluginId) ?? [])];
+  }
+
+  getAllPluginCommentProviders() {
+    const rows: Array<PluginCommentProviderRegistration & { pluginId: string }> = [];
+    for (const [pluginId, regs] of this.pluginCommentProviders.entries()) {
+      for (const reg of regs) rows.push({ pluginId, ...reg });
+    }
+    return rows;
+  }
+
   registerContentState(registration: ContentStateRegistration) {
     const key = String(registration?.key || "").trim().toLowerCase();
     const label = String(registration?.label || "").trim();
@@ -388,6 +531,57 @@ export class Kernel {
   getContentTransitions() {
     return Array.from(this.contentTransitions.values());
   }
+
+  enqueueScript(input: KernelEnqueueScriptInput) {
+    const raw = typeof input === "string" ? { src: input } : input || {};
+    const src = String(raw.src || "").trim();
+    const inline = String(raw.inline || "").trim();
+    const id =
+      String(raw.id || "").trim() ||
+      (src ? `script:${src}` : inline ? `script:inline:${cryptoHash(inline)}` : "");
+    if (!id || (!src && !inline)) return;
+    this.enqueuedAssets.set(id, {
+      id,
+      kind: "script",
+      src: src || undefined,
+      inline: inline || undefined,
+      strategy: raw.strategy || "afterInteractive",
+      attrs: raw.attrs || {},
+    });
+    trace("kernel", "asset enqueued", { id, kind: "script", hasSrc: Boolean(src), hasInline: Boolean(inline) });
+  }
+
+  enqueueStyle(input: KernelEnqueueStyleInput) {
+    const raw = typeof input === "string" ? { href: input } : input || {};
+    const href = String(raw.href || "").trim();
+    const inline = String(raw.inline || "").trim();
+    const id =
+      String(raw.id || "").trim() ||
+      (href ? `style:${href}` : inline ? `style:inline:${cryptoHash(inline)}` : "");
+    if (!id || (!href && !inline)) return;
+    const attrs = { ...(raw.attrs || {}) };
+    if (!inline && !attrs.rel) attrs.rel = "stylesheet";
+    this.enqueuedAssets.set(id, {
+      id,
+      kind: "style",
+      src: href || undefined,
+      inline: inline || undefined,
+      attrs,
+    });
+    trace("kernel", "asset enqueued", { id, kind: "style", hasSrc: Boolean(href), hasInline: Boolean(inline) });
+  }
+
+  getEnqueuedAssets() {
+    return Array.from(this.enqueuedAssets.values());
+  }
+}
+
+function cryptoHash(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
 }
 
 export function createKernel() {

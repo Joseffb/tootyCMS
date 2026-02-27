@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const sitesFindFirst = vi.fn();
   const dataDomainsFindFirst = vi.fn();
+  const usersFindFirst = vi.fn();
   const insertValues = vi.fn();
   const insert = vi.fn();
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) }));
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => {
     isRandomDefaultImagesEnabled: vi.fn(async () => false),
     sitesFindFirst,
     dataDomainsFindFirst,
+    usersFindFirst,
     insert,
     insertValues,
     update,
@@ -42,7 +44,7 @@ vi.mock("@/lib/db", () => ({
     query: {
       sites: { findFirst: mocks.sitesFindFirst },
       dataDomains: { findFirst: mocks.dataDomainsFindFirst },
-      users: { findFirst: vi.fn(async () => ({ role: "administrator" })) },
+      users: { findFirst: mocks.usersFindFirst },
     },
     insert: mocks.insert,
     update: mocks.update,
@@ -75,12 +77,21 @@ describe("bootstrap seed guard", () => {
     mocks.dataDomainsFindFirst.mockReset();
     mocks.insert.mockReset();
     mocks.insertValues.mockReset();
+    mocks.upsertSiteUserRole.mockReset();
+    mocks.listSiteIdsForUser.mockReset();
+    mocks.ensureDefaultCoreDataDomains.mockReset();
+    mocks.isRandomDefaultImagesEnabled.mockReset();
+    mocks.usersFindFirst.mockReset();
     mocks.update.mockClear();
     mocks.del.mockClear();
     mocks.seededRows.length = 0;
 
     // getGlobalMainSite() before and after initial insert
     mocks.sitesFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mocks.listSiteIdsForUser.mockResolvedValue([]);
+    mocks.ensureDefaultCoreDataDomains.mockResolvedValue(new Map([["post", 1], ["page", 2]]));
+    mocks.isRandomDefaultImagesEnabled.mockResolvedValue(false);
+    mocks.usersFindFirst.mockResolvedValue({ role: "administrator" });
 
     // post/page lookups used only when seedStarterContent=true
     mocks.dataDomainsFindFirst
@@ -108,5 +119,16 @@ describe("bootstrap seed guard", () => {
     expect(mocks.seededRows.some((row: any) => row.slug === "about-this-site")).toBe(true);
     expect(mocks.seededRows.some((row: any) => row.slug === "terms-of-service")).toBe(true);
     expect(mocks.seededRows.some((row: any) => row.slug === "privacy-policy")).toBe(true);
+  });
+
+  it("returns early and does not create or upsert when user no longer exists", async () => {
+    mocks.usersFindFirst.mockResolvedValue(null);
+    const { ensureMainSiteForUser } = await import("@/lib/bootstrap");
+
+    await ensureMainSiteForUser("missing-user", { seedStarterContent: true });
+
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.upsertSiteUserRole).not.toHaveBeenCalled();
+    expect(mocks.seededRows.length).toBe(0);
   });
 });

@@ -19,7 +19,12 @@ type FloatingWidget = {
   id?: string;
   title?: string;
   content?: string;
-  position?: "bottom-right";
+  position?: "top-right" | "bottom-right";
+  dismissSetting?: {
+    pluginId?: string;
+    key?: string;
+    value?: unknown;
+  };
 };
 
 export async function GET(request: Request) {
@@ -88,7 +93,18 @@ export async function GET(request: Request) {
             id: String(widget.id || ""),
             title: String(widget.title || ""),
             content: String(widget.content || ""),
-            position: widget.position === "bottom-right" ? "bottom-right" : "bottom-right",
+            position: widget.position === "top-right" ? "top-right" : "bottom-right",
+            dismissSetting:
+              widget.dismissSetting &&
+              typeof widget.dismissSetting === "object" &&
+              String(widget.dismissSetting.pluginId || "").trim() &&
+              String(widget.dismissSetting.key || "").trim()
+                ? {
+                    pluginId: String(widget.dismissSetting.pluginId || "").trim(),
+                    key: String(widget.dismissSetting.key || "").trim(),
+                    value: widget.dismissSetting.value,
+                  }
+                : undefined,
           }))
           .filter((widget) => widget.id && widget.content)
       : [],

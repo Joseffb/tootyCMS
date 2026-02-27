@@ -28,6 +28,20 @@ The kernel is the extension runtime. Everything else integrates through it.
 - `registerMenuLocation(location)`
 - `addMenuItems(location, items)`
 - `getMenuItems(location)`
+- `enqueueScript(input)`
+- `enqueueStyle(input)`
+- `getEnqueuedAssets()`
+
+## Enqueue Helpers
+
+Plugins can register external or inline assets with enqueue helpers (WordPress-style ergonomics):
+
+- `kernel.enqueueScript("https://cdn.example.com/app.js")`
+- `kernel.enqueueScript({ id: "my-inline-js", inline: "console.log('hi')" })`
+- `kernel.enqueueStyle("https://cdn.example.com/app.css")`
+- `kernel.enqueueStyle({ id: "my-inline-css", inline: "body{--brand:#000;}" })`
+
+Enqueued assets are rendered in public site layout and are separate from analytics consent-gated `domain:scripts`.
 
 ## Actions
 
@@ -43,6 +57,10 @@ Actions are for side effects. They do not return values.
 - `communication:queued`
 - `request:begin`
 - `content:load`
+- `comment:created`
+- `comment:updated`
+- `comment:deleted`
+- `comment:moderated`
 - `render:before`
 - `render:after`
 - `request:end`

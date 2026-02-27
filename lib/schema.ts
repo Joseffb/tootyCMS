@@ -164,8 +164,8 @@ export const termRelationships = pgTable(
   }),
 );
 
-export const cmsSettings = pgTable(
-  tableName("cms_settings"),
+export const systemSettings = pgTable(
+  tableName("system_settings"),
   {
     key: text("key").primaryKey(),
     value: text("value").notNull(),
@@ -174,11 +174,9 @@ export const cmsSettings = pgTable(
       .$onUpdate(() => new Date())
       .defaultNow(),
   },
-  (table) => {
-    return {
-      keyIdx: index().on(table.key),
-    };
-  },
+  (table) => ({
+    keyIdx: index().on(table.key),
+  }),
 );
 
 export const rbacRoles = pgTable(
@@ -320,6 +318,41 @@ export const communicationMessages = pgTable(
   }),
 );
 
+export const comments = pgTable(
+  tableName("comments"),
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    siteId: text("siteId")
+      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    contextType: text("contextType").notNull(), // entry | group | discussion
+    contextId: text("contextId").notNull(),
+    authorId: text("authorId").references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    body: text("body").notNull(),
+    status: text("status").notNull().default("pending"), // pending | approved | rejected | spam | deleted
+    parentId: text("parentId"),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    siteIdx: index().on(table.siteId),
+    contextIdx: index().on(table.siteId, table.contextType, table.contextId),
+    statusIdx: index().on(table.status),
+    authorIdx: index().on(table.authorId),
+    parentIdx: index().on(table.parentId),
+    createdAtIdx: index().on(table.createdAt),
+  }),
+);
+
 export const communicationAttempts = pgTable(
   tableName("communication_attempts"),
   {
@@ -452,6 +485,7 @@ export const posts = pgTable(
     title: text("title"),
     description: text("description"),
     content: text("content"),
+    password: text("password").default(""),
     layout: text("layout"),
     slug: text("slug")
       .notNull()
@@ -497,6 +531,8 @@ export const domainPosts = pgTable(
     title: text("title"),
     description: text("description"),
     content: text("content"),
+    password: text("password").default(""),
+    usePassword: boolean("usePassword").notNull().default(false),
     layout: text("layout"),
     slug: text("slug")
       .notNull()
@@ -684,6 +720,11 @@ export const communicationMessagesRelations = relations(communicationMessages, (
   attempts: many(communicationAttempts),
 }));
 
+export const commentsRelations = relations(comments, ({ one }) => ({
+  site: one(sites, { references: [sites.id], fields: [comments.siteId] }),
+  author: one(users, { references: [users.id], fields: [comments.authorId] }),
+}));
+
 export const communicationAttemptsRelations = relations(communicationAttempts, ({ one }) => ({
   message: one(communicationMessages, { references: [communicationMessages.id], fields: [communicationAttempts.messageId] }),
 }));
@@ -767,6 +808,7 @@ export const sitesRelations = relations(sites, ({ one, many }) => ({
   user: one(users, { references: [users.id], fields: [sites.userId] }),
   dataDomains: many(siteDataDomains),
   media: many(media),
+  comments: many(comments),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -813,6 +855,7 @@ export const userRelations = relations(users, ({ many }) => ({
   sites: many(sites),
   posts: many(posts),
   media: many(media),
+  comments: many(comments),
   userMeta: many(userMeta),
 }));
 

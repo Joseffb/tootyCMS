@@ -1,7 +1,5 @@
-import db from "@/lib/db";
-import { cmsSettings } from "@/lib/schema";
-import { eq } from "drizzle-orm";
 import type { MenuItem, MenuLocation } from "@/lib/kernel";
+import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 
 function menuKey(siteId: string, location: MenuLocation) {
   return `site_${siteId}_menu_${location}`;
@@ -54,12 +52,8 @@ export function defaultHeaderMenu(): MenuItem[] {
 }
 
 export async function getSiteMenu(siteId: string, location: MenuLocation) {
-  const row = await db.query.cmsSettings.findFirst({
-    where: eq(cmsSettings.key, menuKey(siteId, location)),
-    columns: { value: true },
-  });
-
-  const parsed = safeParseMenu(row?.value);
+  const value = await getSettingByKey(menuKey(siteId, location));
+  const parsed = safeParseMenu(value);
   if (parsed.length > 0) {
     if (location === "header" && isLegacyDefaultHeaderMenu(parsed)) {
       return defaultHeaderMenu();
@@ -80,16 +74,7 @@ export async function saveSiteMenu(siteId: string, location: MenuLocation, items
       order: item.order ?? (index + 1) * 10,
     }));
 
-  await db
-    .insert(cmsSettings)
-    .values({
-      key: menuKey(siteId, location),
-      value: JSON.stringify(normalized),
-    })
-    .onConflictDoUpdate({
-      target: cmsSettings.key,
-      set: { value: JSON.stringify(normalized) },
-    });
+  await setSettingByKey(menuKey(siteId, location), JSON.stringify(normalized));
 }
 
 export async function saveSiteMenuFromJson(siteId: string, location: MenuLocation, rawJson: string) {

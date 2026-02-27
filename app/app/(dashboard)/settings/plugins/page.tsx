@@ -253,7 +253,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                 : "border-stone-300 bg-white text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:bg-black dark:text-stone-300 dark:hover:bg-stone-900"
             }`}
           >
-            View Uninstalled
+            View Disabled
           </a>
         </div>
         <div className="flex items-center gap-2">
@@ -391,30 +391,21 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                 </td>
                 <td className="px-4 py-3 align-top">
                   {(plugin.settingsFields || []).length > 0 && (
-                    <details
-                      className={`rounded-md border p-2 dark:border-stone-700 ${
-                        plugin.id === "export-import"
-                          ? "border-teal-200/80 bg-gradient-to-br from-teal-50 via-white to-cyan-50 shadow-sm dark:border-teal-800/80 dark:from-teal-950/40 dark:via-stone-950 dark:to-cyan-950/30"
-                          : "border-stone-200"
-                      }`}
-                    >
+                    <details className="rounded-md border border-stone-200 p-2 dark:border-stone-700">
                       <summary className="cursor-pointer text-xs font-medium text-stone-700 dark:text-stone-300">
-                        {plugin.id === "export-import" ? "Migration Kit" : "Settings"}
+                        Settings
                       </summary>
                       {plugin.id === "export-import" ? (
                         <form action={saveConfig} className="mt-3 grid gap-3">
                           <input type="hidden" name="pluginId" value={plugin.id} />
-                          <div className="rounded-md border border-teal-200/70 bg-white/80 p-3 dark:border-teal-800/70 dark:bg-black/40">
-                            <p className="text-sm font-semibold text-teal-900 dark:text-teal-200">Teety Migration Kit</p>
-                            <p className="mt-1 text-xs text-teal-700/90 dark:text-teal-300/90">
+                          <div className="rounded-md border border-stone-200 bg-white p-3 dark:border-stone-700 dark:bg-stone-900">
+                            <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Teety Migration Kit</p>
+                            <p className="mt-1 text-xs text-stone-600 dark:text-stone-300">
                               Your data&apos;s go bag. Control format defaults and import safety.
                             </p>
                           </div>
                           {(plugin.settingsFields || []).map((field) => (
-                            <label
-                              key={field.key}
-                              className="grid gap-1 rounded-md border border-teal-100 bg-white/70 p-2 text-xs dark:border-teal-900/80 dark:bg-stone-950/70"
-                            >
+                            <label key={field.key} className="grid gap-1 rounded-md border border-stone-200 bg-white p-2 text-xs dark:border-stone-700 dark:bg-stone-900">
                               <span className="font-semibold text-stone-800 dark:text-stone-100">{field.label}</span>
                               {typeof field.helpText === "string" && field.helpText.trim().length > 0 ? (
                                 <span className="text-[11px] text-stone-600 dark:text-stone-400">{field.helpText}</span>
@@ -424,8 +415,14 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                                   <input
                                     type="checkbox"
                                     name={field.key}
-                                    defaultChecked={Boolean(plugin.config[field.key])}
-                                    className="h-4 w-4 rounded border-stone-400 text-teal-700 focus:ring-teal-600"
+                                    defaultChecked={
+                                      plugin.config[field.key] === undefined || plugin.config[field.key] === null
+                                        ? ["true", "1", "yes", "on"].includes(
+                                            String(field.defaultValue ?? "").trim().toLowerCase(),
+                                          )
+                                        : Boolean(plugin.config[field.key])
+                                    }
+                                    className="h-4 w-4 rounded border-stone-400"
                                   />
                                   <span className="text-[11px] text-stone-600 dark:text-stone-400">Enabled</span>
                                 </span>
@@ -433,7 +430,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                                 <select
                                   name={field.key}
                                   defaultValue={String(plugin.config[field.key] || field.defaultValue || "")}
-                                  className="rounded-md border border-teal-200 bg-white px-2 py-1 text-xs text-stone-900 dark:border-teal-800 dark:bg-black dark:text-white"
+                                  className="rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-900 dark:border-stone-600 dark:bg-stone-900 dark:text-white"
                                 >
                                   {(field.options || []).map((option) => (
                                     <option key={option.value} value={option.value}>
@@ -445,19 +442,19 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                                 <textarea
                                   name={field.key}
                                   defaultValue={String(plugin.config[field.key] || "")}
-                                  className="rounded-md border border-teal-200 bg-white px-2 py-1 text-xs text-stone-900 dark:border-teal-800 dark:bg-black dark:text-white"
+                                  className="rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-900 dark:border-stone-600 dark:bg-stone-900 dark:text-white"
                                 />
                               ) : (
                                 <input
                                   type={field.type || "text"}
                                   name={field.key}
                                   defaultValue={String(plugin.config[field.key] || "")}
-                                  className="rounded-md border border-teal-200 bg-white px-2 py-1 text-xs text-stone-900 dark:border-teal-800 dark:bg-black dark:text-white"
+                                  className="rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-900 dark:border-stone-600 dark:bg-stone-900 dark:text-white"
                                 />
                               )}
                             </label>
                           ))}
-                          <button className="w-fit rounded-md border border-teal-700 bg-teal-700 px-3 py-1 text-xs font-semibold text-white shadow-[0_4px_12px_rgba(15,118,110,0.35)]">
+                          <button className="w-fit rounded-md border border-black bg-black px-3 py-1 text-xs text-white">
                             Save Migration Settings
                           </button>
                         </form>
@@ -468,7 +465,18 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                             <label key={field.key} className="flex flex-col gap-1 text-xs">
                               <span className="font-medium text-stone-700 dark:text-stone-300">{field.label}</span>
                               {field.type === "checkbox" ? (
-                                <input type="checkbox" name={field.key} defaultChecked={Boolean(plugin.config[field.key])} className="h-4 w-4" />
+                                <input
+                                  type="checkbox"
+                                  name={field.key}
+                                  defaultChecked={
+                                    plugin.config[field.key] === undefined || plugin.config[field.key] === null
+                                      ? ["true", "1", "yes", "on"].includes(
+                                          String(field.defaultValue ?? "").trim().toLowerCase(),
+                                        )
+                                      : Boolean(plugin.config[field.key])
+                                  }
+                                  className="h-4 w-4"
+                                />
                               ) : field.type === "select" ? (
                                 <select
                                   name={field.key}

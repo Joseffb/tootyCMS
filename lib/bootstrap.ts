@@ -13,6 +13,8 @@ const PRIMARY_SUBDOMAIN = "main";
 const DEFAULT_SITE_THUMBNAIL = "/tooty/sprites/tooty-thumbs-up-cropped.png";
 const WELCOME_POST_THUMBNAIL = "/tooty/sprites/tooty-laptop.png";
 const STARTER_CONTENT_DIR = path.join(process.cwd(), "public", "docs");
+const RECENT_MAIN_SITE_ENSURE_TTL_MS = 60_000;
+const recentMainSiteEnsureByUser = new Map<string, number>();
 
 const STARTER_FALLBACK = {
   welcome: `# Welcome to Tooty CMS
@@ -268,17 +270,13 @@ async function ensureDefaultSiteDataDomains(siteId: string) {
   }
 }
 
-async function getDefaultSiteRoleForUser(userId: string) {
+async function getUserRoleForBootstrap(userId: string) {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
     columns: { role: true },
   });
-  const normalized = String(user?.role || "").trim().toLowerCase();
-  if (normalized === NETWORK_ADMIN_ROLE) return NETWORK_ADMIN_ROLE;
-  if (normalized === "administrator" || normalized === "editor" || normalized === "author") {
-    return normalized;
-  }
-  return "author";
+  if (!user) return null;
+  return String(user.role || "").trim().toLowerCase();
 }
 
 async function ensureDefaultStarterPosts(siteId: string, userId: string, useRandomDefaultImages: boolean) {
@@ -370,10 +368,15 @@ async function ensureDefaultStarterPosts(siteId: string, userId: string, useRand
     .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomain.id), eq(domainPosts.slug, "welcome-to-tooty")));
 }
 
-export async function ensureMainSiteForCurrentUser() {
-  const session = await getSession();
-  if (!session?.user?.id) return;
-  await ensureMainSiteForUser(session.user.id, { seedStarterContent: false });
+export async function ensureMainSiteForCurrentUser(userIdFromSession?: string) {
+  const userId = String(userIdFromSession || "").trim() || String((await getSession())?.user?.id || "").trim();
+  if (!userId) return;
+  const lastEnsuredAt = recentMainSiteEnsureByUser.get(userId) || 0;
+  if (Date.now() - lastEnsuredAt < RECENT_MAIN_SITE_ENSURE_TTL_MS) return;
+  const role = await getUserRoleForBootstrap(userId);
+  if (!role) return;
+  await ensureMainSiteForUser(userId, { seedStarterContent: false });
+  recentMainSiteEnsureByUser.set(userId, Date.now());
 }
 
 export async function ensureMainSiteForUser(
@@ -381,6 +384,16 @@ export async function ensureMainSiteForUser(
   options?: { seedStarterContent?: boolean },
 ) {
   if (!userId) return;
+  const normalizedUserRole = await getUserRoleForBootstrap(userId);
+  if (!normalizedUserRole) return;
+
+  const defaultRole =
+    normalizedUserRole === NETWORK_ADMIN_ROLE
+      ? NETWORK_ADMIN_ROLE
+      : normalizedUserRole === "administrator" || normalizedUserRole === "editor" || normalizedUserRole === "author"
+        ? normalizedUserRole
+        : "author";
+
   const seedStarterContent = options?.seedStarterContent === true;
   const globalMain = await getGlobalMainSite();
   const memberSiteIds = await listSiteIdsForUser(userId);
@@ -408,7 +421,7 @@ export async function ensureMainSiteForUser(
     if (postDomain) {
       await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingPrimary.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
     }
-    await upsertSiteUserRole(existingPrimary.id, userId, await getDefaultSiteRoleForUser(userId));
+    await upsertSiteUserRole(existingPrimary.id, userId, defaultRole);
     return;
   }
 
@@ -440,7 +453,7 @@ export async function ensureMainSiteForUser(
     if (postDomain) {
       await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingAny.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
     }
-    await upsertSiteUserRole(existingAny.id, userId, await getDefaultSiteRoleForUser(userId));
+    await upsertSiteUserRole(existingAny.id, userId, defaultRole);
     return;
   }
 
@@ -468,12 +481,12 @@ export async function ensureMainSiteForUser(
           ),
         );
     }
-    await upsertSiteUserRole(globalMain.id, userId, await getDefaultSiteRoleForUser(userId));
+    await upsertSiteUserRole(globalMain.id, userId, defaultRole);
     return;
   }
 
   const siteId = await createPrimarySiteForUser(userId);
-  await upsertSiteUserRole(siteId, userId, await getDefaultSiteRoleForUser(userId));
+  await upsertSiteUserRole(siteId, userId, defaultRole);
   await ensureDefaultSiteDataDomains(siteId);
   if (seedStarterContent) {
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();

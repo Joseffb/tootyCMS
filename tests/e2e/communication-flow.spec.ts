@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { encode } from "next-auth/jwt";
+import { setSettingByKey } from "../../lib/settings-store";
 
 const runId = `e2e-comm-${Date.now()}`;
 const runCommunicationE2E = process.env.RUN_COMMUNICATION_E2E === "1";
@@ -11,11 +12,7 @@ const siteId = `${runId}-site`;
 const email = `${runId}@example.com`;
 
 async function upsertSetting(key: string, value: string) {
-  await sql`
-    INSERT INTO tooty_cms_settings ("key", "value")
-    VALUES (${key}, ${value})
-    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"
-  `;
+  await setSettingByKey(key, value);
 }
 
 async function upsertSiteSetting(siteId: string, key: string, value: string) {

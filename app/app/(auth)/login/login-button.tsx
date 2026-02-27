@@ -10,12 +10,18 @@ export default function LoginButton() {
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [forgotBusy, setForgotBusy] = useState<"request" | "reset" | null>(null);
   const [enabledByProvider, setEnabledByProvider] = useState<Record<string, boolean>>({});
   const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([]);
 
   // Get error message added by next/auth in URL.
   const searchParams = useSearchParams();
   const error = searchParams?.get("error");
+  const callbackUrl = String(searchParams?.get("callbackUrl") || "").trim() || "/app";
 
   useEffect(() => {
     const errorMessage = Array.isArray(error) ? error.pop() : error;
@@ -57,7 +63,7 @@ export default function LoginButton() {
           signIn("native", {
             email: email.trim().toLowerCase(),
             password,
-            callbackUrl: "/app",
+            callbackUrl,
           });
         }}
       >
@@ -82,7 +88,108 @@ export default function LoginButton() {
         >
           {loadingProvider === "native" ? "Signing in..." : "Login with Email"}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setShowForgot((value) => !value);
+            setForgotEmail((prev) => prev || email.trim().toLowerCase());
+          }}
+          className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-900"
+        >
+          {showForgot ? "Back To Login" : "Forgot Password?"}
+        </button>
       </form>
+
+      {showForgot ? (
+        <div className="space-y-2 rounded-md border border-stone-200 p-3 dark:border-stone-700">
+          <input
+            type="email"
+            value={forgotEmail}
+            onChange={(event) => setForgotEmail(event.target.value)}
+            placeholder="Email"
+            className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-600 dark:bg-black dark:text-white"
+          />
+          <button
+            type="button"
+            disabled={forgotBusy !== null || !forgotEmail.trim()}
+            onClick={async () => {
+              try {
+                setForgotBusy("request");
+                const response = await fetch("/api/auth/native/password-reset", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    action: "request",
+                    email: forgotEmail.trim().toLowerCase(),
+                  }),
+                });
+                const json = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                  throw new Error(String((json as any)?.error || "Failed to send reset code."));
+                }
+                toast.success("If eligible, a reset code was sent.");
+              } catch (err: any) {
+                toast.error(err instanceof Error ? err.message : "Failed to send reset code.");
+              } finally {
+                setForgotBusy(null);
+              }
+            }}
+            className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-900"
+          >
+            {forgotBusy === "request" ? "Sending..." : "Send Reset Code"}
+          </button>
+          <input
+            type="text"
+            value={resetCode}
+            onChange={(event) => setResetCode(event.target.value)}
+            placeholder="Reset code"
+            className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-600 dark:bg-black dark:text-white"
+          />
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            placeholder="New password (min 8 chars)"
+            className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-600 dark:bg-black dark:text-white"
+          />
+          <button
+            type="button"
+            disabled={forgotBusy !== null || !forgotEmail.trim() || !resetCode.trim() || !newPassword}
+            onClick={async () => {
+              try {
+                setForgotBusy("reset");
+                const response = await fetch("/api/auth/native/password-reset", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    action: "reset",
+                    email: forgotEmail.trim().toLowerCase(),
+                    code: resetCode.trim(),
+                    password: newPassword,
+                  }),
+                });
+                const json = await response.json().catch(() => ({}));
+                if (!response.ok || !(json as any)?.ok) {
+                  throw new Error(String((json as any)?.error || "Password reset failed."));
+                }
+                toast.success("Password reset successful. Log in with your new password.");
+                setShowForgot(false);
+                setEmail(forgotEmail.trim().toLowerCase());
+                setPassword("");
+                setResetCode("");
+                setNewPassword("");
+              } catch (err: any) {
+                toast.error(err instanceof Error ? err.message : "Password reset failed.");
+              } finally {
+                setForgotBusy(null);
+              }
+            }}
+            className="w-full rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {forgotBusy === "reset" ? "Resetting..." : "Reset Password"}
+          </button>
+        </div>
+      ) : null}
 
       {visibleProviders.length === 0 && (
         <p className="text-center text-sm text-stone-500 dark:text-stone-400">

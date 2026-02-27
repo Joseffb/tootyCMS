@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SetupEnvField } from "@/lib/setup-env";
 import { signIn } from "next-auth/react";
+import { Eye } from "lucide-react";
 
 type Props = {
   fields: SetupEnvField[];
@@ -74,6 +75,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [saving, setSaving] = useState(false);
+  const [bootingFirstTime, setBootingFirstTime] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
@@ -83,7 +85,8 @@ export default function SetupWizard({ fields, initialValues }: Props) {
   const [adminPhone, setAdminPhone] = useState(initialValues.SETUP_ADMIN_PHONE ?? "");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
-  const [finishRequested, setFinishRequested] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [finishArmed, setFinishArmed] = useState(false);
 
   const dbFields = useMemo(
     () => fields.filter((field) => DB_FIELD_KEYS.has(field.key)),
@@ -108,7 +111,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
 
   function nextStep() {
     setError(null);
-    setFinishRequested(false);
+    setFinishArmed(false);
     if (stepIndex === 0) {
       if (missingRequiredDb.length > 0) {
         setError(`Missing required database fields: ${missingRequiredDb.map((field) => field.key).join(", ")}`);
@@ -137,7 +140,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
 
   function prevStep() {
     setError(null);
-    setFinishRequested(false);
+    setFinishArmed(false);
     setStepIndex((current) => Math.max(0, current - 1));
   }
 
@@ -182,10 +185,8 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       nextStep();
       return;
     }
-    if (!finishRequested) {
-      setError("Review step 3 and click Finish Setup to apply configuration.");
-      return;
-    }
+    if (!finishArmed) return;
+    setFinishArmed(false);
 
     if (missingRequiredAll.length > 0) {
       setError(`Missing required fields: ${missingRequiredAll.map((field) => field.key).join(", ")}`);
@@ -238,11 +239,13 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       }
 
       const mainSiteId = String(data.mainSiteId || "").trim();
-      const destinationPath = mainSiteId ? `/site/${mainSiteId}` : "/app";
+      const destinationPath = mainSiteId ? `/app/site/${mainSiteId}` : "/app";
+      setBootingFirstTime(true);
       const signInResult = await signInWithRetry(adminEmail.trim().toLowerCase(), adminPassword, destinationPath);
       if (signInResult.ok) {
         router.push(destinationPath);
       } else {
+        setBootingFirstTime(false);
         const message = encodeURIComponent(
           `Setup completed, but auto sign-in failed: ${signInResult.error || "Unknown error"}`,
         );
@@ -250,6 +253,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       }
       router.refresh();
     } catch (err) {
+      setBootingFirstTime(false);
       setError(err instanceof Error ? err.message : "Failed to save environment values.");
     } finally {
       setSaving(false);
@@ -284,6 +288,14 @@ export default function SetupWizard({ fields, initialValues }: Props) {
 
   return (
     <form onSubmit={onSubmit} className="space-y-6">
+      {bootingFirstTime ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white/95">
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-stone-200 bg-white px-8 py-6 shadow-sm">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-stone-200 border-t-stone-900" />
+            <p className="text-sm font-medium text-stone-900">Loading first-time system...</p>
+          </div>
+        </div>
+      ) : null}
       <div className="grid gap-2 sm:grid-cols-3">
         {STEPS.map((step, index) => {
           const active = stepIndex === index;
@@ -327,59 +339,74 @@ export default function SetupWizard({ fields, initialValues }: Props) {
                 Create the first native network admin account for this install.
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Name *</span>
-                <input
-                  type="text"
-                  value={adminName}
-                  placeholder="Site Owner"
-                  onChange={(event) => setAdminName(event.target.value)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Email *</span>
-                <input
-                  type="email"
-                  value={adminEmail}
-                  placeholder="you@example.com"
-                  onChange={(event) => setAdminEmail(event.target.value)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-                />
-                <span className="text-[11px] text-stone-500">Required. Used for first native admin login identity.</span>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Telephone (optional)</span>
-                <input
-                  type="tel"
-                  value={adminPhone}
-                  placeholder="+1 555 123 4567"
-                  onChange={(event) => setAdminPhone(event.target.value)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-                />
-                <span className="text-[11px] text-stone-500">Optional. Stored for future MMS/contact workflows.</span>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Password *</span>
-                <input
-                  type="password"
-                  value={adminPassword}
-                  placeholder="At least 8 characters"
-                  onChange={(event) => setAdminPassword(event.target.value)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Confirm Password *</span>
-                <input
-                  type="password"
-                  value={adminPasswordConfirm}
-                  placeholder="Repeat password"
-                  onChange={(event) => setAdminPasswordConfirm(event.target.value)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
-                />
-              </label>
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="space-y-4">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Name *</span>
+                  <input
+                    type="text"
+                    value={adminName}
+                    placeholder="Site Owner"
+                    onChange={(event) => setAdminName(event.target.value)}
+                    className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Email *</span>
+                  <input
+                    type="email"
+                    value={adminEmail}
+                    placeholder="you@example.com"
+                    onChange={(event) => setAdminEmail(event.target.value)}
+                    className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+                  />
+                  <span className="text-[11px] text-stone-500">Required. Used for first native admin login identity.</span>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Telephone (optional)</span>
+                  <input
+                    type="tel"
+                    value={adminPhone}
+                    placeholder="+1 555 123 4567"
+                    onChange={(event) => setAdminPhone(event.target.value)}
+                    className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+                  />
+                  <span className="text-[11px] text-stone-500">Optional. Stored for future MMS/contact workflows.</span>
+                </label>
+              </div>
+
+              <div className="space-y-4">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Admin Password *</span>
+                  <div className="relative">
+                    <input
+                      type={showPasswords ? "text" : "password"}
+                      value={adminPassword}
+                      placeholder="At least 8 characters"
+                      onChange={(event) => setAdminPassword(event.target.value)}
+                      className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 pr-10 text-sm text-stone-900"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords((v) => !v)}
+                      className={`absolute inset-y-0 right-0 flex items-center px-3 hover:text-stone-800 ${showPasswords ? "text-stone-800" : "text-stone-500"}`}
+                      aria-label={showPasswords ? "Hide passwords" : "Show passwords"}
+                    >
+                      <Eye size={16} />
+                    </button>
+                  </div>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">Confirm Password *</span>
+                  <input
+                    type={showPasswords ? "text" : "password"}
+                    value={adminPasswordConfirm}
+                    placeholder="Repeat password"
+                    onChange={(event) => setAdminPasswordConfirm(event.target.value)}
+                    className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+                  />
+                </label>
+              </div>
             </div>
           </div>
         ) : null}
@@ -438,7 +465,7 @@ neonctl auth login`}
         <button
           type="button"
           onClick={prevStep}
-          disabled={stepIndex === 0 || saving}
+          disabled={stepIndex === 0 || saving || bootingFirstTime}
           className="rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Back
@@ -450,7 +477,7 @@ neonctl auth login`}
             <button
               type="button"
               onClick={nextStep}
-              disabled={saving}
+              disabled={saving || bootingFirstTime}
               className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
               Continue
@@ -458,11 +485,11 @@ neonctl auth login`}
           ) : (
             <button
               type="submit"
-              onClick={() => setFinishRequested(true)}
-              disabled={saving}
-              className="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              onClick={() => setFinishArmed(true)}
+              disabled={saving || bootingFirstTime}
+              className="inline-flex min-w-[118px] items-center justify-center rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
-              {saving ? "Finishing..." : "Finish Setup"}
+              {saving ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-stone-300 border-t-white" /> : "Finish Setup"}
             </button>
           )}
         </div>

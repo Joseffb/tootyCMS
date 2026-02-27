@@ -363,6 +363,13 @@
   color: #9fb2ca;
 }
 
+.tooty-post-auth {
+  margin: 0 0 0 auto;
+  color: #9fb2ca;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
 .tooty-post-hero {
   border-color: #2f405c;
   background: linear-gradient(140deg, #151f2f 0%, #111927 50%, #0f1724 100%);
@@ -407,6 +414,108 @@
 
 .tooty-post-prose a:hover {
   color: #bde8ff;
+}
+
+.tooty-comments-block {
+  margin-top: 1rem;
+}
+
+.tooty-comments-card {
+  border: 1px solid #2f405c;
+  border-radius: 0.75rem;
+  background: #111a28;
+  padding: 1rem;
+}
+
+.tooty-comments-compose {
+  margin-top: 0.75rem;
+}
+
+.tooty-comments-title {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #f3f8ff;
+}
+
+.tooty-comments-note {
+  margin: 0.35rem 0 0.85rem;
+  color: #90a7c2;
+  font-size: 0.9rem;
+}
+
+.tooty-comments-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tooty-comment-item {
+  border: 1px solid #2f405c;
+  border-radius: 0.6rem;
+  background: #0f1724;
+  padding: 0.7rem;
+}
+
+.tooty-comment-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  color: #90a7c2;
+  font-size: 0.75rem;
+}
+
+.tooty-comment-status {
+  text-transform: capitalize;
+  font-weight: 600;
+  color: #f3f8ff;
+}
+
+.tooty-comment-item p {
+  margin: 0;
+  color: #d6e1f2;
+  white-space: pre-wrap;
+}
+
+.tooty-comments-empty {
+  margin: 0;
+  color: #90a7c2;
+}
+
+.tooty-comments-form {
+  margin-top: 0.75rem;
+}
+
+.tooty-comments-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #2f405c;
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  font: inherit;
+  color: #f3f8ff;
+  background: #0f1724;
+}
+
+.tooty-comments-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tooty-comments-actions button {
+  border: 1px solid #89cfff;
+  border-radius: 0.45rem;
+  background: #89cfff;
+  color: #0f1724;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+}
+
+.tooty-comments-actions span {
+  color: #90a7c2;
+  font-size: 0.85rem;
 }
 
 .tooty-archive-shell {

@@ -86,12 +86,14 @@ Canonical primaries include:
 
 1. Themes and plugins are discovered from filesystem folders.
 2. Dashboards list manifests with current state (enabled/config).
-3. Changes write to `cms_settings`.
+3. Changes write through the settings spine (`lib/settings-store.ts`) to provider tables.
 4. Plugin menu descriptors are surfaced in dashboard nav through `/api/plugins/menu`.
 
 ## Persistence model
 
-All extensibility state persists in `tooty_cms_settings` using stable key patterns.
+All extensibility state persists via settings providers:
+- global keys in `tooty_system_settings`
+- site-scoped keys in per-site physical tables `tooty_site_<n>_settings` (allocated by registry)
 
 - Plugin enable state: `plugin_<id>_enabled`
 - Plugin config: `plugin_<id>_config`
