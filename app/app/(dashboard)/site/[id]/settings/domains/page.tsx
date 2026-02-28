@@ -67,13 +67,14 @@ export default async function SiteSettingsDomains({ params }: Props) {
               <th className="px-4 py-2 font-medium">Key</th>
               <th className="px-4 py-2 font-medium">Usages</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Menu</th>
               <th className="px-4 py-2 font-medium">Domain CRUD</th>
             </tr>
           </thead>
           <tbody>
             {domains.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-stone-500" colSpan={5}>
+                <td className="px-4 py-4 text-stone-500" colSpan={6}>
                   No post types yet.
                 </td>
               </tr>
@@ -91,13 +92,24 @@ export default async function SiteSettingsDomains({ params }: Props) {
                     )}
                   </td>
                   <td className="px-4 py-2">
+                    {(domain?.settings?.showInMenu ?? true) ? (
+                      <span className="rounded bg-sky-100 px-2 py-0.5 text-xs text-sky-700">Public</span>
+                    ) : (
+                      <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Private</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <form
                         action={async (formData) => {
                           "use server";
                           const label = String(formData.get("label") ?? "").trim();
                           if (!label) return;
-                          await updateDataDomain({ id: domain.id, label });
+                          await updateDataDomain({
+                            id: domain.id,
+                            label,
+                            showInMenu: formData.get("showInMenu") === "on",
+                          });
                         }}
                         className="flex items-center gap-2"
                       >
@@ -107,6 +119,15 @@ export default async function SiteSettingsDomains({ params }: Props) {
                           defaultValue={domain.label}
                           className="w-36 rounded border border-stone-300 px-2 py-1 text-xs"
                         />
+                        <label className="flex items-center gap-1 text-xs text-stone-600">
+                          <input
+                            name="showInMenu"
+                            type="checkbox"
+                            defaultChecked={domain?.settings?.showInMenu ?? true}
+                            className="h-3.5 w-3.5 rounded border-stone-300"
+                          />
+                          Show In Menu
+                        </label>
                         <button
                           type="submit"
                           className="rounded border border-stone-300 px-2 py-1 text-xs hover:bg-stone-100"

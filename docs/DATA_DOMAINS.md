@@ -50,8 +50,15 @@ Domain existence and site activation are separate:
 - create
 - activate/deactivate
 - update label
+- toggle menu visibility (`showInMenu`)
 - delete
 - usage count display
+
+Menu visibility contract:
+
+- `settings.showInMenu !== false` means the data domain is public in the admin content nav.
+- `settings.showInMenu === false` means the data domain remains usable/assigned, but is hidden from the left-hand content menu.
+- This does not deactivate the domain or remove its routes; it only controls admin menu presentation.
 
 ## Taxonomy relation
 

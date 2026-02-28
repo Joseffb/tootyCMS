@@ -354,6 +354,7 @@ export const createDataDomain = async (input: {
   fields?: DataDomainFieldSpec[];
   siteId?: string;
   activateForSite?: boolean;
+  showInMenu?: boolean;
 }) => {
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" };
@@ -426,6 +427,7 @@ export const createDataDomain = async (input: {
     description: "",
     settings: {
       fields: extraFields,
+      showInMenu: input.showInMenu !== false,
     },
   }).returning();
 
@@ -452,6 +454,7 @@ export const updateDataDomain = async (input: {
   id: number;
   label: string;
   description?: string;
+  showInMenu?: boolean;
 }) => {
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" };
@@ -470,11 +473,32 @@ export const updateDataDomain = async (input: {
     return { error: "A Post Type with this label already exists" };
   }
 
+  const [existing] = await db
+    .select({
+      description: dataDomains.description,
+      settings: dataDomains.settings,
+    })
+    .from(dataDomains)
+    .where(eq(dataDomains.id, input.id))
+    .limit(1);
+  if (!existing) {
+    return { error: "Data Domain not found" };
+  }
+
+  const currentSettings =
+    existing.settings && typeof existing.settings === "object"
+      ? (existing.settings as Record<string, unknown>)
+      : {};
+
   const [updated] = await db
     .update(dataDomains)
     .set({
       label: canonicalLabel,
-      description: input.description ?? "",
+      description: input.description ?? existing.description ?? "",
+      settings: {
+        ...currentSettings,
+        showInMenu: input.showInMenu !== false,
+      },
     })
     .where(eq(dataDomains.id, input.id))
     .returning();

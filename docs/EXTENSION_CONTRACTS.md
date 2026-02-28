@@ -62,6 +62,10 @@ Plugins may:
   - `scope: "site"` = site plugin. It must be globally enabled; by default it is enabled/disabled per site, and may be forced network-wide with global `networkRequired`.
   - `distribution: "core" | "community"` is metadata (origin tag), not activation scope.
 - Declare plugin/theme `tags: string[]` for multi-label classification (for example `utility`, `auth`, `teety`, `theme`).
+- Declare plugin admin menu placement explicitly when exposing dashboard pages:
+  - `menuPlacement: "settings" | "root" | "both"`
+  - default is `"settings"`
+  - `settingsMenu` may provide a dedicated settings route/label when the primary `menu` is a root workspace
 
 Scope governance:
 
@@ -179,6 +183,14 @@ Plugins may not:
 - Write raw DB tables directly as an extension contract
 - Mutate routing/auth/schema outside Core
 
+Plugin admin menu placement contract:
+
+- `"settings"`: plugin admin page is surfaced under `Settings > Plugins`
+- `"root"`: plugin admin page is surfaced as a root dashboard nav item
+- `"both"`: plugin gets a root workspace nav item and a settings nav item
+- `settingsMenu` is optional and is intended for plugin-specific configuration routes
+- When `menuPlacement` is `"root"` and `settingsMenu` is omitted, the plugin is still configurable from the core plugin settings screen, but it does not get a nested settings nav link
+
 ## Spine Provider Pattern (MUST)
 
 All spine systems follow one model:
@@ -215,6 +227,18 @@ Themes may:
 
 - Provide layouts, components, styles, and assets
 - Use lightweight template conditionals for presentation decisions
+
+Theme template precedence for plugin-owned content types:
+
+1. Active theme, specific template (for example `single-carousel.html`)
+2. Plugin-provided fallback template for that plugin-owned type (for example `plugins/tooty-carousels/templates/single-carousel.html`)
+3. Core fallback
+
+Notes:
+
+- Generic theme templates like `single.html` are not intended to outrank a plugin's specific fallback for plugin-owned content types.
+- Plugin fallback templates apply only to plugin-owned content types or plugin-owned routes, not core-owned types like `post` or `page`.
+- Themes still retain first override priority whenever they provide a specific matching template.
 
 Themes may not:
 

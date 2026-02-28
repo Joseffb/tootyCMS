@@ -84,6 +84,7 @@ export type PluginContentTypeRegistration = {
   key: string;
   label?: string;
   description?: string;
+  showInMenu?: boolean;
 };
 
 export type PluginServerHandlerRegistration = {

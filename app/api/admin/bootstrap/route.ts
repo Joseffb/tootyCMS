@@ -35,6 +35,17 @@ type FloatingWidget = {
   };
 };
 
+function parseDomainSettings(rawSettings: unknown) {
+  if (typeof rawSettings === "string") {
+    try {
+      return JSON.parse(rawSettings);
+    } catch {
+      return {};
+    }
+  }
+  return rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+}
+
 function emptyResponse() {
   return {
     navContext: {
@@ -142,22 +153,17 @@ export async function GET(request: Request) {
   if (effectiveSiteId && canCreateSiteContent) {
     const domains = await getAllDataDomains(effectiveSiteId);
     dataDomainItems = domains
-      .filter((domain: any) => domain.assigned && domain.isActive !== false)
+      .filter((domain: any) => {
+        if (!domain.assigned || domain.isActive === false) return false;
+        const parsed = parseDomainSettings(domain?.settings);
+        return parsed?.showInMenu !== false;
+      })
       .map((domain: any) => ({
         id: String(domain.id || ""),
         label: pluralizeLabel(domain.label),
         singular: singularizeLabel(domain.label),
         order: (() => {
-          const rawSettings = domain?.settings;
-          const parsed = typeof rawSettings === "string"
-            ? (() => {
-                try {
-                  return JSON.parse(rawSettings);
-                } catch {
-                  return {};
-                }
-              })()
-            : (rawSettings || {});
+          const parsed = parseDomainSettings(domain?.settings);
           const rawOrder = parsed?.menuOrder ?? parsed?.order;
           const n = Number(rawOrder);
           return Number.isFinite(n) ? n : undefined;
@@ -178,7 +184,11 @@ export async function GET(request: Request) {
     if (canAccess) {
       const domains = await getAllDataDomains(effectiveSiteId);
       dataDomainItems = domains
-        .filter((domain: any) => domain.assigned && domain.isActive !== false)
+        .filter((domain: any) => {
+          if (!domain.assigned || domain.isActive === false) return false;
+          const parsed = parseDomainSettings(domain?.settings);
+          return parsed?.showInMenu !== false;
+        })
         .map((domain: any) => ({
           id: String(domain.id || ""),
           label: pluralizeLabel(domain.label),

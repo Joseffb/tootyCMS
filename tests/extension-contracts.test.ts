@@ -66,6 +66,55 @@ describe("extension contracts", () => {
     expect(theme?.tags).toEqual(["theme", "teety"]);
   });
 
+  it("defaults plugin menu placement to settings and preserves settings menu metadata", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "menu-plugin",
+        name: "Menu Plugin",
+        menu: {
+          label: "Workspace",
+          path: "/app/plugins/menu-plugin",
+          order: 25,
+        },
+        settingsMenu: {
+          label: "Menu Plugin Settings",
+          path: "/app/plugins/menu-plugin/settings",
+          order: 30,
+        },
+      },
+      "menu-plugin",
+    );
+
+    expect(plugin?.menuPlacement).toBe("settings");
+    expect(plugin?.settingsMenu).toEqual({
+      label: "Menu Plugin Settings",
+      path: "/app/plugins/menu-plugin/settings",
+      order: 30,
+    });
+  });
+
+  it("accepts root and both plugin menu placements", () => {
+    const rootPlugin = validatePluginContract(
+      {
+        id: "root-plugin",
+        name: "Root Plugin",
+        menuPlacement: "root",
+      },
+      "root-plugin",
+    );
+    const bothPlugin = validatePluginContract(
+      {
+        id: "both-plugin",
+        name: "Both Plugin",
+        menuPlacement: "both",
+      },
+      "both-plugin",
+    );
+
+    expect(rootPlugin?.menuPlacement).toBe("root");
+    expect(bothPlugin?.menuPlacement).toBe("both");
+  });
+
   it("preserves theme minimum core version field", () => {
     const theme = validateThemeContract(
       {

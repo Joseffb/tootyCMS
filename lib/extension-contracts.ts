@@ -28,6 +28,14 @@ export type PluginEditorSnippet = {
   content: string;
 };
 
+export type PluginMenuPlacement = "settings" | "root" | "both";
+
+export type PluginMenuConfig = {
+  label?: string;
+  path?: string;
+  order?: number;
+};
+
 export type PluginContract = {
   kind: "plugin";
   id: string;
@@ -41,6 +49,7 @@ export type PluginContract = {
   tags?: string[];
   authProviderId?: string;
   scope?: "site" | "network";
+  menuPlacement?: PluginMenuPlacement;
   capabilities?: {
     hooks?: boolean;
     adminExtensions?: boolean;
@@ -52,11 +61,8 @@ export type PluginContract = {
     commentProviders?: boolean;
     webCallbacks?: boolean;
   };
-  menu?: {
-    label?: string;
-    path?: string;
-    order?: number;
-  };
+  menu?: PluginMenuConfig;
+  settingsMenu?: PluginMenuConfig;
   settingsFields?: ExtensionSettingsField[];
   editor?: {
     snippets?: PluginEditorSnippet[];
@@ -149,6 +155,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
   if (!id || !name) return null;
 
   const menu = candidate.menu ? asRecord(candidate.menu) : null;
+  const settingsMenu = candidate.settingsMenu ? asRecord(candidate.settingsMenu) : null;
   const editor = candidate.editor ? asRecord(candidate.editor) : null;
   const snippetsRaw = Array.isArray(editor?.snippets) ? editor?.snippets : [];
   const settingsRaw = Array.isArray(candidate.settingsFields) ? candidate.settingsFields : [];
@@ -157,6 +164,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
   const scope: "site" | "network" = scopeRaw === "network" || scopeRaw === "core" ? "network" : "site";
   const distributionRaw = String(candidate.distribution ?? "").trim().toLowerCase();
   const distribution: "core" | "community" = distributionRaw === "core" ? "core" : "community";
+  const placementRaw = String(candidate.menuPlacement ?? "").trim().toLowerCase();
+  const menuPlacement: PluginMenuPlacement =
+    placementRaw === "root" || placementRaw === "both" ? (placementRaw as PluginMenuPlacement) : "settings";
 
   return {
     kind: "plugin",
@@ -171,6 +181,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
     tags: normalizeExtensionTags(candidate.tags),
     authProviderId: String(candidate.authProviderId ?? "").trim().toLowerCase(),
     scope,
+    menuPlacement,
     capabilities: {
       hooks: candidate.capabilities ? Boolean(asRecord(candidate.capabilities).hooks ?? true) : true,
       adminExtensions: candidate.capabilities
@@ -203,6 +214,13 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
           label: String(menu.label ?? name).trim(),
           path: String(menu.path ?? "").trim(),
           order: Number.isFinite(Number(menu.order)) ? Number(menu.order) : undefined,
+        }
+      : undefined,
+    settingsMenu: settingsMenu
+      ? {
+          label: String(settingsMenu.label ?? `${name} Settings`).trim(),
+          path: String(settingsMenu.path ?? "").trim(),
+          order: Number.isFinite(Number(settingsMenu.order)) ? Number(settingsMenu.order) : undefined,
         }
       : undefined,
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),

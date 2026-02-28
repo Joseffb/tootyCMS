@@ -22,7 +22,20 @@ export async function GET(request: Request) {
 
   const domains = await getAllDataDomains(siteId);
   const items = domains
-    .filter((domain: any) => domain.assigned && domain.isActive !== false)
+    .filter((domain: any) => {
+      if (!domain.assigned || domain.isActive === false) return false;
+      const rawSettings = domain?.settings;
+      const parsed = typeof rawSettings === "string"
+        ? (() => {
+            try {
+              return JSON.parse(rawSettings);
+            } catch {
+              return {};
+            }
+          })()
+        : (rawSettings || {});
+      return parsed?.showInMenu !== false;
+    })
     .map((domain: any) => ({
       id: domain.id,
       label: pluralizeLabel(domain.label),

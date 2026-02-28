@@ -23,6 +23,7 @@ import { trace } from "@/lib/debug";
 import { hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
@@ -122,14 +123,25 @@ export default async function SitePostPage({
 
         if (siteId) {
           const archiveCandidates = domainArchiveTemplateCandidates(domainRow.key, domainPluralSegment(domainRow.key));
+          const pluginManaged = await isPluginManagedDataDomain(siteId, domainRow.key);
+          const preferredArchiveCandidates = pluginManaged
+            ? archiveCandidates.filter((candidate) => candidate !== "archive.html" && candidate !== "index.html")
+            : archiveCandidates;
           trace("theme", "domain archive template candidates", {
             siteId,
             domainKey: domainRow.key,
-            candidates: archiveCandidates,
+            candidates: preferredArchiveCandidates,
           });
           const themeTemplate = await getThemeTemplateFromCandidates(
             siteId,
-            archiveCandidates,
+            preferredArchiveCandidates,
+            {
+              pluginDataDomain: domainRow.key,
+              pluginCandidates: [
+                `archive-${domainPluralSegment(domainRow.key)}.html`,
+                `archive-${domainRow.key}.html`,
+              ],
+            },
           );
           if (themeTemplate) {
             const themeRuntime = await getThemeRenderContext(siteId, "domain_archive", [
@@ -337,6 +349,7 @@ export default async function SitePostPage({
           id: (data as any)?.id || "",
           title: (data as any)?.title || "Untitled",
           description: (data as any)?.description || "",
+          image: (data as any)?.image || "",
           slug: (data as any)?.slug || decodedSlug,
           href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("post", (data as any)?.slug || decodedSlug, writing)}`,
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",

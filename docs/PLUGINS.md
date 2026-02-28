@@ -47,6 +47,7 @@ Optional:
     "communicationProviders": false,
     "webCallbacks": false
   },
+  "menuPlacement": "settings",
   "menu": { "label": "Dev Tools", "path": "/app/plugins/dev-tools" },
   "settingsFields": [
     { "key": "traceEnabled", "label": "Enable tracing", "type": "checkbox" }
@@ -133,7 +134,20 @@ export async function register(kernel) {
 
 ## Dashboard integration
 
-Plugins with a `menu` object are surfaced in dashboard nav via `/api/plugins/menu` when enabled.
+Plugins with `menu` / `settingsMenu` metadata are surfaced in dashboard nav via `/api/plugins/menu` when enabled.
+
+Menu placement:
+
+- `menuPlacement: "settings"` (default): plugin appears under `Settings > Plugins`
+- `menuPlacement: "root"`: plugin appears as a root dashboard nav item
+- `menuPlacement: "both"`: plugin appears in both places
+- `settingsMenu` is optional and may point to a separate plugin settings screen
+
+Recommended enterprise pattern:
+
+- use `menu` for the primary operational workspace
+- use `settingsMenu` for configuration screens
+- reserve root placement for app-like plugin systems (commerce, LMS, events, CRM, etc.)
 
 ## Scope + Distribution
 

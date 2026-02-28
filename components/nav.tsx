@@ -53,20 +53,30 @@ function normalizeAdminSiteHref(href: string) {
   return href.startsWith("/site/") ? href.replace(/^\/site\//, "/app/site/") : href;
 }
 
-function parsePluginTabs(items: any[]): Array<{ name: string; href: string }> {
-  if (!Array.isArray(items)) return [];
-  return items
+function parsePluginTabs(items: any[]): { settings: Array<{ name: string; href: string }>; root: Array<{ name: string; href: string }> } {
+  if (!Array.isArray(items)) {
+    return { settings: [], root: [] };
+  }
+  const normalized = items
     .map((item: any) => ({
       name: String(item.label || ""),
       href: String(item.href || ""),
+      placement: item?.placement === "root" ? "root" : "settings",
       order: Number.isFinite(Number(item.order)) ? Number(item.order) : 999,
     }))
     .filter((item: any) => item.name && item.href)
-    .sort((a: any, b: any) => (a.order - b.order) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-    .map((item: any) => ({
+    .sort((a: any, b: any) => (a.order - b.order) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const toTabs = (placement: "settings" | "root") =>
+    normalized
+      .filter((item: any) => item.placement === placement)
+      .map((item: any) => ({
       name: item.name,
       href: item.href,
-    }));
+      }));
+  return {
+    settings: toTabs("settings"),
+    root: toTabs("root"),
+  };
 }
 
 function parseDataDomainTabs(items: any[]): Array<{ name: string; singular: string; listHref: string; addHref: string; order?: number }> {
@@ -100,6 +110,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   const [pluginTabs, setPluginTabs] = useState<Array<{ name: string; href: string }>>([]);
+  const [rootPluginTabs, setRootPluginTabs] = useState<Array<{ name: string; href: string }>>([]);
   const [dataDomainTabs, setDataDomainTabs] = useState<
     Array<{ name: string; singular: string; listHref: string; addHref: string; order?: number }>
   >([]);
@@ -183,11 +194,18 @@ export default function Nav({ children }: { children: ReactNode }) {
   }, []);
 
   const loadPluginTabs = useCallback(() => {
-    const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
+      const query = effectiveSiteId ? `?siteId=${encodeURIComponent(effectiveSiteId)}` : "";
     fetch(`/api/plugins/menu${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((json) => setPluginTabs(parsePluginTabs(json?.items)))
-      .catch(() => setPluginTabs([]));
+      .then((json) => {
+        const parsed = parsePluginTabs(json?.items);
+        setPluginTabs(parsed.settings);
+        setRootPluginTabs(parsed.root);
+      })
+      .catch(() => {
+        setPluginTabs([]);
+        setRootPluginTabs([]);
+      });
   }, [effectiveSiteId]);
 
   useEffect(() => {
@@ -228,7 +246,9 @@ export default function Nav({ children }: { children: ReactNode }) {
                 .filter((site: { id: string; name: string }) => site.id)
             : [],
         });
-        setPluginTabs(parsePluginTabs(json?.pluginMenuItems));
+        const parsedPluginTabs = parsePluginTabs(json?.pluginMenuItems);
+        setPluginTabs(parsedPluginTabs.settings);
+        setRootPluginTabs(parsedPluginTabs.root);
         setDataDomainTabs(parseDataDomainTabs(json?.dataDomainItems));
         const adminUi = json?.adminUi || {};
         setHasAnalyticsProviders(Boolean(adminUi.hasAnalyticsProviders));
@@ -553,6 +573,12 @@ export default function Nav({ children }: { children: ReactNode }) {
               },
             ]
           : []),
+        ...rootPluginTabs.map((plugin) => ({
+          name: plugin.name,
+          href: plugin.href,
+          isActive: pathname?.includes(plugin.href),
+          icon: <Edit3 width={18} />,
+        })),
         ...(navContext.canManageSiteSettings
           ? [
               {
@@ -590,6 +616,12 @@ export default function Nav({ children }: { children: ReactNode }) {
               } as NavTab,
             ]
           : []),
+        ...rootPluginTabs.map((plugin) => ({
+          name: plugin.name,
+          href: plugin.href,
+          isActive: pathname?.includes(plugin.href),
+          icon: <Edit3 width={18} />,
+        })),
         ...(navContext.canManageSiteSettings
           ? [
               {
@@ -670,9 +702,15 @@ export default function Nav({ children }: { children: ReactNode }) {
         isChild: true,
         childLevel: 1 as const,
       })),
+      ...rootPluginTabs.map((plugin) => ({
+        name: plugin.name,
+        href: plugin.href,
+        isActive: pathname?.includes(plugin.href),
+        icon: <Edit3 width={18} />,
+      })),
       ...(navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
     ];
-  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, navContext.canManageNetworkSettings, navContext.canManageSiteSettings, navContext.canReadSiteAnalytics, navContext.canCreateSiteContent, singleSiteMode, pluginTabs, globalSettingsWithChildren]);
+  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, navContext.canManageNetworkSettings, navContext.canManageSiteSettings, navContext.canReadSiteAnalytics, navContext.canCreateSiteContent, singleSiteMode, pluginTabs, rootPluginTabs, globalSettingsWithChildren]);
 
   const [showSidebar, setShowSidebar] = useState(false);
   const [collapsedByHref, setCollapsedByHref] = useState<Record<string, boolean>>({});

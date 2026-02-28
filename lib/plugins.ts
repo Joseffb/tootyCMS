@@ -176,6 +176,14 @@ export async function getAvailablePlugins(): Promise<PluginManifest[]> {
             ? {
                 label: validated.menu.label?.trim() || validated.name,
                 path: normalizePluginPath(validated.id, validated.menu.path),
+                order: validated.menu.order,
+              }
+            : undefined,
+          settingsMenu: validated.settingsMenu
+            ? {
+                label: validated.settingsMenu.label?.trim() || `${validated.name} Settings`,
+                path: normalizePluginPath(validated.id, validated.settingsMenu.path),
+                order: validated.settingsMenu.order,
               }
             : undefined,
         });

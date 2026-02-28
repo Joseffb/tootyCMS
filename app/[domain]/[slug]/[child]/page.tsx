@@ -17,6 +17,7 @@ import { trace } from "@/lib/debug";
 import { hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 
 type Params = Promise<{ domain: string; slug: string; child: string }>;
 
@@ -164,16 +165,19 @@ export default async function DomainPostPage({
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
+    const pluginManaged = await isPluginManagedDataDomain(siteId, decodedDataDomain);
     const themedTemplate =
       (await getThemeDetailTemplateByHierarchy(siteId, {
         dataDomain: decodedDataDomain,
         slug: decodedSlug,
       })) ||
-      (await getThemeLayoutTemplateForSite(siteId, {
-        layout: normalizedLayout,
-        dataDomain: decodedDataDomain,
-      })) ||
-      (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"]));
+      (pluginManaged
+        ? null
+        : (await getThemeLayoutTemplateForSite(siteId, {
+            layout: normalizedLayout,
+            dataDomain: decodedDataDomain,
+          })) ||
+          (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"])));
 
     if (themedTemplate) {
       const themeRuntime = await getThemeRenderContext(siteId, "domain_detail", [
@@ -197,6 +201,7 @@ export default async function DomainPostPage({
           id: (data as any)?.id || "",
           title: (data as any)?.title || "Untitled",
           description: (data as any)?.description || "",
+          image: (data as any)?.image || "",
           slug: (data as any)?.slug || decodedSlug,
           href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath(decodedDataDomain, (data as any)?.slug || decodedSlug, writing)}`,
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",

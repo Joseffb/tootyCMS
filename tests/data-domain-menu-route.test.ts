@@ -42,4 +42,17 @@ describe("GET /api/data-domains/menu", () => {
     expect(json.items.map((item: any) => item.singular)).toEqual(["Post", "Page", "Showcase"]);
     expect(json.items[0].listHref).toBe("/site/site-1/domain/post");
   });
+
+  it("hides domains marked private from the menu", async () => {
+    mocks.getAllDataDomains.mockResolvedValue([
+      { id: 1, key: "post", label: "Post", assigned: true, isActive: true, settings: { showInMenu: true } },
+      { id: 2, key: "carousel", label: "Carousel", assigned: true, isActive: true, settings: { showInMenu: false } },
+    ]);
+
+    const { GET } = await import("@/app/api/data-domains/menu/route");
+    const res = await GET(new Request("http://localhost/api/data-domains/menu?siteId=site-1"));
+    const json = await res.json();
+
+    expect(json.items.map((item: any) => item.singular)).toEqual(["Post"]);
+  });
 });

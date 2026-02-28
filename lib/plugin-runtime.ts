@@ -17,6 +17,19 @@ import {
 import { pathToFileURL } from "url";
 import { trace } from "@/lib/debug";
 import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
+import { syncPluginContentTypes } from "@/lib/plugin-content-types";
+
+type DashboardPluginMenuPlacement = "settings" | "root";
+type DashboardPluginMenuItem = MenuItem & {
+  placement: DashboardPluginMenuPlacement;
+  pluginId: string;
+};
+
+function appendSiteIdToHref(href: string, siteId?: string) {
+  if (!siteId) return href;
+  const separator = href.includes("?") ? "&" : "?";
+  return `${href}${separator}siteId=${encodeURIComponent(siteId)}`;
+}
 
 function isAuthFilterName(name: unknown) {
   return (
@@ -222,6 +235,57 @@ function hasSiteState(plugin: PluginWithState): plugin is PluginWithSiteState {
   return "siteEnabled" in plugin;
 }
 
+function isPluginVisibleForDashboard(plugin: PluginWithState | PluginWithSiteState, siteId?: string) {
+  if (!plugin.enabled) return false;
+  if (!siteId) return true;
+  return "siteEnabled" in plugin ? Boolean(plugin.siteEnabled) : true;
+}
+
+function buildDashboardPluginMenuItemsForPlugin(plugin: PluginWithState, siteId?: string): DashboardPluginMenuItem[] {
+  const placement = plugin.menuPlacement || "settings";
+  const rootItems: DashboardPluginMenuItem[] =
+    plugin.menu && (placement === "root" || placement === "both")
+      ? [
+          {
+            pluginId: plugin.id,
+            placement: "root",
+            label: plugin.menu.label || plugin.name,
+            href: plugin.scope === "site"
+              ? appendSiteIdToHref(plugin.menu.path || `/plugins/${plugin.id}`, siteId)
+              : (plugin.menu.path || `/plugins/${plugin.id}`),
+            order: Number.isFinite(Number(plugin.menu.order)) ? Number(plugin.menu.order) : 90,
+          },
+        ]
+      : [];
+
+  let settingsSource = null as PluginWithState["settingsMenu"] | PluginWithState["menu"] | null;
+  if (placement === "settings" || placement === "both") {
+    settingsSource = plugin.settingsMenu || plugin.menu || null;
+  } else if (placement === "root" && plugin.settingsMenu) {
+    settingsSource = plugin.settingsMenu;
+  }
+
+  const settingsItems: DashboardPluginMenuItem[] = settingsSource
+    ? [
+        {
+          pluginId: plugin.id,
+          placement: "settings",
+          label: settingsSource.label || plugin.name,
+          href: plugin.scope === "site"
+            ? appendSiteIdToHref(settingsSource.path || plugin.menu?.path || `/plugins/${plugin.id}`, siteId)
+            : (settingsSource.path || plugin.menu?.path || `/plugins/${plugin.id}`),
+          order: Number.isFinite(Number(settingsSource.order))
+            ? Number(settingsSource.order)
+            : Number.isFinite(Number(plugin.menu?.order))
+              ? Number(plugin.menu?.order)
+              : 90,
+        },
+      ]
+    : [];
+
+  return [...rootItems, ...settingsItems];
+}
+
 export async function createKernelForRequest(siteId?: string) {
   const kernel = createKernel();
 
@@ -239,15 +303,12 @@ export async function createKernelForRequest(siteId?: string) {
     if (siteScopedRun && hasSiteState(plugin) && !plugin.siteEnabled) continue;
     const capabilities = toRuntimeCapabilities(plugin);
 
-    if (plugin.menu) {
+    if (plugin.menu || plugin.settingsMenu) {
       if (capabilities.adminExtensions) {
-        kernel.addMenuItems("dashboard", [
-          {
-            label: plugin.menu.label || plugin.name,
-            href: plugin.menu.path || `/plugins/${plugin.id}`,
-            order: 90,
-          },
-        ]);
+        const rootItems = buildDashboardPluginMenuItemsForPlugin(plugin, siteId).filter((item) => item.placement === "root");
+        if (rootItems.length > 0) {
+          kernel.addMenuItems("dashboard", rootItems.map(({ label, href, order }) => ({ label, href, order })));
+        }
       } else {
         trace("plugins", "skipping dashboard menu registration due to missing adminExtensions capability", {
           pluginId: plugin.id,
@@ -259,27 +320,22 @@ export async function createKernelForRequest(siteId?: string) {
       siteId,
       networkRequired: siteScopedRun ? plugin.networkRequired : false,
     });
+    await syncPluginContentTypes(plugin.id, kernel.getPluginContentTypes(plugin.id), siteId);
   }
 
   return kernel;
 }
 
-export async function getDashboardPluginMenuItems(siteId?: string): Promise<MenuItem[]> {
+export async function getDashboardPluginMenuItems(siteId?: string): Promise<DashboardPluginMenuItem[]> {
   const plugins = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
   const dynamicItems = plugins
-    .filter((plugin) => {
-      if (!plugin.enabled || !plugin.menu) return false;
-      if (!siteId) return true;
-      const siteEnabled = "siteEnabled" in plugin ? Boolean(plugin.siteEnabled) : true;
-      return siteEnabled;
-    })
-    .map((plugin) => ({
-      label: plugin.menu?.label || plugin.name,
-      href: plugin.menu?.path || `/plugins/${plugin.id}`,
-      order: Number.isFinite(Number(plugin.menu?.order)) ? Number(plugin.menu?.order) : 90,
-    }))
+    .filter((plugin) => isPluginVisibleForDashboard(plugin, siteId))
+    .flatMap((plugin) => buildDashboardPluginMenuItemsForPlugin(plugin, siteId))
     .sort((a, b) => {
-      if (a.order !== b.order) return a.order - b.order;
+      if (a.placement !== b.placement) return a.placement.localeCompare(b.placement);
+      const aOrder = Number(a.order ?? 90);
+      const bOrder = Number(b.order ?? 90);
+      if (aOrder !== bOrder) return aOrder - bOrder;
       return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
     });
 

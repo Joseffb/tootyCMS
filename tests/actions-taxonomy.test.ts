@@ -191,6 +191,13 @@ describe("taxonomy actions", () => {
     const created = await createDataDomain({ label: "used cars" });
 
     expect(dbMock.transaction).toHaveBeenCalledTimes(1);
+    expect(dbMock.insert).toHaveBeenCalledWith(expect.anything());
+    const insertBuilder = dbMock.insert.mock.results[0]?.value;
+    expect(insertBuilder?.values).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({
+        showInMenu: true,
+      }),
+    }));
     expect(created).toMatchObject({
       key: "used-cars",
       contentTable: "tooty_domain_used-cars",

@@ -275,6 +275,7 @@ async function runContentListQuery(siteId: string, scope: ThemeQueryScope, param
       title: domainPosts.title,
       description: domainPosts.description,
       content: domainPosts.content,
+      image: domainPosts.image,
       slug: domainPosts.slug,
       createdAt: domainPosts.createdAt,
     })
@@ -359,7 +360,7 @@ async function runContentListQuery(siteId: string, scope: ThemeQueryScope, param
         slug: row.slug,
         createdAt: row.createdAt,
         href: meta.link || meta.url || meta.external_url || "",
-        thumbnail: thumbnailFromMeta || extractFirstImageFromContent(row.content || ""),
+        thumbnail: thumbnailFromMeta || row.image || extractFirstImageFromContent(row.content || ""),
         meta,
         terms: termsByTaxonomy,
       };
@@ -369,12 +370,17 @@ async function runContentListQuery(siteId: string, scope: ThemeQueryScope, param
   const sorted = [...whereFiltered].sort((left, right) => {
     const leftValue = getFieldValue(left as Record<string, unknown>, orderBy);
     const rightValue = getFieldValue(right as Record<string, unknown>, orderBy);
-    const leftDate = toDateValue(leftValue);
-    const rightDate = toDateValue(rightValue);
-    if (leftDate !== null && rightDate !== null) {
-      return order === "asc" ? leftDate - rightDate : rightDate - leftDate;
-    }
-    const leftText = toStringValue(leftValue).toLowerCase();
+  const leftDate = toDateValue(leftValue);
+  const rightDate = toDateValue(rightValue);
+  if (leftDate !== null && rightDate !== null) {
+    return order === "asc" ? leftDate - rightDate : rightDate - leftDate;
+  }
+  const leftNumber = Number(leftValue);
+  const rightNumber = Number(rightValue);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return order === "asc" ? leftNumber - rightNumber : rightNumber - leftNumber;
+  }
+  const leftText = toStringValue(leftValue).toLowerCase();
     const rightText = toStringValue(rightValue).toLowerCase();
     if (leftText === rightText) return 0;
     return order === "asc" ? (leftText > rightText ? 1 : -1) : (leftText < rightText ? 1 : -1);
