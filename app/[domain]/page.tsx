@@ -16,6 +16,15 @@ import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 
+function normalizeConfiguredHost(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
+}
+
 // Type Definitions
 interface SeriesLink {
   title: string;
@@ -60,7 +69,7 @@ export async function generateStaticParams() {
   return allSites
     .flatMap(({ subdomain, customDomain }) => [
       subdomain && {
-        domain: `${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`,
+        domain: `${subdomain}.${normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost"}`,
       },
       customDomain && {
         domain: customDomain,

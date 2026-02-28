@@ -190,4 +190,22 @@ describe("middleware routing", () => {
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://main.localhost:3000/");
   });
+
+  it("normalizes URL-shaped root-domain config for apex and app host routing", async () => {
+    process.env.NEXT_PUBLIC_ROOT_DOMAIN = "https://RobertBetan.test:3000/";
+
+    const apexReq = makeRequest("http://robertbetan.test/contact", "robertbetan.test");
+    const apexResponse = await middleware(apexReq);
+
+    expect(apexResponse.headers.get("x-middleware-rewrite")).toBe(
+      "http://robertbetan.test/main.robertbetan.test/contact",
+    );
+
+    const appReq = makeRequest("http://app.robertbetan.test/login", "app.robertbetan.test");
+    const appResponse = await middleware(appReq);
+
+    expect(appResponse.headers.get("x-middleware-rewrite")).toBe(
+      "http://app.robertbetan.test/app/login",
+    );
+  });
 });

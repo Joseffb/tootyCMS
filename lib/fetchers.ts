@@ -10,13 +10,19 @@ function normalizeDomainForLookup(domain: string) {
   return domain.trim().toLowerCase().replace(/:\d+$/, "");
 }
 
-function parseSubdomainFromDomain(domain: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-  const normalizedRootDomain = rootDomainRaw
+function normalizeConfiguredHost(value: string) {
+  return String(value || "")
+    .trim()
     .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
     .replace(/:\d+$/, "")
     .toLowerCase();
+}
+
+function parseSubdomainFromDomain(domain: string) {
+  const normalizedDomain = normalizeDomainForLookup(domain);
+  const normalizedRootDomain =
+    normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
   if (normalizedDomain === normalizedRootDomain) {
     return "main";
   }

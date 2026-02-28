@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+
+function normalizeConfiguredHost(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
+}
+
 function isTruthy(value: string) {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
@@ -119,8 +129,8 @@ export default async function middleware(req: NextRequest) {
     res.headers.set("x-trace-id", traceId);
     return res;
   };
-  const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-  const normalizedRootDomain = rootDomain.replace(/:\d+$/, "");
+  const normalizedRootDomain =
+    normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
   traceEdge("middleware", "incoming request", {
     traceId,
     path,
@@ -129,7 +139,7 @@ export default async function middleware(req: NextRequest) {
   });
 
   const hostHeader = req.headers.get("host") || "";
-  let hostname = hostHeader.split(":")[0];
+  let hostname = hostHeader.split(":")[0].toLowerCase();
 
   // Normalize local subdomains for any localhost port.
   if (hostname.endsWith(".localhost")) {

@@ -12,13 +12,22 @@ export const metadata: Metadata = {
   description: "Tooty CMS",
 };
 
+function normalizeConfiguredHost(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
+}
+
 export default async function RootPage() {
   const installState = await getInstallState();
   if (installState.setupRequired) {
     redirect("/setup");
   }
-  const rootDomainRaw = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-  const rootDomain = rootDomainRaw.replace(/:\d+$/, "");
+  const rootDomain =
+    normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
   const mainDomain = rootDomain;
   const mainSite = await getSiteData(mainDomain);
   const themeAssets = mainSite?.id
