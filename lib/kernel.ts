@@ -34,8 +34,6 @@ export type KernelFilterName =
   | "admin:editor:footer-panels"
   | "domain:scripts"
   | "domain:query"
-  | "auth:providers"
-  | "auth:adapter"
   | "auth:callbacks:signIn"
   | "auth:callbacks:jwt"
   | "auth:callbacks:session"
@@ -93,15 +91,82 @@ export type PluginContentTypeRegistration = {
   mediaFieldKeys?: string[];
 };
 
-export type PluginServerHandlerRegistration = {
-  id: string;
-  method?: string;
-  path?: string;
+export type PluginRouteMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type PluginRouteAuth = "public" | "required" | "admin";
+export type PluginRouteSchemaPrimitive = "string" | "number" | "boolean" | "object" | "array";
+
+export type PluginRouteSchemaField = {
+  type: PluginRouteSchemaPrimitive;
+  required?: boolean;
+  enum?: string[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
 };
 
-export type PluginAuthAdapterRegistration = {
+export type PluginRouteSchema = {
+  query?: Record<string, PluginRouteSchemaField>;
+  body?: Record<string, PluginRouteSchemaField>;
+};
+
+export type PluginRouteContext = {
+  pluginId: string;
+  namespace: string;
+  method: PluginRouteMethod;
+  path: string;
+  auth: PluginRouteAuth;
+  capability: string;
+  siteId: string | null;
+  session: any | null;
+  userId: string | null;
+  query: Record<string, unknown>;
+  body: Record<string, unknown>;
+  headers: Record<string, string>;
+};
+
+export type PluginRouteRegistration = {
+  namespace: string;
+  method: PluginRouteMethod;
+  path: string;
+  auth: PluginRouteAuth;
+  capability: string;
+  schema?: PluginRouteSchema;
+  handler: (
+    ctx: PluginRouteContext,
+  ) => Promise<Record<string, unknown>> | Record<string, unknown>;
+};
+
+export type PluginAuthProviderType = "oauth" | "credentials" | "saml" | "custom";
+
+export type PluginAuthProviderRegistration = {
   id: string;
-  create: () => unknown | Promise<unknown>;
+  type: PluginAuthProviderType;
+  configSchema?: Record<string, PluginRouteSchemaField>;
+  authorize: (
+    ctx: { config: Record<string, string> },
+  ) =>
+    | { ok: boolean; error?: string; config?: Record<string, string> }
+    | Promise<{ ok: boolean; error?: string; config?: Record<string, string> }>;
+  callback: (
+    ctx: {
+      account: Record<string, unknown>;
+      user: Record<string, unknown>;
+      profile: Record<string, unknown> | null;
+      config: Record<string, string>;
+    },
+  ) =>
+    | { allow: boolean; error?: string }
+    | Promise<{ allow: boolean; error?: string }>;
+  mapProfile: (
+    externalProfile: Record<string, unknown>,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  createAuthProvider: (
+    ctx: {
+      config: Record<string, string>;
+      mapProfile: (externalProfile: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    },
+  ) => unknown | Promise<unknown>;
 };
 
 export type PluginScheduleHandlerRegistration = {
@@ -315,8 +380,8 @@ export class Kernel {
   private menuLocations = new Set<MenuLocation>();
   private menuItems = new Map<MenuLocation, MenuItem[]>();
   private pluginContentTypes = new Map<string, PluginContentTypeRegistration[]>();
-  private pluginServerHandlers = new Map<string, PluginServerHandlerRegistration[]>();
-  private pluginAuthAdapters = new Map<string, PluginAuthAdapterRegistration[]>();
+  private pluginRoutes = new Map<string, PluginRouteRegistration[]>();
+  private pluginAuthProviders = new Map<string, PluginAuthProviderRegistration[]>();
   private pluginScheduleHandlers = new Map<string, PluginScheduleHandlerRegistration[]>();
   private pluginCommunicationProviders = new Map<string, PluginCommunicationProviderRegistration[]>();
   private pluginWebcallbackHandlers = new Map<string, PluginWebcallbackHandlerRegistration[]>();
@@ -394,40 +459,83 @@ export class Kernel {
     trace("kernel", "plugin content type registered", { pluginId, key: registration.key });
   }
 
-  registerPluginServerHandler(pluginId: string, registration: PluginServerHandlerRegistration) {
-    const list = this.pluginServerHandlers.get(pluginId) ?? [];
-    list.push(registration);
-    this.pluginServerHandlers.set(pluginId, list);
-    trace("kernel", "plugin server handler registered", {
-      pluginId,
-      id: registration.id,
-      method: registration.method,
-      path: registration.path,
-    });
+  registerPluginRoute(pluginId: string, registration: PluginRouteRegistration) {
+    const namespace = String(registration?.namespace || "").trim().toLowerCase();
+    const method = String(registration?.method || "").trim().toUpperCase() as PluginRouteMethod;
+    const rawPath = String(registration?.path || "").trim();
+    const auth = String(registration?.auth || "").trim().toLowerCase() as PluginRouteAuth;
+    const capability = String(registration?.capability || "").trim();
+    const handler = registration?.handler;
+    const path = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+
+    if (!namespace || namespace !== pluginId) {
+      throw new Error(`[plugin-guard] Plugin "${pluginId}" registerRoute() namespace must match plugin id.`);
+    }
+    if (!(["GET", "POST", "PUT", "DELETE"] as string[]).includes(method)) {
+      throw new Error(`[plugin-guard] Plugin "${pluginId}" registerRoute() requires a supported method.`);
+    }
+    if (!(["public", "required", "admin"] as string[]).includes(auth)) {
+      throw new Error(`[plugin-guard] Plugin "${pluginId}" registerRoute() requires auth = public|required|admin.`);
+    }
+    if (!capability) {
+      throw new Error(`[plugin-guard] Plugin "${pluginId}" registerRoute() requires a non-empty capability.`);
+    }
+    if (!path.startsWith("/") || path === "/" || path.startsWith("/api/")) {
+      throw new Error(
+        `[plugin-guard] Plugin "${pluginId}" registerRoute() path must be a plugin-relative path and may not claim /api.`,
+      );
+    }
+    if (typeof handler !== "function") {
+      throw new Error(`[plugin-guard] Plugin "${pluginId}" registerRoute() requires a handler.`);
+    }
+
+    const list = this.pluginRoutes.get(pluginId) ?? [];
+    const route: PluginRouteRegistration = {
+      namespace,
+      method,
+      path,
+      auth,
+      capability,
+      schema: registration.schema,
+      handler,
+    };
+    const duplicate = list.find((entry) => entry.method === method && entry.path === path);
+    if (duplicate) {
+      throw new Error(
+        `[plugin-guard] Plugin "${pluginId}" registerRoute() duplicate route for ${method} ${path}.`,
+      );
+    }
+    list.push(route);
+    this.pluginRoutes.set(pluginId, list);
+    trace("kernel", "plugin route registered", { pluginId, method, path, auth, capability });
   }
 
   getPluginContentTypes(pluginId: string) {
     return [...(this.pluginContentTypes.get(pluginId) ?? [])];
   }
 
-  getPluginServerHandlers(pluginId: string) {
-    return [...(this.pluginServerHandlers.get(pluginId) ?? [])];
+  getPluginRoutes(pluginId: string) {
+    return [...(this.pluginRoutes.get(pluginId) ?? [])];
   }
 
-  registerPluginAuthAdapter(pluginId: string, registration: PluginAuthAdapterRegistration) {
-    const list = this.pluginAuthAdapters.get(pluginId) ?? [];
+  registerPluginAuthProvider(pluginId: string, registration: PluginAuthProviderRegistration) {
+    const list = this.pluginAuthProviders.get(pluginId) ?? [];
     list.push(registration);
-    this.pluginAuthAdapters.set(pluginId, list);
-    trace("kernel", "plugin auth adapter registered", { pluginId, id: registration.id });
+    this.pluginAuthProviders.set(pluginId, list);
+    trace("kernel", "plugin auth provider registered", {
+      pluginId,
+      id: registration.id,
+      type: registration.type,
+    });
   }
 
-  getPluginAuthAdapters(pluginId: string) {
-    return [...(this.pluginAuthAdapters.get(pluginId) ?? [])];
+  getPluginAuthProviders(pluginId: string) {
+    return [...(this.pluginAuthProviders.get(pluginId) ?? [])];
   }
 
-  getAllPluginAuthAdapters() {
-    const rows: Array<PluginAuthAdapterRegistration & { pluginId: string }> = [];
-    for (const [pluginId, regs] of this.pluginAuthAdapters.entries()) {
+  getAllPluginAuthProviders() {
+    const rows: Array<PluginAuthProviderRegistration & { pluginId: string }> = [];
+    for (const [pluginId, regs] of this.pluginAuthProviders.entries()) {
       for (const reg of regs) rows.push({ pluginId, ...reg });
     }
     return rows;

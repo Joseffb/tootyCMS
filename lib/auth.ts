@@ -1,21 +1,17 @@
 import { getServerSession, type NextAuthOptions } from "next-auth";
-import GitHubProvider from "next-auth/providers/github";
-import GoogleProvider from "next-auth/providers/google";
-import FacebookProvider from "next-auth/providers/facebook";
-import AppleProvider from "next-auth/providers/apple";
 import CredentialsProvider from "next-auth/providers/credentials";
 import db from "./db";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { Adapter } from "next-auth/adapters";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { accounts, sessions, users, verificationTokens } from "./schema";
 import { verifyPassword } from "@/lib/password";
-import { AUTH_PLUGIN_PROVIDER_MAP } from "@/lib/auth-provider-plugins";
 import { NETWORK_ADMIN_ROLE, type SiteCapability } from "@/lib/rbac";
 import { getAuthorizedSiteForUser } from "@/lib/authorization";
 import { getUserMetaValue } from "@/lib/user-meta";
 import { cookies } from "next/headers";
 import { getSettingByKey, getSettingsByKeys } from "@/lib/settings-store";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
 import {
   DefaultPostgresAccountsTable,
   DefaultPostgresSessionsTable,
@@ -25,27 +21,6 @@ import {
 const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
 export const MIMIC_ACTOR_COOKIE = "tooty_mimic_actor";
 export const MIMIC_TARGET_COOKIE = "tooty_mimic_target";
-const SUPPORTED_OAUTH_PROVIDERS = ["github", "google", "facebook", "apple"] as const;
-type OAuthProviderId = (typeof SUPPORTED_OAUTH_PROVIDERS)[number];
-const PROVIDER_TO_PLUGIN: Record<OAuthProviderId, keyof typeof AUTH_PLUGIN_PROVIDER_MAP> = {
-  github: "auth-github",
-  google: "auth-google",
-  facebook: "auth-facebook",
-  apple: "auth-apple",
-};
-
-type OAuthProviderRuntimeConfig = {
-  clientId: string;
-  clientSecret: string;
-  source: "db" | "env" | "none";
-};
-
-const OAUTH_ENV_KEYS: Record<OAuthProviderId, { id: string; secret: string }> = {
-  github: { id: "AUTH_GITHUB_ID", secret: "AUTH_GITHUB_SECRET" },
-  google: { id: "AUTH_GOOGLE_ID", secret: "AUTH_GOOGLE_SECRET" },
-  facebook: { id: "AUTH_FACEBOOK_ID", secret: "AUTH_FACEBOOK_SECRET" },
-  apple: { id: "AUTH_APPLE_ID", secret: "AUTH_APPLE_SECRET" },
-};
 
 function normalizeCookieDomain(value: string) {
   const trimmed = value.trim();
@@ -88,98 +63,14 @@ function parseJsonObject(raw: string | undefined): Record<string, unknown> {
   }
 }
 
-async function getOauthProviderRuntimeConfig() {
-  const configKeys = SUPPORTED_OAUTH_PROVIDERS.map(
-    (id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_config`,
-  );
-  const byKey = await getSettingsByKeys(configKeys);
-  const runtime = {} as Record<OAuthProviderId, OAuthProviderRuntimeConfig>;
-
-  for (const providerId of SUPPORTED_OAUTH_PROVIDERS) {
-    const pluginId = PROVIDER_TO_PLUGIN[providerId];
-    const config = parseJsonObject(byKey[`plugin_${pluginId}_config`]);
-    const dbClientId = String(config.clientId || "").trim();
-    const dbClientSecret = String(config.clientSecret || "").trim();
-    if (dbClientId && dbClientSecret) {
-      runtime[providerId] = {
-        clientId: dbClientId,
-        clientSecret: dbClientSecret,
-        source: "db",
-      };
-      continue;
-    }
-
-    const envClientId = String(process.env[OAUTH_ENV_KEYS[providerId].id] || "").trim();
-    const envClientSecret = String(process.env[OAUTH_ENV_KEYS[providerId].secret] || "").trim();
-    if (envClientId && envClientSecret) {
-      runtime[providerId] = {
-        clientId: envClientId,
-        clientSecret: envClientSecret,
-        source: "env",
-      };
-      continue;
-    }
-
-    runtime[providerId] = {
-      clientId: "",
-      clientSecret: "",
-      source: "none",
-    };
-  }
-
-  return runtime;
-}
-
-async function getOauthProviderFlags() {
-  const keys = SUPPORTED_OAUTH_PROVIDERS.map((id) => `plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`);
-  const byKey = await getSettingsByKeys(keys);
-
-  const result: Record<OAuthProviderId, boolean> = {
-    github: true,
-    google: true,
-    facebook: true,
-    apple: true,
-  };
-
-  for (const id of SUPPORTED_OAUTH_PROVIDERS) {
-    result[id] = byKey[`plugin_${PROVIDER_TO_PLUGIN[id]}_enabled`] === "true";
-  }
-  return result;
-}
-
 async function getBootstrapAdminEmail() {
   return String((await getSettingByKey("bootstrap_admin_email")) || "")
     .trim()
     .toLowerCase();
 }
 
-function fallbackOauthRuntimeConfig(): Record<OAuthProviderId, OAuthProviderRuntimeConfig> {
-  return {
-    github: {
-      clientId: String(process.env.AUTH_GITHUB_ID || ""),
-      clientSecret: String(process.env.AUTH_GITHUB_SECRET || ""),
-      source: "env",
-    },
-    google: {
-      clientId: String(process.env.AUTH_GOOGLE_ID || ""),
-      clientSecret: String(process.env.AUTH_GOOGLE_SECRET || ""),
-      source: "env",
-    },
-    facebook: {
-      clientId: String(process.env.AUTH_FACEBOOK_ID || ""),
-      clientSecret: String(process.env.AUTH_FACEBOOK_SECRET || ""),
-      source: "env",
-    },
-    apple: {
-      clientId: String(process.env.AUTH_APPLE_ID || ""),
-      clientSecret: String(process.env.AUTH_APPLE_SECRET || ""),
-      source: "env",
-    },
-  };
-}
-
 export async function enforceOauthAccountLinkingPolicy(input: {
-  providerId: OAuthProviderId;
+  providerId: string;
   providerAccountId: string;
   oauthEmail?: string | null;
   oauthUserId?: string | null;
@@ -231,55 +122,68 @@ export async function enforceOauthAccountLinkingPolicy(input: {
   return { allow: true as const };
 }
 
+type RegisteredExternalAuthProvider = {
+  id: string;
+  pluginId: string;
+  config: Record<string, string>;
+  provider: NonNullable<NextAuthOptions["providers"]>[number];
+  callback: (
+    ctx: {
+      account: Record<string, unknown>;
+      user: Record<string, unknown>;
+      profile: Record<string, unknown> | null;
+    },
+  ) => Promise<{ allow: boolean; error?: string }>;
+};
+
+async function getRegisteredExternalAuthProviders(): Promise<RegisteredExternalAuthProvider[]> {
+  const kernel = await createKernelForRequest();
+  const registrations = kernel.getAllPluginAuthProviders();
+  if (registrations.length === 0) return [];
+
+  const configKeys = registrations.map((entry) => `plugin_${entry.pluginId}_config`);
+  const byKey = await getSettingsByKeys(configKeys);
+  const providers: RegisteredExternalAuthProvider[] = [];
+
+  for (const entry of registrations) {
+    const rawConfig = parseJsonObject(byKey[`plugin_${entry.pluginId}_config`]);
+    const stringConfig = Object.fromEntries(
+      Object.entries(rawConfig).map(([key, value]) => [key, String(value ?? "").trim()]),
+    ) as Record<string, string>;
+    const authorized = await entry.authorize({ config: stringConfig });
+    if (!authorized?.ok) continue;
+    const finalConfig = {
+      ...stringConfig,
+      ...(authorized.config || {}),
+    };
+    const provider = await entry.createAuthProvider({
+      config: finalConfig,
+      async mapProfile(externalProfile) {
+        return entry.mapProfile(externalProfile);
+      },
+    });
+    providers.push({
+      id: entry.id,
+      pluginId: entry.pluginId,
+      config: finalConfig,
+      provider: provider as NonNullable<NextAuthOptions["providers"]>[number],
+      callback: async ({ account, user, profile }) =>
+        entry.callback({
+          account,
+          user,
+          profile,
+          config: finalConfig,
+        }),
+    });
+  }
+
+  return providers;
+}
+
 function buildProviders(
-  oauthRuntime: Record<OAuthProviderId, OAuthProviderRuntimeConfig>,
+  externalProviders: RegisteredExternalAuthProvider[],
 ): NextAuthOptions["providers"] {
-  const providers: NextAuthOptions["providers"] = [];
-
-  if (oauthRuntime.github.clientId && oauthRuntime.github.clientSecret) {
-    providers.push(
-      GitHubProvider({
-        clientId: oauthRuntime.github.clientId,
-        clientSecret: oauthRuntime.github.clientSecret,
-        profile(profile) {
-          return {
-            id: profile.id.toString(),
-            name: profile.name || profile.login,
-            gh_username: profile.login,
-            email: profile.email,
-            image: profile.avatar_url,
-          };
-        },
-      }),
-    );
-  }
-
-  if (oauthRuntime.google.clientId && oauthRuntime.google.clientSecret) {
-    providers.push(
-      GoogleProvider({
-        clientId: oauthRuntime.google.clientId,
-        clientSecret: oauthRuntime.google.clientSecret,
-      }),
-    );
-  }
-
-  if (oauthRuntime.facebook.clientId && oauthRuntime.facebook.clientSecret) {
-    providers.push(
-      FacebookProvider({
-        clientId: oauthRuntime.facebook.clientId,
-        clientSecret: oauthRuntime.facebook.clientSecret,
-      }),
-    );
-  }
-
-  if (oauthRuntime.apple.clientId && oauthRuntime.apple.clientSecret) {
-    providers.push(
-      AppleProvider({
-        clientId: oauthRuntime.apple.clientId,
-        clientSecret: oauthRuntime.apple.clientSecret,
-      }),
-    );
-  }
+  const providers: NextAuthOptions["providers"] = externalProviders.map((entry) => entry.provider);
 
   providers.push(
     CredentialsProvider({
@@ -323,11 +227,11 @@ function buildProviders(
 }
 
 export async function getAuthOptions(): Promise<NextAuthOptions> {
-  const oauthRuntime =
-    (await getOauthProviderRuntimeConfig().catch(() => null)) ?? fallbackOauthRuntimeConfig();
+  const externalProviders = await getRegisteredExternalAuthProviders();
+  const providerRegistry = new Map(externalProviders.map((entry) => [entry.id, entry] as const));
 
   return {
-    providers: buildProviders(oauthRuntime),
+    providers: buildProviders(externalProviders),
     pages: {
       signIn: `/login`,
       verifyRequest: `/login`,
@@ -359,7 +263,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       },
     },
     callbacks: {
-      signIn: async ({ account, user }) => {
+      signIn: async ({ account, user, profile }) => {
         if (account?.provider === "native" && user?.id) {
           const mustRotate = await getUserMetaValue(String(user.id), "force_password_change");
           if (mustRotate === "true") {
@@ -368,14 +272,10 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           return true;
         }
         if (account?.provider === "native") return true;
-        const providerId = account?.provider as OAuthProviderId | undefined;
-        if (!providerId || !SUPPORTED_OAUTH_PROVIDERS.includes(providerId)) {
+        const providerId = String(account?.provider || "").trim();
+        const providerEntry = providerRegistry.get(providerId);
+        if (!providerId || !providerEntry) {
           return true;
-        }
-
-        const flags = await getOauthProviderFlags();
-        if (!flags[providerId]) {
-          return "/login?error=OAuth provider disabled by admin";
         }
         const linking = await enforceOauthAccountLinkingPolicy({
           providerId,
@@ -385,6 +285,17 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         });
         if (!linking.allow) {
           return `/login?error=${encodeURIComponent(linking.error)}`;
+        }
+        const pluginCallback = await providerEntry.callback({
+          account: ((account || {}) as unknown) as Record<string, unknown>,
+          user: ((user || {}) as unknown) as Record<string, unknown>,
+          profile:
+            profile && typeof profile === "object" && !Array.isArray(profile)
+              ? ((profile as unknown) as Record<string, unknown>)
+              : null,
+        });
+        if (!pluginCallback.allow) {
+          return `/login?error=${encodeURIComponent(String(pluginCallback.error || "Authentication rejected"))}`;
         }
         const bootstrapAdminEmail = await getBootstrapAdminEmail();
         if (bootstrapAdminEmail) {

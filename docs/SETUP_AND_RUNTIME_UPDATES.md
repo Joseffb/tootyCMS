@@ -109,8 +109,8 @@ Bootstrap flow:
 - setup creates/updates the native admin row with administrator role
 - first login works with native credentials immediately after setup
 
-OAuth providers are currently core-owned pre-v1.
-First-party auth plugins act as integration manifests/config shells and global enablement gates, but core still instantiates the runtime providers.
+Auth transport remains core-owned pre-v1 through the NextAuth transport layer.
+External OAuth providers are plugin-delivered capability extensions registered through the kernel auth provider registry.
 Current setup gate still requires one OAuth provider pair to complete setup.
 
 Starter content seeding safety:
@@ -207,7 +207,7 @@ If no local reverse proxy is used, keep the explicit port in local URLs (for exa
 ## Reserved Auth Extension Surface
 
 Plugin capability surface includes:
-- `authExtensions` (reserved pre-v1)
+- `authExtensions` (required for governed auth provider registration)
 
 Guardrails:
 - plugin runtime enforces declared capabilities for guarded operations

@@ -19,6 +19,7 @@ export CMS_DB_PREFIX="${CMS_DB_PREFIX_TEST_OVERRIDE:-tooty_}"
 export ADMIN_PATH="${ADMIN_PATH_TEST_OVERRIDE:-cp}"
 export E2E_APP_ORIGIN="${E2E_APP_ORIGIN_TEST_OVERRIDE:-${NEXTAUTH_URL}}"
 export E2E_PUBLIC_ORIGIN="${E2E_PUBLIC_ORIGIN_TEST_OVERRIDE:-http://localhost:${TEST_PORT}}"
+export PLAYWRIGHT_EXTERNAL_SERVER="1"
 
 # Integration/e2e must run against a dedicated test DB, never the dev DB.
 if [[ -z "${POSTGRES_TEST_URL:-}" ]]; then
@@ -72,4 +73,79 @@ NODE
 # Recreate latest schema from current contracts after full drop reset.
 npx drizzle-kit push --config drizzle.config.ts
 
-exec playwright test
+TEST_DIST_DIR=".next-test-${TEST_PORT}"
+NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next build
+
+EXISTING_PIDS="$(lsof -ti tcp:${TEST_PORT} 2>/dev/null || true)"
+if [[ -n "${EXISTING_PIDS}" ]]; then
+  echo "Killing stale process(es) on test port ${TEST_PORT}: ${EXISTING_PIDS}"
+  echo "${EXISTING_PIDS}" | xargs kill >/dev/null 2>&1 || true
+  sleep 1
+fi
+
+NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next start --port "${TEST_PORT}" &
+SERVER_PID=$!
+
+cleanup() {
+  if kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
+    kill "${SERVER_PID}" >/dev/null 2>&1 || true
+    wait "${SERVER_PID}" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup EXIT
+
+node <<'NODE'
+const http = require("node:http");
+
+const port = Number(process.env.TEST_PORT || "3123");
+const timeoutMs = 120_000;
+const deadline = Date.now() + timeoutMs;
+
+function check() {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/icon.svg",
+      },
+      (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          resolve();
+          return;
+        }
+        reject(new Error(`Unexpected status ${res.statusCode}`));
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(2_000, () => req.destroy(new Error("timeout")));
+  });
+}
+
+(async () => {
+  while (Date.now() < deadline) {
+    try {
+      await check();
+      return;
+    } catch (_error) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("Timed out waiting for integration web server.");
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+
+set +e
+pnpm exec playwright test "$@"
+PLAYWRIGHT_STATUS=$?
+set -e
+
+cleanup
+trap - EXIT
+
+exit "${PLAYWRIGHT_STATUS}"

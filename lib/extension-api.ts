@@ -17,11 +17,10 @@ import type {
   PluginCommentProviderRegistration,
   ContentStateRegistration,
   ContentTransitionRegistration,
-  PluginAuthAdapterRegistration,
+  PluginAuthProviderRegistration,
   PluginCommunicationProviderRegistration,
   PluginContentTypeRegistration,
   PluginScheduleHandlerRegistration,
-  PluginServerHandlerRegistration,
   PluginWebcallbackHandlerRegistration,
 } from "@/lib/kernel";
 import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateScheduleEntry } from "@/lib/scheduler";
@@ -72,8 +71,7 @@ export type PluginCapabilities = {
 
 type PluginCoreRegistry = {
   registerContentType: (registration: PluginContentTypeRegistration) => void;
-  registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
-  registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
+  registerAuthProvider: (registration: PluginAuthProviderRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
   registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
@@ -208,8 +206,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
   setSetting: (key: string, value: string) => Promise<void>;
   setPluginSetting: (key: string, value: string) => Promise<void>;
   registerContentType: (registration: PluginContentTypeRegistration) => void;
-  registerServerHandler: (registration: PluginServerHandlerRegistration) => void;
-  registerAuthAdapter: (registration: PluginAuthAdapterRegistration) => void;
+  registerAuthProvider: (registration: PluginAuthProviderRegistration) => void;
   registerScheduleHandler: (registration: PluginScheduleHandlerRegistration) => void;
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
   registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
@@ -435,24 +432,14 @@ export function createPluginExtensionApi(
       options.coreRegistry.registerContentType(registration);
     };
 
-  const registerServerHandler: PluginExtensionApi["registerServerHandler"] = (registration) => {
-      requireCapability("serverHandlers", "registerServerHandler()");
+  const registerAuthProvider: PluginExtensionApi["registerAuthProvider"] = (registration) => {
+      requireCapability("authExtensions", "registerAuthProvider()");
       if (!options?.coreRegistry) {
         throw new Error(
-          `[plugin-guard] Plugin "${pluginName}" registerServerHandler() is unavailable outside Core runtime.`,
+          `[plugin-guard] Plugin "${pluginName}" registerAuthProvider() is unavailable outside Core runtime.`,
         );
       }
-      options.coreRegistry.registerServerHandler(registration);
-    };
-
-  const registerAuthAdapter: PluginExtensionApi["registerAuthAdapter"] = (registration) => {
-      requireCapability("authExtensions", "registerAuthAdapter()");
-      if (!options?.coreRegistry) {
-        throw new Error(
-          `[plugin-guard] Plugin "${pluginName}" registerAuthAdapter() is unavailable outside Core runtime.`,
-        );
-      }
-      options.coreRegistry.registerAuthAdapter(registration);
+      options.coreRegistry.registerAuthProvider(registration);
     };
 
   const registerScheduleHandler: PluginExtensionApi["registerScheduleHandler"] = (registration) => {
@@ -848,8 +835,7 @@ export function createPluginExtensionApi(
     setSetting,
     setPluginSetting,
     registerContentType,
-    registerServerHandler,
-    registerAuthAdapter,
+    registerAuthProvider,
     registerScheduleHandler,
     registerCommunicationProvider,
     registerCommentProvider,

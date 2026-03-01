@@ -23,6 +23,8 @@ There is one narrow exception to the no-one-off-core-change rule:
 
 - A governance-sensitive capability may be implemented as a spine service in plugin form when compliance, audit, or operational policy requires that the entire capability can be disabled or removed in one action.
 - The purpose of this pattern is kill-switch control across a whole activity class, not convenience customization for one extension.
+- Pre-v1, the only approved spine service plugin is `export-import`.
+- `export-import` is the single sanctioned exception because import/export is a compliance-sensitive, audit-sensitive capability where operators may need one kill switch that removes the entire migration surface in one action.
 
 Examples:
 
@@ -36,6 +38,7 @@ Mandatory constraints:
 - They must be designed so disabling the plugin cleanly kills that class of activity.
 - They are platform service boundaries, not ordinary third-party extension surfaces.
 - Third-party or normal plugin developers must not define new spine service plugin categories.
+- Third-party or normal plugin developers must not claim the `export-import` exception for ordinary feature routes, business logic, UI, or transport.
 - Only the Tooty core team may approve and implement a new spine service plugin pattern.
 
 ## Naming Contracts (MUST)
@@ -89,6 +92,7 @@ Hard boundary:
 - Core must not contain plugin feature-specific UI.
 - Core must not contain plugin-owned routes.
 - Core must not contain plugin feature code or feature semantics.
+- The only pre-v1 exception is the governed `export-import` spine service. Its transport may remain kernel-owned because it is treated as a platform service packaged in plugin form, not as a normal feature plugin.
 - Feature behavior, business rules, admin UI, and route handlers belong in the plugin itself unless the user explicitly approves a platform-level architectural change.
 
 Plugins may:
@@ -173,18 +177,21 @@ Scope governance:
 ### Auth Provider Ownership (PRE-V1, MUST)
 
 - Native auth is core baseline and always available.
-- OAuth provider resolution is currently core-owned.
-- First-party auth provider plugins are currently integration manifests/config shells only.
-- `capabilities.authExtensions` is reserved for future true auth-extension surfaces; third-party plugin authors must not assume runtime provider registration support before v1.
+- Auth transport remains core-owned through the NextAuth transport layer (`/api/auth/*`).
+- External auth providers are plugin-delivered capability extensions registered through the kernel auth provider registry.
+- `capabilities.authExtensions` is the required capability for `api.registerAuthProvider(...)`.
+- Auth plugins extend provider capability only; they do not mount raw routes, mutate cookies, or own session lifecycle.
 - Global plugin enabled state controls provider availability at login.
 - Multiple first-party provider integrations may be enabled at the same time.
 - Core user records are global and are not site-bound in current contract.
 
-Until a true auth extension runtime exists:
+Hard auth invariants:
 
-- docs must not claim plugin-owned auth provider behavior
-- core remains the authority for provider instantiation and callback flow
-- first-party auth plugins are metadata/distribution boundaries, not runtime provider engines
+- plugins must not mount or override `/api/auth/*`
+- session/token creation remains core-owned
+- identity persistence remains core-owned
+- auth extensibility means provider extensibility, not transport extensibility
+- first-party auth plugins are runtime provider engines through the governed auth provider registry
 
 ### Analytics Contract (MUST)
 

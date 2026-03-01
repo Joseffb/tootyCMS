@@ -73,9 +73,8 @@ import {
 } from "./scheduler";
 import { emitDomainEvent } from "@/lib/domain-dispatch";
 import { hashPassword } from "@/lib/password";
-import { AUTH_PLUGIN_PROVIDER_MAP } from "@/lib/auth-provider-plugins";
 import { listSiteUsers, upsertSiteUserRole } from "@/lib/site-user-tables";
-import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { createKernelForRequest, listPluginsWithState } from "@/lib/plugin-runtime";
 import type { ProfileSection, ProfileSectionRow } from "@/lib/profile-contracts";
 import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
 import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
@@ -1836,17 +1835,18 @@ async function requireOwnedSite(siteIdRaw: string, capability: SiteCapability = 
   return { site };
 }
 
-function parseAuthProviderAvailability(rows: Array<{ key: string; value: string }>) {
-  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
-  const providerToPlugin = Object.fromEntries(
-    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
-  ) as Record<(typeof oauthIds)[number], string>;
-  const byKey = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-  return oauthIds.map((id) => {
-    const key = `plugin_${providerToPlugin[id]}_enabled`;
-    const enabled = byKey[key] ? byKey[key] === "true" : false;
-    return { id, key, enabled };
-  });
+async function listAuthProviderAvailability() {
+  const plugins = await listPluginsWithState();
+  return plugins
+    .filter((plugin) => plugin.capabilities?.authExtensions && plugin.authProviderId)
+    .map((plugin) => ({
+      id: String(plugin.authProviderId || "").trim(),
+      key: `plugin_${plugin.id}_enabled`,
+      enabled: Boolean(plugin.enabled),
+      pluginId: plugin.id,
+    }))
+    .filter((provider) => provider.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function normalizeProfileSectionRows(input: unknown): ProfileSectionRow[] {
@@ -1881,13 +1881,6 @@ function normalizeProfileSections(input: unknown): ProfileSection[] {
     .filter(Boolean) as ProfileSection[];
 }
 
-const OAUTH_ENV_KEYS: Record<string, { id: string; secret: string }> = {
-  github: { id: "AUTH_GITHUB_ID", secret: "AUTH_GITHUB_SECRET" },
-  google: { id: "AUTH_GOOGLE_ID", secret: "AUTH_GOOGLE_SECRET" },
-  facebook: { id: "AUTH_FACEBOOK_ID", secret: "AUTH_FACEBOOK_SECRET" },
-  apple: { id: "AUTH_APPLE_ID", secret: "AUTH_APPLE_SECRET" },
-};
-
 function parseJsonObject(raw: string | undefined) {
   if (!raw) return {} as Record<string, unknown>;
   try {
@@ -1899,27 +1892,22 @@ function parseJsonObject(raw: string | undefined) {
 }
 
 async function getEnabledConfiguredOauthProviders() {
-  const oauthIds = Array.from(new Set(Object.values(AUTH_PLUGIN_PROVIDER_MAP)));
-  const providerToPlugin = Object.fromEntries(
-    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
-  ) as Record<string, string>;
-  const keys = oauthIds.flatMap((id) => [
-    `plugin_${providerToPlugin[id]}_enabled`,
-    `plugin_${providerToPlugin[id]}_config`,
-  ]);
-  const byKey = await getSettingsByKeys(keys);
+  const providers = await listAuthProviderAvailability();
+  const enabledProviders = providers.filter((provider) => provider.enabled);
+  if (enabledProviders.length === 0) return [];
 
-  return oauthIds.filter((id) => {
-    const pluginId = providerToPlugin[id];
-    const enabled = byKey[`plugin_${pluginId}_enabled`] === "true";
-    if (!enabled) return false;
-    const config = parseJsonObject(byKey[`plugin_${pluginId}_config`]);
-    const dbClientId = String(config.clientId || "").trim();
-    const dbClientSecret = String(config.clientSecret || "").trim();
-    const envClientId = String(process.env[OAUTH_ENV_KEYS[id]?.id || ""] || "").trim();
-    const envClientSecret = String(process.env[OAUTH_ENV_KEYS[id]?.secret || ""] || "").trim();
-    return Boolean((dbClientId && dbClientSecret) || (envClientId && envClientSecret));
-  });
+  const configKeys = enabledProviders.map((provider) => `plugin_${provider.pluginId}_config`);
+  const byKey = await getSettingsByKeys(configKeys);
+
+  return enabledProviders
+    .filter((provider) => {
+      const config = parseJsonObject(byKey[`plugin_${provider.pluginId}_config`]);
+      const values = Object.values(config)
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean);
+      return values.length > 0;
+    })
+    .map((provider) => provider.id);
 }
 
 async function withUserAuthState<T extends { id: string; passwordHash: string | null }>(rows: T[]) {
@@ -1958,15 +1946,7 @@ async function withUserAuthState<T extends { id: string; passwordHash: string | 
 }
 
 async function getOauthProviderSettingsInternal() {
-  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
-  const providerToPlugin = Object.fromEntries(
-    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
-  ) as Record<(typeof oauthIds)[number], string>;
-  const keys = oauthIds.map((id) => `plugin_${providerToPlugin[id]}_enabled`);
-  const byKey = await getSettingsByKeys(keys);
-  return parseAuthProviderAvailability(
-    keys.map((key) => ({ key, value: byKey[key] ?? "false" })),
-  );
+  return listAuthProviderAvailability();
 }
 
 export const getProfile = async (siteId?: string) => {
@@ -2426,13 +2406,10 @@ export const listOauthProviderSettings = async () => {
 
 export const updateOauthProviderSettings = async (formData: FormData) => {
   await requireAdminSession();
-  const oauthIds = Object.values(AUTH_PLUGIN_PROVIDER_MAP);
-  const providerToPlugin = Object.fromEntries(
-    Object.entries(AUTH_PLUGIN_PROVIDER_MAP).map(([pluginId, providerId]) => [providerId, pluginId]),
-  ) as Record<(typeof oauthIds)[number], string>;
-  for (const id of oauthIds) {
-    const key = `plugin_${providerToPlugin[id]}_enabled`;
-    const enabled = formData.get(`oauth_provider_${id}`) === "on";
+  const providers = await listAuthProviderAvailability();
+  for (const provider of providers) {
+    const key = `plugin_${provider.pluginId}_enabled`;
+    const enabled = formData.get(`oauth_provider_${provider.id}`) === "on";
     await setSettingByKey(key, enabled ? "true" : "false");
   }
 

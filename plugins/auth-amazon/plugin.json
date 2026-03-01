@@ -1,0 +1,36 @@
+{
+  "kind": "plugin",
+  "id": "auth-amazon",
+  "name": "Admin Auth Amazon",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables Login with Amazon OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "amazon",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "Amazon Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_AMAZON_ID env",
+      "helpText": "Optional DB override. If set with Client Secret, this overrides AUTH_AMAZON_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "Amazon Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_AMAZON_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID, this overrides AUTH_AMAZON_SECRET."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.4.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

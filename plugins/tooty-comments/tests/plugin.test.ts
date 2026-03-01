@@ -60,4 +60,36 @@ describe("tooty-comments plugin", () => {
     expect(slots.comments).toContain('data-site-id="site-1"');
     expect(slots.comments).toContain('data-context-id="entry-1"');
   });
+
+  it("skips provider registration when no bound site context is available", async () => {
+    const enqueueScript = vi.fn();
+    const addFilter = vi.fn();
+    const createTableBackedProvider = vi.fn(() => {
+      throw new Error("[plugin-guard] core.comments.createTableBackedProvider() requires a bound site plugin context.");
+    });
+    const registerCommentProvider = vi.fn();
+
+    await register(
+      { enqueueScript, addFilter } as any,
+      {
+        registerCommentProvider,
+        core: {
+          comments: {
+            getPublicCapabilities: vi.fn().mockResolvedValue({
+              commentsVisibleToPublic: false,
+              canPostAuthenticated: false,
+              canPostAnonymously: false,
+              anonymousIdentityFields: { name: false, email: false },
+            }),
+            createTableBackedProvider,
+          },
+        },
+      } as any,
+    );
+
+    expect(createTableBackedProvider).toHaveBeenCalledOnce();
+    expect(registerCommentProvider).not.toHaveBeenCalled();
+    expect(enqueueScript).toHaveBeenCalledOnce();
+    expect(addFilter).toHaveBeenCalledWith("theme:slots", expect.any(Function));
+  });
 });

@@ -93,8 +93,6 @@ Filters transform and return values. They chain in priority order.
 - `admin:schedule-actions`
 - `domain:scripts`
 - `domain:query`
-- `auth:providers`
-- `auth:adapter`
 - `auth:callbacks:signIn`
 - `auth:callbacks:jwt`
 - `auth:callbacks:session`

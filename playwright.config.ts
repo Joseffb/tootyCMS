@@ -55,6 +55,7 @@ const edgeProjects = edgeExecutablePath
     ]
   : [];
 const projectCount = 3 + edgeProjects.length;
+const useExternalServer = process.env.PLAYWRIGHT_EXTERNAL_SERVER === "1";
 
 process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL_TEST_OVERRIDE || browserOrigin;
 process.env.NEXT_PUBLIC_ROOT_DOMAIN =
@@ -73,17 +74,19 @@ export default defineConfig({
     baseURL: browserOrigin,
     trace: "on-first-retry",
   },
-  webServer: {
-    command: `NEXT_DIST_DIR=${testDistDir} TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next dev --webpack --port ${testPort}`,
-    // Root path can return 404 depending on host routing; static icon is always available.
-    url: `${healthcheckOrigin}/icon.svg`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    gracefulShutdown: {
-      signal: "SIGTERM",
-      timeout: 5_000,
-    },
-  },
+  webServer: useExternalServer
+    ? undefined
+    : {
+        command: `NEXT_DIST_DIR=${testDistDir} TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next dev --webpack --port ${testPort}`,
+        // Root path can return 404 depending on host routing; static icon is always available.
+        url: `${healthcheckOrigin}/icon.svg`,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        gracefulShutdown: {
+          signal: "SIGTERM",
+          timeout: 5_000,
+        },
+      },
   projects: [
     {
       name: "chromium",

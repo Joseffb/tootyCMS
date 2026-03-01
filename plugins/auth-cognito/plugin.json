@@ -1,0 +1,43 @@
+{
+  "kind": "plugin",
+  "id": "auth-cognito",
+  "name": "Admin Auth Cognito",
+  "scope": "network",
+  "version": "0.1.0",
+  "description": "Enables AWS Cognito OAuth sign-in provider.",
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": false,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": true
+  },
+  "authProviderId": "cognito",
+  "settingsFields": [
+    {
+      "key": "clientId",
+      "label": "Cognito Client ID",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_COGNITO_ID env",
+      "helpText": "Optional DB override. If set with Client Secret and Issuer, this overrides AUTH_COGNITO_ID."
+    },
+    {
+      "key": "clientSecret",
+      "label": "Cognito Client Secret",
+      "type": "password",
+      "placeholder": "Falls back to AUTH_COGNITO_SECRET env",
+      "helpText": "Optional DB override. If set with Client ID and Issuer, this overrides AUTH_COGNITO_SECRET."
+    },
+    {
+      "key": "issuer",
+      "label": "Cognito Issuer URL",
+      "type": "text",
+      "placeholder": "Falls back to AUTH_COGNITO_ISSUER env",
+      "helpText": "Optional DB override. Must be the full Cognito issuer URL."
+    }
+  ],
+  "distribution": "core",
+  "minCoreVersion": "0.4.x",
+  "developer": "Fernain Betancourt",
+  "website": "https://fernain.com"
+}

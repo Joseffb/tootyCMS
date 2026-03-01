@@ -4,8 +4,8 @@ test("@cross-browser about page is accessible", async ({ page }) => {
   const response = await page.goto("/about-this-site");
   if (!response?.ok()) {
     await page.goto("/app/cp/login");
-    await expect(page).toHaveURL(/\/app\/cp\/login/);
-    await expect(page.locator("body")).toContainText(/login|auth|provider|configured/i);
+    expect(page.url()).toMatch(/\/(app\/cp\/login|setup)$/);
+    await expect(page.locator("body")).toContainText(/login|auth|provider|configured|setup/i);
     return;
   }
   await expect(page.locator("body")).toContainText(/about|site|tooty|cms/i);

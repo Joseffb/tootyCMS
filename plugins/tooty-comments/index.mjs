@@ -27,11 +27,18 @@ function buildCommentsSlotMarkup({ siteId, contextId }) {
 
 export async function register(kernel, api) {
   if (api?.registerCommentProvider && api?.core?.comments?.createTableBackedProvider) {
-    api.registerCommentProvider(
-      api.core.comments.createTableBackedProvider({
-        id: "tooty-comments",
-      }),
-    );
+    try {
+      api.registerCommentProvider(
+        api.core.comments.createTableBackedProvider({
+          id: "tooty-comments",
+        }),
+      );
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (!message.includes("requires a bound site plugin context")) {
+        throw error;
+      }
+    }
   }
   kernel.enqueueScript({
     id: "tooty-comments-widget",

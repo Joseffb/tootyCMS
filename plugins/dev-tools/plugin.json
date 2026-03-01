@@ -9,7 +9,7 @@
     "hooks": true,
     "adminExtensions": true,
     "contentTypes": false,
-    "serverHandlers": false
+    "serverHandlers": true
   },
   "menu": {
     "label": "Admin - Dev Tools",

@@ -1,8 +1,8 @@
-import FacebookProvider from "next-auth/providers/facebook";
+import AmazonProvider from "next-auth/providers/amazon";
 
 export async function register(_kernel, api) {
   api.registerAuthProvider({
-    id: "facebook",
+    id: "amazon",
     type: "oauth",
     configSchema: {
       clientId: { type: "string", required: true, minLength: 1 },
@@ -11,7 +11,9 @@ export async function register(_kernel, api) {
     async authorize({ config }) {
       const clientId = String(config?.clientId || "").trim();
       const clientSecret = String(config?.clientSecret || "").trim();
-      if (!clientId || !clientSecret) return { ok: false, error: "Missing OAuth client configuration." };
+      if (!clientId || !clientSecret) {
+        return { ok: false, error: "Missing OAuth client configuration." };
+      }
       return {
         ok: true,
         config: {
@@ -25,14 +27,14 @@ export async function register(_kernel, api) {
     },
     async mapProfile(profile) {
       return {
-        id: String(profile.id || ""),
+        id: String(profile.user_id || profile.id || ""),
         name: String(profile.name || "").trim(),
         email: String(profile.email || "").trim() || null,
-        image: String(profile.picture?.data?.url || profile.picture || "").trim() || null,
+        image: null,
       };
     },
     createAuthProvider({ config, mapProfile }) {
-      return FacebookProvider({
+      return AmazonProvider({
         clientId: String(config.clientId || ""),
         clientSecret: String(config.clientSecret || ""),
         profile(profile) {

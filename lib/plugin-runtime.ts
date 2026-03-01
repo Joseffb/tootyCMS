@@ -33,8 +33,6 @@ function appendSiteIdToHref(href: string, siteId?: string) {
 
 function isAuthFilterName(name: unknown) {
   return (
-    name === "auth:providers" ||
-    name === "auth:adapter" ||
     name === "auth:callbacks:signIn" ||
     name === "auth:callbacks:jwt" ||
     name === "auth:callbacks:session"
@@ -141,6 +139,10 @@ function createGuardedKernelView(
       ensure(capabilities.adminExtensions, "kernel.addMenuItems");
       return kernel.addMenuItems(...args);
     },
+    registerRoute: (registration: Parameters<typeof kernel.registerPluginRoute>[1]) => {
+      ensure(capabilities.serverHandlers, "kernel.registerRoute");
+      return kernel.registerPluginRoute(pluginId, registration);
+    },
     enqueueScript: (...args: Parameters<typeof kernel.enqueueScript>) => {
       ensure(capabilities.hooks, "kernel.enqueueScript");
       return kernel.enqueueScript(...args);
@@ -190,11 +192,8 @@ async function maybeRegisterPluginHooks(
           registerContentType(registration) {
             kernel.registerPluginContentType(pluginId, registration);
           },
-          registerServerHandler(registration) {
-            kernel.registerPluginServerHandler(pluginId, registration);
-          },
-          registerAuthAdapter(registration) {
-            kernel.registerPluginAuthAdapter(pluginId, registration);
+          registerAuthProvider(registration) {
+            kernel.registerPluginAuthProvider(pluginId, registration);
           },
           registerScheduleHandler(registration) {
             kernel.registerPluginScheduleHandler(pluginId, registration);

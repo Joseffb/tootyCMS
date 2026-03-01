@@ -7,7 +7,6 @@ describe("extension guardrails", () => {
       capabilities: { contentTypes: false },
       coreRegistry: {
         registerContentType: vi.fn(),
-        registerServerHandler: vi.fn(),
       },
     });
 
@@ -19,48 +18,18 @@ describe("extension guardrails", () => {
     ).toThrow(/plugin-guard/i);
   });
 
-  it("throws when plugin registers server handler without capability", () => {
-    const api = createPluginExtensionApi("guarded-plugin", {
-      capabilities: { serverHandlers: false },
-      coreRegistry: {
-        registerContentType: vi.fn(),
-        registerServerHandler: vi.fn(),
-      },
-    });
-
-    expect(() =>
-      api.registerServerHandler({
-        id: "vehicle-sync",
-        method: "POST",
-        path: "/api/plugins/vehicle-sync",
-      }),
-    ).toThrow(/plugin-guard/i);
-  });
-
   it("forwards declarations through Core registry when capability is enabled", () => {
     const registerContentType = vi.fn();
-    const registerServerHandler = vi.fn();
     const api = createPluginExtensionApi("declared-plugin", {
-      capabilities: { contentTypes: true, serverHandlers: true },
+      capabilities: { contentTypes: true },
       coreRegistry: {
         registerContentType,
-        registerServerHandler,
       },
     });
 
     api.registerContentType({ key: "used-cars", label: "Used Cars" });
-    api.registerServerHandler({
-      id: "inventory-refresh",
-      method: "POST",
-      path: "/api/plugins/inventory/refresh",
-    });
 
     expect(registerContentType).toHaveBeenCalledWith({ key: "used-cars", label: "Used Cars" });
-    expect(registerServerHandler).toHaveBeenCalledWith({
-      id: "inventory-refresh",
-      method: "POST",
-      path: "/api/plugins/inventory/refresh",
-    });
   });
 
   it("throws when capability is enabled but Core registry is missing", () => {
@@ -71,20 +40,23 @@ describe("extension guardrails", () => {
     expect(() => api.registerContentType({ key: "docs" })).toThrow(/unavailable outside Core runtime/i);
   });
 
-  it("throws when plugin registers auth adapter without capability", () => {
+  it("throws when plugin registers auth provider without capability", () => {
     const api = createPluginExtensionApi("guarded-plugin", {
       capabilities: { authExtensions: false },
       coreRegistry: {
         registerContentType: vi.fn(),
-        registerServerHandler: vi.fn(),
-        registerAuthAdapter: vi.fn(),
+        registerAuthProvider: vi.fn(),
       },
     });
 
     expect(() =>
-      api.registerAuthAdapter({
+      api.registerAuthProvider({
         id: "custom-auth",
-        create: () => ({ id: "custom-auth" }),
+        type: "oauth",
+        authorize: async () => ({ ok: true, config: {} }),
+        callback: async () => ({ allow: true }),
+        mapProfile: async () => ({}),
+        createAuthProvider: async () => ({ id: "custom-auth" }),
       }),
     ).toThrow(/plugin-guard/i);
   });

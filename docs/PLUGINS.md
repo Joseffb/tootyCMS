@@ -15,6 +15,14 @@ Plugin system files:
 2. Keep plugin state managed through settings records.
 3. Expose optional plugin setup surfaces in dashboard.
 4. Integrate behavior through kernel hooks, not hardcoded imports.
+5. Keep ordinary plugins out of raw transport; HTTP is kernel-owned.
+
+Pre-v1 governance note:
+
+- `export-import` is the only sanctioned spine service plugin exception.
+- It exists in plugin form because import/export is a compliance-sensitive and audit-sensitive capability that may need a single kill switch.
+- Disabling `export-import` must remove the whole migration surface in one action.
+- This exception does not apply to normal feature plugins.
 
 ## Drop-in structure
 
@@ -241,8 +249,8 @@ Plugin capabilities are enforced at runtime:
 - `hooks`: required for `kernel.addAction` / `kernel.addFilter`
 - `adminExtensions`: required for dashboard/menu extension registration
 - `contentTypes`: required for `api.registerContentType(...)`
-- `serverHandlers`: required for `api.registerServerHandler(...)`
-- `authExtensions`: reserved for future auth-extension surfaces. Pre-v1, first-party auth plugins use it as a classification flag only; runtime auth provider ownership remains in core.
+- `serverHandlers`: required for governed plugin HTTP descriptors via `kernel.registerRoute(...)`
+- `authExtensions`: required for governed auth provider registration via `api.registerAuthProvider(...)`. Auth transport remains core-owned through NextAuth; plugins extend provider capability only.
 - `scheduleJobs`: required for scheduler APIs and `registerScheduleHandler(...)`
 - `communicationProviders`: required for communication transport registration
 - `webCallbacks`: required for first-class callback handler registration
