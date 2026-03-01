@@ -74,7 +74,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: `NEXT_DIST_DIR=${testDistDir} TRACE_PROFILE=Test npm run dev -- --port ${testPort}`,
+    command: `NEXT_DIST_DIR=${testDistDir} TRACE_PROFILE=Test pnpm exec next dev --webpack --port ${testPort}`,
     // Root path can return 404 depending on host routing; static icon is always available.
     url: `${healthcheckOrigin}/icon.svg`,
     reuseExistingServer: false,

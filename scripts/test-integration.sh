@@ -72,4 +72,4 @@ NODE
 # Recreate latest schema from current contracts after full drop reset.
 npx drizzle-kit push --config drizzle.config.ts
 
-playwright test
+exec playwright test
