@@ -227,19 +227,29 @@ export default async function DomainPostPage({
     }
   }
 
-  return (
-    <SitePostContent
-      postData={{
-        ...(data as any),
-        layout,
-        menuItems,
-        primals: {
-          public_image_base: "",
-          documentation_category_slug: "documentation",
-          category_base: writing.categoryBase || "c",
-          tag_base: writing.tagBase || "t",
+  const postData = {
+    ...(data as any),
+    layout,
+    menuItems,
+    primals: {
+      public_image_base: "",
+      documentation_category_slug: "documentation",
+      category_base: writing.categoryBase || "c",
+      tag_base: writing.tagBase || "t",
+    },
+  };
+  if (siteId) {
+    const fallbackThemeRuntime = await getThemeRenderContext(siteId, "domain_detail", [], {
+      kernel,
+      slotContext: {
+        entry: {
+          id: (data as any)?.id || "",
+          dataDomain: decodedDataDomain,
+          meta: postMeta,
         },
-      }}
-    />
-  );
+      },
+    });
+    postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};
+  }
+  return <SitePostContent postData={postData} />;
 }

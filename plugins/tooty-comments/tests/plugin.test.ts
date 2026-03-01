@@ -7,14 +7,19 @@ describe("tooty-comments plugin", () => {
     const addFilter = vi.fn();
     const createTableBackedProvider = vi.fn(() => ({ id: "tooty-comments" }));
     const registerCommentProvider = vi.fn();
-    const getSetting = vi.fn().mockResolvedValue("true");
+    const getPublicCapabilities = vi.fn().mockResolvedValue({
+      commentsVisibleToPublic: true,
+      canPostAuthenticated: true,
+      canPostAnonymously: true,
+      anonymousIdentityFields: { name: true, email: true },
+    });
     await register(
       { enqueueScript, addFilter } as any,
       {
-        getSetting,
         registerCommentProvider,
         core: {
           comments: {
+            getPublicCapabilities,
             createTableBackedProvider,
           },
         },
@@ -50,7 +55,7 @@ describe("tooty-comments plugin", () => {
       },
     );
 
-    expect(getSetting).toHaveBeenCalledWith("enable_comments", "true");
+    expect(getPublicCapabilities).toHaveBeenCalledWith("site-1");
     expect(slots.comments).toContain('data-theme-slot="comments"');
     expect(slots.comments).toContain('data-site-id="site-1"');
     expect(slots.comments).toContain('data-context-id="entry-1"');

@@ -106,6 +106,12 @@ export default function SitePostContent({ postData }: { postData: any }) {
           </div>
         </div>
       </section>
+
+      {typeof postData?.themeSlots?.comments === "string" && postData.themeSlots.comments.trim() ? (
+        <section className="mx-auto mt-8 w-full max-w-4xl px-5 md:px-8">
+          <div dangerouslySetInnerHTML={{ __html: postData.themeSlots.comments }} />
+        </section>
+      ) : null}
     </main>
   );
 }

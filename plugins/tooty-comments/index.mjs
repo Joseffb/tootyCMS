@@ -22,7 +22,7 @@ function escapeAttr(value) {
 }
 
 function buildCommentsSlotMarkup({ siteId, contextId }) {
-  return `<div data-theme-slot="comments" class="tooty-comments-block" data-comments-block data-site-id="${escapeAttr(siteId)}" data-context-id="${escapeAttr(contextId)}"></div>`;
+  return `<div data-theme-slot="comments" class="tooty-comments-block" data-tooty-comments data-comments-block data-site-id="${escapeAttr(siteId)}" data-context-id="${escapeAttr(contextId)}"></div>`;
 }
 
 export async function register(kernel, api) {
@@ -45,7 +45,12 @@ export async function register(kernel, api) {
     const entryId = String(entry?.id || "").trim();
     if (!siteId || !entryId) return slots;
 
-    const commentsEnabled = normalizeBoolean(await api.getSetting("enable_comments", "true"), true);
+    const capabilities = await api.core.comments.getPublicCapabilities(siteId);
+    const commentsEnabled = Boolean(
+      capabilities.commentsVisibleToPublic ||
+        capabilities.canPostAuthenticated ||
+        capabilities.canPostAnonymously,
+    );
     const useComments = readMetaBoolean(entry?.meta, "use_comments", commentsEnabled);
     if (!commentsEnabled || !useComments) return slots;
 

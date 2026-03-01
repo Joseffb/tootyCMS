@@ -30,6 +30,7 @@ import {
   createComment,
   createTableBackedCommentProvider,
   deleteComment,
+  getPublicCommentCapabilities,
   listComments,
   listCommentsForExport,
   moderateComment,
@@ -166,6 +167,15 @@ type CoreServiceApi = {
     purge: typeof purgeCommunicationQueue;
   };
   comments: {
+    getPublicCapabilities: (siteId: string) => Promise<{
+      commentsVisibleToPublic: boolean;
+      canPostAuthenticated: boolean;
+      canPostAnonymously: boolean;
+      anonymousIdentityFields: {
+        name: boolean;
+        email: boolean;
+      };
+    }>;
     createTableBackedProvider: (
       input?: Partial<PluginCommentProviderRegistration>,
     ) => PluginCommentProviderRegistration;
@@ -800,6 +810,7 @@ export function createPluginExtensionApi(
       purge: purgeCommunicationQueue,
     },
     comments: {
+      getPublicCapabilities: (siteId: string) => getPublicCommentCapabilities(siteId),
       createTableBackedProvider: (input?: Partial<PluginCommentProviderRegistration>) => {
         const boundSiteId = options?.siteId;
         if (!boundSiteId) {

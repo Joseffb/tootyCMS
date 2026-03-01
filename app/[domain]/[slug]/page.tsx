@@ -391,5 +391,18 @@ export default async function SitePostPage({
       tag_base: writing.tagBase || "t",
     },
   };
+  if (siteId) {
+    const fallbackThemeRuntime = await getThemeRenderContext(siteId, "domain_detail", [], {
+      kernel,
+      slotContext: {
+        entry: {
+          id: (data as any)?.id || "",
+          dataDomain: "post",
+          meta: postMeta,
+        },
+      },
+    });
+    postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};
+  }
   return <SitePostContent postData={postData} />;
 }
