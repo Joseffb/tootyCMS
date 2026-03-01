@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PIDS="$(lsof -ti tcp:3000 2>/dev/null || true)"
-if [[ -n "${PIDS}" ]]; then
-  echo "Killing processes on :3000 -> ${PIDS}"
-  kill -9 ${PIDS}
-fi
+TEST_PORT="${TEST_PORT:-3000}"
+TEST_PORT="$(node ./scripts/resolve-test-port.mjs "${TEST_PORT}")"
+export TEST_PORT
 
 set -a
 source .env
@@ -13,6 +11,14 @@ if [[ -f .env.test ]]; then
   source .env.test
 fi
 set +a
+
+# Integration/e2e must be stable regardless of local dev site configuration.
+export NEXTAUTH_URL="${NEXTAUTH_URL_TEST_OVERRIDE:-http://localhost:${TEST_PORT}}"
+export NEXT_PUBLIC_ROOT_DOMAIN="${NEXT_PUBLIC_ROOT_DOMAIN_TEST_OVERRIDE:-localhost:${TEST_PORT}}"
+export CMS_DB_PREFIX="${CMS_DB_PREFIX_TEST_OVERRIDE:-tooty_}"
+export ADMIN_PATH="${ADMIN_PATH_TEST_OVERRIDE:-cp}"
+export E2E_APP_ORIGIN="${E2E_APP_ORIGIN_TEST_OVERRIDE:-${NEXTAUTH_URL}}"
+export E2E_PUBLIC_ORIGIN="${E2E_PUBLIC_ORIGIN_TEST_OVERRIDE:-http://localhost:${TEST_PORT}}"
 
 # Integration/e2e must run against a dedicated test DB, never the dev DB.
 if [[ -z "${POSTGRES_TEST_URL:-}" ]]; then

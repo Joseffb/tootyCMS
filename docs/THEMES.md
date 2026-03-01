@@ -183,7 +183,10 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.domains`
 - `tooty.pluginSettings`
 - `tooty.query` (Core-resolved, read-only query results)
-- `auth` (current viewer snapshot: `logged_in`, `display_name`, `username`, `role`)
+- `auth` (current viewer snapshot: `logged_in`, `display_name`, `username`, `user_id`)
+
+Theme-facing auth is presentation-safe only.
+Do not expect theme contracts to expose roles, capabilities, or other permission semantics.
 
 ### Theme Query Contract
 

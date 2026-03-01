@@ -137,4 +137,33 @@ describe("extension guardrails", () => {
 
     expect(registerCommentProvider).toHaveBeenCalledWith(registration);
   });
+
+  it("requires a bound site when creating a table-backed comment provider adapter", () => {
+    const api = createPluginExtensionApi("declared-plugin", {
+      capabilities: { commentProviders: true },
+      coreRegistry: {
+        registerCommentProvider: vi.fn(),
+      } as any,
+    });
+
+    expect(() => api.core.comments.createTableBackedProvider()).toThrow(/requires a bound site plugin context/i);
+  });
+
+  it("returns a table-backed comment provider adapter when site context is bound", () => {
+    const api = createPluginExtensionApi("declared-plugin", {
+      capabilities: { commentProviders: true },
+      coreRegistry: {
+        registerCommentProvider: vi.fn(),
+      } as any,
+      siteId: "site-1",
+    });
+
+    const provider = api.core.comments.createTableBackedProvider({
+      id: "comments-basic",
+    });
+
+    expect(provider.id).toBe("comments-basic");
+    expect(typeof provider.create).toBe("function");
+    expect(typeof provider.list).toBe("function");
+  });
 });

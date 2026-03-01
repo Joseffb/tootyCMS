@@ -2,12 +2,9 @@
 
 Tooty CMS is a multi-tenant publishing platform built on Next.js + Drizzle with a governed extension model.
 
-## Attribution
+## Credits
 
-This project is based on the original **Vercel Platforms Starter Kit**:
-- Original project: https://github.com/vercel/platforms
-- Original authors: Vercel / Steven Tey
-- License basis: MIT (retain original license and attribution notices)
+Tooty CMS includes historical lineage from the original Vercel Platforms Starter Kit. Retain original license and attribution notices where applicable.
 
 It supports:
 - Multi-site routing by domain/subdomain
@@ -102,13 +99,74 @@ If a plugin uses undeclared capabilities, core throws `[plugin-guard]` errors.
 Runtime baseline:
 - Node.js `22` LTS
 
-1. Install dependencies
+1. Install system prerequisites
+
+Required for local development + testing:
+- `git`
+- Node.js `22`
+- `pnpm`
+
+Required only if you want the full local browser matrix:
+- `microsoft-edge` (optional unless you want Edge included alongside Chromium, Firefox, and WebKit)
+
+Optional for local branded domain routing:
+- `caddy`
+- `dnsmasq`
+
+Optional for CLI maintenance / AI-agent-assisted ops:
+- `libpq` (`psql` client for direct Postgres/Neon inspection)
+- `neonctl` (dedicated Neon CLI on macOS)
+- `vercel` (CLI for environment sync, deploy inspection, and platform actions)
+
+macOS (Homebrew):
+
+```bash
+brew install git node@22 pnpm caddy dnsmasq libpq neonctl
+brew install --cask microsoft-edge
+npm install -g vercel
+```
+
+Notes:
+- `git` is required for hooks, sync, and normal contributor workflow.
+- Node.js `22` + `pnpm` are the required runtime/package-manager baseline for dev, tests, and CI parity.
+- `libpq` provides the local `psql` client for direct Postgres/Neon checks.
+- `neonctl` is optional, but useful if you want a dedicated Neon CLI on macOS.
+- `vercel` is installed via `npm`, not Homebrew, in this setup.
+- `microsoft-edge` is optional, but required if you want the full Playwright browser matrix (`chromium`, `firefox`, `webkit`, `edge`) to include Edge on macOS.
+- If you use Homebrew `node@22`, ensure it is first on your shell `PATH`.
+
+Debian / Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates git caddy dnsmasq postgresql-client
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo corepack enable
+npm install -g vercel
+```
+
+Notes:
+- `pnpm` is provided through Corepack after Node.js `22` is installed.
+- `git` + Node.js `22` + `pnpm` are the required baseline for dev, tests, and CI parity.
+- `postgresql-client` provides the local `psql` client for Postgres/Neon.
+- Tooty does not require a dedicated Neon CLI for local development; standard Postgres tooling is enough. If you want one, install it separately for your distro.
+- `vercel` is installed via `npm`, not `apt`, in this setup.
+- If you prefer a different Node version manager (`nvm`, `volta`), keep the runtime at Node.js `22`.
+
+Optional Playwright browser install (recommended for local cross-browser validation):
+
+```bash
+npx playwright install --with-deps chromium firefox webkit
+```
+
+2. Install dependencies
 
 ```bash
 npm install
 ```
 
-2. Configure environment
+3. Configure environment
 
 ```bash
 cp .env.example .env
@@ -119,7 +177,7 @@ Recommended for isolation:
 - If `POSTGRES_TEST_URL` is empty, test scripts fall back to `POSTGRES_URL`.
 - Full guide: `docs/TESTING_DB.md`
 
-3. Run database schema push (used in build script) and start dev server
+4. Run database schema push (used in build script) and start dev server
 
 ```bash
 npm run dev
@@ -133,6 +191,57 @@ npm run hooks:install
 
 App runs at:
 - `http://localhost:3000`
+
+### macOS Recommended Local Host Routing
+
+If you want clean local domains and multiple local sites at once, the recommended macOS setup is:
+- `dnsmasq` for local `.test` name resolution
+- `Caddy` for hostname-based reverse proxying to per-project ports
+
+Why:
+- `/etc/hosts` does not support wildcard domains
+- `.test` is a reserved dev-safe TLD, but it does not remove the need for local DNS/proxy routing
+- a reverse proxy lets you keep multiple apps running at once without browser port suffixes
+
+Recommended pattern:
+- each local app runs on its own high port
+- `localhost:<port>` still works directly
+- `Caddy` listens on port `80` and routes by hostname
+
+Example:
+- `robertbetan.test` and `app.robertbetan.test` -> `127.0.0.1:3000`
+- `fernain.test` and `app.fernain.test` -> `127.0.0.1:3001`
+
+Example `Caddyfile`:
+
+```caddy
+robertbetan.test, app.robertbetan.test {
+  reverse_proxy 127.0.0.1:3000
+}
+
+fernain.test, app.fernain.test {
+  reverse_proxy 127.0.0.1:3001
+}
+```
+
+Example `dnsmasq` rules (if wildcard subdomains are desired):
+
+```conf
+address=/robertbetan.test/127.0.0.1
+address=/fernain.test/127.0.0.1
+```
+
+This lets you use all of these at the same time:
+- `http://localhost:3000`
+- `http://robertbetan.test`
+- `http://fernain.test`
+
+Tooty env pairing for a branded local install:
+- `NEXTAUTH_URL=http://robertbetan.test`
+- `NEXT_PUBLIC_ROOT_DOMAIN=robertbetan.test`
+- `ADMIN_PATH=cp`
+
+If you are not using a proxy, keep the explicit dev port in those URLs.
 
 ## Vercel Deployment Guardrails
 
@@ -194,6 +303,26 @@ Full suite:
 ```bash
 npm run test:all
 ```
+
+## Contributor Workflow
+
+For non-trivial core work, use this checkpoint discipline:
+
+1. Implement the change in `tooty-cms`.
+2. Run the required green gates:
+   - `npm run test`
+   - `npm run test:integration`
+3. If both are green, create a local checkpoint commit before starting the next substantial work chunk.
+
+Commit guidance:
+- Commit locally only unless you explicitly intend to push.
+- Use a conventional commit message.
+- A WIP checkpoint is acceptable when the code is validated, for example:
+  - `chore: checkpoint wip`
+  - `feat: checkpoint plugin admin refactor`
+  - `fix: checkpoint comment provider boundary`
+
+The goal is to preserve a known-good recovery point between larger refactors instead of carrying one giant uncommitted worktree.
 
 ## Key Docs
 

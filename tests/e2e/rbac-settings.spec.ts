@@ -3,9 +3,11 @@ import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-rbac-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const runId = `e2e-rbac-${randomUUID()}`;
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 const adminEmail = `${runId}-admin@example.com`;
 const adminUserId = `${runId}-admin-user`;
 const adminSiteId = `${runId}-admin-site`;
@@ -33,7 +35,7 @@ async function ensureAdminUser(passwordHash: string) {
 async function ensureAdminSite() {
   await sql`
     INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${adminSiteId}, ${adminUserId}, ${"RBAC Site"}, ${`${runId}-site`}, true, NOW(), NOW())
+    VALUES (${adminSiteId}, ${adminUserId}, ${"RBAC Site"}, ${`${runId}-site`}, false, NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
     SET "userId" = EXCLUDED."userId",
         "name" = EXCLUDED."name",
@@ -57,7 +59,7 @@ async function authenticateAs(page: Page, userId: string) {
     {
       name: "next-auth.session-token",
       value: token,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,

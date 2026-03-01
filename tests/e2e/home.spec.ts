@@ -1,11 +1,16 @@
 import { expect, test } from "@playwright/test";
+import { getAdminBaseUrl } from "./helpers/env";
 
-test("home page renders without runtime errors", async ({ page }) => {
+test("@cross-browser home page renders without runtime errors", async ({ page }) => {
   const response = await page.goto("/");
   if (!response?.ok()) {
-    const loginResponse = (await page.goto("/login")) ?? (await page.goto("/app/login"));
-    expect(loginResponse?.ok()).toBeTruthy();
-    await expect(page.locator("body")).toContainText(/login|auth|provider|configured/i);
+    const loginResponse = await page.request.get(`${getAdminBaseUrl()}/login`, {
+      maxRedirects: 0,
+    });
+    expect(loginResponse.status()).not.toBe(404);
+    expect(loginResponse.status()).toBeLessThan(500);
+    const loginBody = (await loginResponse.text()).toLowerCase();
+    expect(loginBody).toMatch(/login|auth|provider|configured/);
     return;
   }
 

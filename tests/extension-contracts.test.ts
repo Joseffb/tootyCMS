@@ -115,6 +115,45 @@ describe("extension contracts", () => {
     expect(bothPlugin?.menuPlacement).toBe("both");
   });
 
+  it("preserves generic collection content model metadata for plugins", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "collection-plugin",
+        name: "Collection Plugin",
+        contentModel: {
+          kind: "collection",
+          parentTypeKey: "carousel",
+          childTypeKey: "carousel-slide",
+          childParentMetaKey: "carousel_id",
+          childParentKeyMetaKey: "carousel_key",
+          parentHandleMetaKey: "embed_key",
+          workflowMetaKey: "workflow_state",
+          orderMetaKey: "sort_order",
+          mediaMetaKey: "media_id",
+          ctaTextMetaKey: "cta_text",
+          ctaUrlMetaKey: "cta_url",
+          workflowStates: ["draft", "published", "archived"],
+        },
+      },
+      "collection-plugin",
+    );
+
+    expect(plugin?.contentModel).toEqual({
+      kind: "collection",
+      parentTypeKey: "carousel",
+      childTypeKey: "carousel-slide",
+      childParentMetaKey: "carousel_id",
+      childParentKeyMetaKey: "carousel_key",
+      parentHandleMetaKey: "embed_key",
+      workflowMetaKey: "workflow_state",
+      orderMetaKey: "sort_order",
+      mediaMetaKey: "media_id",
+      ctaTextMetaKey: "cta_text",
+      ctaUrlMetaKey: "cta_url",
+      workflowStates: ["draft", "published", "archived"],
+    });
+  });
+
   it("preserves theme minimum core version field", () => {
     const theme = validateThemeContract(
       {

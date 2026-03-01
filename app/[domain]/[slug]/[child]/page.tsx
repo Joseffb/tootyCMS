@@ -188,7 +188,6 @@ export default async function DomainPostPage({
       const html = renderThemeTemplate(themedTemplate.template, {
         theme_header: themedTemplate.partials?.header || "",
         theme_footer: themedTemplate.partials?.footer || "",
-        theme_comments: themedTemplate.partials?.comments || "",
         site: {
           id: canonicalSite?.id,
           name: canonicalSite?.name || "Tooty Site",
@@ -209,8 +208,6 @@ export default async function DomainPostPage({
           content_html: toThemePostHtml((data as any)?.content || ""),
           use_comments: useComments,
         },
-        comments_enabled: commentsEnabled,
-        comments_gate_enabled: commentsGateEnabled,
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
         content: toThemePostHtml((data as any)?.content || ""),
         links: {

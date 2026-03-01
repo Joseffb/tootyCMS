@@ -3,6 +3,12 @@ import { getDashboardPluginMenuItems } from "@/lib/plugin-runtime";
 
 export async function GET(req: NextRequest) {
   const siteId = req.nextUrl.searchParams.get("siteId")?.trim() || undefined;
-  const items = await getDashboardPluginMenuItems(siteId);
+  let items;
+  try {
+    items = await getDashboardPluginMenuItems(siteId);
+  } catch (error) {
+    if (!(siteId && error instanceof Error && error.message === "Invalid site.")) throw error;
+    items = await getDashboardPluginMenuItems();
+  }
   return NextResponse.json({ items });
 }

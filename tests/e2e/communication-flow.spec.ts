@@ -2,11 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { encode } from "next-auth/jwt";
+import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-comm-${Date.now()}`;
+const runId = `e2e-comm-${randomUUID()}`;
 const runCommunicationE2E = process.env.RUN_COMMUNICATION_E2E === "1";
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 const userId = `${runId}-admin`;
 const siteId = `${runId}-site`;
 const email = `${runId}@example.com`;
@@ -170,7 +173,7 @@ async function authenticateAs(page: Page, authUserId: string) {
     {
       name: "next-auth.session-token",
       value: token,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,

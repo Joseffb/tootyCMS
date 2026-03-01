@@ -6,6 +6,69 @@ This document summarizes the feature updates added in this cycle.
 
 - Node.js `22` LTS is the supported runtime baseline for local/dev/CI/deploy.
 
+## Local Prerequisite Install
+
+Recommended package-manager bootstrap before `npm install`:
+
+Required for local development + testing:
+- `git`
+- Node.js `22`
+- `pnpm`
+
+Required only for the full local browser matrix:
+- `microsoft-edge` (optional unless you want Edge in Playwright locally)
+
+Optional for local branded `.test` routing:
+- `caddy`
+- `dnsmasq`
+
+Optional for CLI maintenance / AI-agent-assisted operations:
+- `libpq` / `postgresql-client` (`psql` access)
+- `neonctl` (macOS convenience CLI)
+- `vercel` (env/deploy/platform operations)
+
+macOS (Homebrew):
+
+```bash
+brew install git node@22 pnpm caddy dnsmasq libpq neonctl
+brew install --cask microsoft-edge
+npm install -g vercel
+```
+
+Notes:
+- `git` is part of the required contributor baseline.
+- Node.js `22` + `pnpm` are the required runtime/package-manager baseline for dev, tests, and CI parity.
+- `libpq` provides the `psql` client for direct Postgres/Neon access.
+- `neonctl` is optional, but useful if you want a dedicated Neon CLI on macOS.
+- `vercel` is installed via `npm`, not Homebrew, in this setup.
+- `microsoft-edge` is optional, but required if you want Edge included in the local Playwright matrix.
+- `caddy` and `dnsmasq` are recommended for branded local `.test` routing.
+
+Debian / Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates git caddy dnsmasq postgresql-client
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo corepack enable
+npm install -g vercel
+```
+
+Notes:
+- Corepack is the supported way to expose `pnpm` after Node.js `22` is installed.
+- `git` + Node.js `22` + `pnpm` are the required baseline for dev, tests, and CI parity.
+- `postgresql-client` provides the `psql` client for direct Postgres/Neon access.
+- Tooty does not require a dedicated Neon CLI for local development; Postgres-compatible tooling is sufficient.
+- `vercel` is installed via `npm`, not `apt`, in this setup.
+- If you use another Node version manager, keep the runtime on Node.js `22`.
+
+Optional browser bootstrap for local Playwright runs:
+
+```bash
+npx playwright install --with-deps chromium firefox webkit
+```
+
 ## Setup Wizard
 
 First-run setup is served at `/setup` until setup is marked complete.
@@ -98,6 +161,48 @@ Applied to:
 - plugin runtime import
 - theme asset route serving
 
+## Setup Defaults For Fresh Installs
+
+New optional env variables:
+- `SETUP_DEFAULT_THEME_ID`
+- `SETUP_DEFAULT_ENABLED_PLUGINS` (comma-separated, additive)
+
+New optional env variable:
+- `ADMIN_PATH` (defaults to `cp`)
+
+Behavior during `/setup` completion:
+- core still enables `hello-teety` and `tooty-comments` by default
+- any valid plugin ids in `SETUP_DEFAULT_ENABLED_PLUGINS` are also enabled globally
+- site-scoped plugins from that list are enabled for the newly created main site
+- if `SETUP_DEFAULT_THEME_ID` matches an installed theme, that theme is enabled and assigned to the new main site
+
+Invalid or missing plugin/theme ids are ignored safely.
+
+## macOS Local Domain Routing Recommendation
+
+For macOS local development, the recommended stack for clean branded dev domains is:
+- `dnsmasq` for local `.test` hostname resolution
+- `Caddy` for port-80 hostname routing to app-specific high ports
+
+Why this is recommended:
+- `/etc/hosts` does not support wildcard domains
+- `.test` is safe for local development, but it does not provide automatic wildcard or no-port routing
+- multiple local sites can run simultaneously without competing for the same browser-visible port
+
+Recommended topology:
+- each app keeps its own internal port (`3000`, `3001`, etc.)
+- direct `localhost:<port>` access remains available
+- `Caddy` routes:
+  - `robertbetan.test` -> `127.0.0.1:3000`
+  - `fernain.test` -> `127.0.0.1:3001`
+
+For branded local installs, pair the proxy with env values such as:
+- `NEXTAUTH_URL=http://robertbetan.test`
+- `NEXT_PUBLIC_ROOT_DOMAIN=robertbetan.test`
+- `ADMIN_PATH=cp`
+
+If no local reverse proxy is used, keep the explicit port in local URLs (for example `:3000`).
+
 ## Experimental Auth Extension Surface
 
 Plugin capability surface includes:
@@ -114,7 +219,8 @@ Guardrails:
   - `{ "framework": "nextjs" }`
 - Keep production runtime on Node.js `22` to match `engines.node`.
 - Use `DEBUG_MODE=false` for production deploys.
-- For app subdomain reachability, ensure `app.<root-domain>` has an explicit DNS record to the Vercel target from domain settings.
+- Admin routes are served on the root host under `/app/{alias}`.
+- By default, Core uses `/app/cp`. The internal dashboard route namespace remains `/app`.
 
 ## Trace Pipeline Hardening (2026-02-25)
 

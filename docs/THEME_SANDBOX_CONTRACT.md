@@ -6,6 +6,18 @@ This contract keeps CMS core and theme behavior strictly separated.
 
 CMS core gathers and passes canonical data. Themes decide presentation and visual behavior.
 
+Themes are presentation modules only.
+
+- Themes may consume data and render UI.
+- Themes may not contain business logic.
+- Themes may not perform direct data access outside Core-provided theme query/DTO surfaces.
+- Themes may not own routing.
+- Themes may not evaluate capabilities, permissions, or governance decisions.
+- Themes may not rely on feature-specific control booleans injected by Core for one plugin.
+- Themes should consume generic DTOs, slots, and query results instead of plugin-specific permission flags.
+- Feature behavior belongs in plugins.
+- Core contains only spines and contracts for extension behavior.
+
 ## CMS Responsibilities (MUST)
 
 - Resolve site/domain/post/taxonomy/menu data.
@@ -18,12 +30,15 @@ CMS core gathers and passes canonical data. Themes decide presentation and visua
 - Must not pick or inject mascot/theme artwork in CMS route components.
 - Must not branch render behavior by theme brand or mascot rules.
 - Must not add theme-specific UI decisions in non-theme app routes.
+- Must not change core behavior to satisfy one specific theme.
 
 ## Theme Responsibilities (MUST)
 
 - Own mascot/art direction and all visual decisions.
 - Use canonical primaries (`system.route_kind`, `system.data_domain`, etc.) for conditional presentation.
 - Keep theme-specific behavior inside theme templates/assets/config.
+- Adapt to core contracts instead of requiring theme-specific core exceptions.
+- Restrict theme logic to presentation-only behavior.
 
 ## Canonical Inputs for Theme Decisions
 
@@ -60,4 +75,5 @@ Core computes final URLs using active site permalink settings.
 
 - No mascot/theme-brand imports in CMS route files under `app/[domain]/**` unless the route is a theme renderer.
 - Theme decisions are implemented in `themes/<theme-id>/**`.
+- Theme code does not implement capability checks, routing rules, or feature/business semantics.
 - Tracing logs show normal request lifecycle (`request:begin` -> `render:*` -> `request:end`) after changes.

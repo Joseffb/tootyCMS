@@ -2,10 +2,13 @@ import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { TARGET_DB_SCHEMA_VERSION } from "../../lib/db-health";
 import { encode } from "next-auth/jwt";
+import { randomUUID } from "node:crypto";
 import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-setup-migrate-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const runId = `e2e-setup-migrate-${randomUUID()}`;
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 const runSetupMigrationE2E = process.env.RUN_SETUP_MIGRATION_E2E === "1";
 
 const adminUserId = `${runId}-admin-user`;
@@ -34,7 +37,7 @@ async function ensureAdminUserAndSite() {
 
   await sql`
     INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${adminSiteId}, ${adminUserId}, ${"Setup Migration Site"}, ${`${runId}-site`}, true, NOW(), NOW())
+    VALUES (${adminSiteId}, ${adminUserId}, ${"Setup Migration Site"}, ${`${runId}-site`}, false, NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
     SET "userId" = EXCLUDED."userId",
         "name" = EXCLUDED."name",
@@ -63,7 +66,7 @@ async function authenticateAs(page: Page, userId: string) {
     {
       name: "next-auth.session-token",
       value: token,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,

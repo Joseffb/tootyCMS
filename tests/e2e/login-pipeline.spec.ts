@@ -1,10 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { encode } from "next-auth/jwt";
+import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-login-pipeline-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const runId = `e2e-login-pipeline-${randomUUID()}`;
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 
 const userId = `${runId}-user`;
 const email = `${runId}@example.com`;
@@ -58,7 +61,7 @@ test("native login persists a valid session and grants /app access", async ({ pa
     {
       name: "next-auth.session-token",
       value: token,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,

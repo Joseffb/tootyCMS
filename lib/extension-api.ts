@@ -28,6 +28,7 @@ import { createScheduleEntry, deleteScheduleEntry, listScheduleEntries, updateSc
 import { purgeCommunicationQueue, retryPendingCommunications, sendCommunication } from "@/lib/communications";
 import {
   createComment,
+  createTableBackedCommentProvider,
   deleteComment,
   listComments,
   listCommentsForExport,
@@ -165,6 +166,9 @@ type CoreServiceApi = {
     purge: typeof purgeCommunicationQueue;
   };
   comments: {
+    createTableBackedProvider: (
+      input?: Partial<PluginCommentProviderRegistration>,
+    ) => PluginCommentProviderRegistration;
     create: typeof createComment;
     list: typeof listComments;
     update: typeof updateComment;
@@ -796,6 +800,13 @@ export function createPluginExtensionApi(
       purge: purgeCommunicationQueue,
     },
     comments: {
+      createTableBackedProvider: (input?: Partial<PluginCommentProviderRegistration>) => {
+        const boundSiteId = options?.siteId;
+        if (!boundSiteId) {
+          throw new Error("[plugin-guard] core.comments.createTableBackedProvider() requires a bound site plugin context.");
+        }
+        return createTableBackedCommentProvider(boundSiteId, input || {});
+      },
       create: createComment,
       list: listComments,
       update: updateComment,

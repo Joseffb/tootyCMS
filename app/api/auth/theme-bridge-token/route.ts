@@ -4,38 +4,33 @@ import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import { userMeta, users } from "@/lib/schema";
 import { createThemeBridgeToken } from "@/lib/theme-auth-bridge";
+import { isAllowedThemeBridgeOrigin } from "@/lib/theme-bridge-hosts";
 
-async function resolveDisplayName(userId: string) {
+async function resolveBridgeUserProfile(userId: string) {
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { id: true, username: true, name: true },
+  });
   const meta = await db.query.userMeta.findFirst({
     where: and(eq(userMeta.userId, userId), eq(userMeta.key, "display_name")),
     columns: { value: true },
   });
   const fromMeta = String(meta?.value || "").trim();
-  if (fromMeta) return fromMeta;
-  const row = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { username: true, name: true },
-  });
-  return String(row?.username || row?.name || "").trim();
+  return {
+    knownUser: Boolean(String(row?.id || "").trim()),
+    displayName: fromMeta || String(row?.username || row?.name || "").trim(),
+  };
 }
 
 function resolveCorsHeaders(request: Request): Record<string, string> {
   const origin = String(request.headers.get("origin") || "").trim();
   if (!origin) return {};
-  try {
-    const url = new URL(origin);
-    const hostname = url.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname.endsWith(".localhost")) {
-      return {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true",
-        Vary: "Origin",
-      };
-    }
-  } catch {
-    return {};
-  }
-  return {};
+  if (!isAllowedThemeBridgeOrigin(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    Vary: "Origin",
+  };
 }
 
 export async function OPTIONS(request: Request) {
@@ -64,13 +59,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: true, authenticated: false }, { status: 200, headers: corsHeaders });
   }
 
-  const displayName = await resolveDisplayName(userId);
+  const { displayName, knownUser } = await resolveBridgeUserProfile(userId);
   const user = {
     id: userId,
     email: String(session?.user?.email || "").trim() || undefined,
     username: String(session?.user?.username || "").trim() || undefined,
     name: String(session?.user?.name || "").trim() || undefined,
     displayName: displayName || String(session?.user?.displayName || "").trim() || undefined,
+    knownUser,
   };
   const token = await createThemeBridgeToken({
     userId: user.id,

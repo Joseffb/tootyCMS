@@ -4,11 +4,13 @@ import { hashPassword } from "../../lib/password";
 import { getAvailablePlugins } from "../../lib/plugins";
 import { randomUUID } from "node:crypto";
 import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-plugins-${Date.now()}`;
+const runId = `e2e-plugins-${randomUUID()}`;
 const password = "password123";
 let pluginId = "";
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 const runPluginPermsE2E = process.env.RUN_PLUGIN_PERMS_E2E === "1";
 
 const singleEmail = `${runId}-single@example.com`;
@@ -92,7 +94,7 @@ async function authenticateAs(page: Page, userId: string) {
     {
       name: "next-auth.session-token",
       value: sessionToken,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,
@@ -154,14 +156,14 @@ test.beforeAll(async () => {
     userId: singleUserId,
     name: "Single Site",
     subdomain: `${runId}-single`,
-    isPrimary: true,
+    isPrimary: false,
   });
   await ensureSite({
     id: siteAdminMainSiteId,
     userId: siteAdminUserId,
     name: "Site Admin Main",
     subdomain: `${runId}-sa-main`,
-    isPrimary: true,
+    isPrimary: false,
   });
   await ensureSite({
     id: siteAdminSecondSiteId,
@@ -175,7 +177,7 @@ test.beforeAll(async () => {
     userId: networkAdminUserId,
     name: "Network Main",
     subdomain: `${runId}-na-main`,
-    isPrimary: true,
+    isPrimary: false,
   });
   await ensureSite({
     id: networkSecondSiteId,
@@ -189,7 +191,7 @@ test.beforeAll(async () => {
     userId: networkSingleAdminUserId,
     name: "Network Single",
     subdomain: `${runId}-na-single`,
-    isPrimary: true,
+    isPrimary: false,
   });
 });
 

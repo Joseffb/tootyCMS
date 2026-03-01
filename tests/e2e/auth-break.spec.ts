@@ -3,9 +3,11 @@ import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-auth-break-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
+const runId = `e2e-auth-break-${randomUUID()}`;
+const appOrigin = getAppOrigin();
+const appHostname = getAppHostname();
 const runAuthBreakE2E = process.env.RUN_AUTH_BREAK_E2E === "1";
 
 const adminUserId = `${runId}-admin-user`;
@@ -42,7 +44,7 @@ async function ensureUser(params: {
 async function ensureSite() {
   await sql`
     INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${adminSiteId}, ${adminUserId}, ${"Auth Break Site"}, ${`${runId}-site`}, true, NOW(), NOW())
+    VALUES (${adminSiteId}, ${adminUserId}, ${"Auth Break Site"}, ${`${runId}-site`}, false, NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
     SET "userId" = EXCLUDED."userId",
         "name" = EXCLUDED."name",
@@ -66,7 +68,7 @@ async function authenticateAs(page: Page, userId: string) {
     {
       name: "next-auth.session-token",
       value: token,
-      domain: "app.localhost",
+      domain: appHostname,
       path: "/",
       httpOnly: true,
       secure: false,

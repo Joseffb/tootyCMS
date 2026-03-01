@@ -24,8 +24,7 @@ import type {
 const ALLOWED_CONTEXT_TYPES: CommentContextType[] = ["entry", "group", "discussion"];
 const ALLOWED_STATUSES: CommentStatus[] = ["pending", "approved", "rejected", "spam", "deleted"];
 const MODERATION_STATUSES: CommentStatus[] = ["pending", "approved", "rejected"];
-const CORE_PROVIDER_ID = "tooty-comments";
-const LEGACY_CORE_PROVIDER_ID = "core-basic";
+const DEFAULT_TABLE_PROVIDER_ID = "tooty-comments";
 const CORE_ALLOW_AUTHENTICATED_OPTION_KEY = "allow_authenticated_comments";
 const CORE_ALLOW_ANONYMOUS_OPTION_KEY = "allow_anonymous_comments";
 const CORE_SHOW_PUBLIC_COMMENTS_OPTION_KEY = "show_comments_to_public";
@@ -194,15 +193,26 @@ async function requireCapability(
   if (!allowed) throw new Error(`Forbidden: missing capability ${capability}`);
 }
 
-function createCoreProvider(siteId: string, commentsTable: string, commentMetaTable: string): PluginCommentProviderRegistration {
+export function createTableBackedCommentProvider(
+  siteId: string,
+  input: Partial<PluginCommentProviderRegistration> = {},
+): PluginCommentProviderRegistration {
+  const providerId = normalize(input.id) || DEFAULT_TABLE_PROVIDER_ID;
+  async function withTables<T>(
+    run: (tables: { commentsTable: string; commentMetaTable: string }) => Promise<T>,
+  ) {
+    const tables = await ensureSiteCommentTables(siteId);
+    return run(tables);
+  }
+
   return {
-    id: CORE_PROVIDER_ID,
-    supportsAnonymousCreate: true,
-    anonymousIdentityFields: {
+    id: providerId,
+    supportsAnonymousCreate: input.supportsAnonymousCreate ?? true,
+    anonymousIdentityFields: input.anonymousIdentityFields ?? {
       name: true,
       email: true,
     },
-    writingOptions: [
+    writingOptions: input.writingOptions ?? [
       {
         key: CORE_ALLOW_AUTHENTICATED_OPTION_KEY,
         label: "Allow internal user comments",
@@ -266,97 +276,107 @@ function createCoreProvider(siteId: string, commentsTable: string, commentMetaTa
       },
     ],
     async create(input) {
-      const commentId = createId();
-      const parentId = normalize(input.parentId);
-      if (parentId) {
-        const parent = (await db.execute(
-          sql`SELECT "id", "parent_id" FROM ${sql.raw(quoted(commentsTable))} WHERE "id" = ${parentId} LIMIT 1`,
-        )) as QueryRows<{ id?: string; parent_id?: string | null }>;
-        const parentRow = parent.rows?.[0];
-        if (!parentRow?.id) {
-          throw new Error("Parent comment not found.");
+      return withTables(async ({ commentsTable, commentMetaTable }) => {
+        const commentId = createId();
+        const parentId = normalize(input.parentId);
+        if (parentId) {
+          const parent = (await db.execute(
+            sql`SELECT "id", "parent_id" FROM ${sql.raw(quoted(commentsTable))} WHERE "id" = ${parentId} LIMIT 1`,
+          )) as QueryRows<{ id?: string; parent_id?: string | null }>;
+          const parentRow = parent.rows?.[0];
+          if (!parentRow?.id) {
+            throw new Error("Parent comment not found.");
+          }
+          if (normalize(parentRow.parent_id)) {
+            throw new Error("Only one level of comment threading is allowed.");
+          }
         }
-        if (normalize(parentRow.parent_id)) {
-          throw new Error("Only one level of comment threading is allowed.");
-        }
-      }
-      const inserted = (await db.execute(sql`
-        INSERT INTO ${sql.raw(quoted(commentsTable))}
-          ("id", "author_id", "context_type", "context_id", "body", "status", "parent_id")
-        VALUES
-          (${commentId}, ${input.authorId || null}, ${normalizeContextType(input.contextType)}, ${normalize(input.contextId)}, ${normalize(input.body)}, ${normalizeStatus(input.status, "pending")}, ${parentId || null})
-        RETURNING *
-      `)) as QueryRows<any>;
-      const row = inserted.rows?.[0];
-      if (!row) throw new Error("Failed to create comment.");
-      await upsertCommentMeta(commentMetaTable, commentId, input.metadata || {});
-      const metadata = await loadCommentMeta(commentMetaTable, commentId);
-      return toCommentRecord(siteId, row, metadata);
+        const inserted = (await db.execute(sql`
+          INSERT INTO ${sql.raw(quoted(commentsTable))}
+            ("id", "author_id", "context_type", "context_id", "body", "status", "parent_id")
+          VALUES
+            (${commentId}, ${input.authorId || null}, ${normalizeContextType(input.contextType)}, ${normalize(input.contextId)}, ${normalize(input.body)}, ${normalizeStatus(input.status, "pending")}, ${parentId || null})
+          RETURNING *
+        `)) as QueryRows<any>;
+        const row = inserted.rows?.[0];
+        if (!row) throw new Error("Failed to create comment.");
+        await upsertCommentMeta(commentMetaTable, commentId, input.metadata || {});
+        const metadata = await loadCommentMeta(commentMetaTable, commentId);
+        return toCommentRecord(siteId, row, metadata);
+      });
     },
     async update(input) {
-      const current = (await db.execute(
-        sql`SELECT * FROM ${sql.raw(quoted(commentsTable))} WHERE "id" = ${normalize(input.id)} LIMIT 1`,
-      )) as QueryRows<any>;
-      const row = current.rows?.[0];
-      if (!row) throw new Error("Comment not found.");
-      const nextBody = input.body !== undefined ? normalize(input.body) : String(row.body || "");
-      const nextStatus = input.status !== undefined ? normalizeStatus(input.status, "pending") : normalizeStatus(row.status, "pending");
-      const updated = (await db.execute(sql`
-        UPDATE ${sql.raw(quoted(commentsTable))}
-        SET "body" = ${nextBody}, "status" = ${nextStatus}, "updated_at" = NOW()
-        WHERE "id" = ${normalize(input.id)}
-        RETURNING *
-      `)) as QueryRows<any>;
-      const updatedRow = updated.rows?.[0];
-      if (!updatedRow) throw new Error("Comment not found.");
-      if (input.metadata && typeof input.metadata === "object") {
-        await upsertCommentMeta(commentMetaTable, normalize(input.id), input.metadata);
-      }
-      const metadata = await loadCommentMeta(commentMetaTable, normalize(input.id));
-      return toCommentRecord(siteId, updatedRow, metadata);
+      return withTables(async ({ commentsTable, commentMetaTable }) => {
+        const current = (await db.execute(
+          sql`SELECT * FROM ${sql.raw(quoted(commentsTable))} WHERE "id" = ${normalize(input.id)} LIMIT 1`,
+        )) as QueryRows<any>;
+        const row = current.rows?.[0];
+        if (!row) throw new Error("Comment not found.");
+        const nextBody = input.body !== undefined ? normalize(input.body) : String(row.body || "");
+        const nextStatus = input.status !== undefined ? normalizeStatus(input.status, "pending") : normalizeStatus(row.status, "pending");
+        const updated = (await db.execute(sql`
+          UPDATE ${sql.raw(quoted(commentsTable))}
+          SET "body" = ${nextBody}, "status" = ${nextStatus}, "updated_at" = NOW()
+          WHERE "id" = ${normalize(input.id)}
+          RETURNING *
+        `)) as QueryRows<any>;
+        const updatedRow = updated.rows?.[0];
+        if (!updatedRow) throw new Error("Comment not found.");
+        if (input.metadata && typeof input.metadata === "object") {
+          await upsertCommentMeta(commentMetaTable, normalize(input.id), input.metadata);
+        }
+        const metadata = await loadCommentMeta(commentMetaTable, normalize(input.id));
+        return toCommentRecord(siteId, updatedRow, metadata);
+      });
     },
     async delete(input) {
-      const updated = (await db.execute(sql`
-        UPDATE ${sql.raw(quoted(commentsTable))}
-        SET "status" = 'deleted', "updated_at" = NOW()
-        WHERE "id" = ${normalize(input.id)}
-        RETURNING "id"
-      `)) as QueryRows<{ id?: string }>;
-      return { ok: Boolean(updated.rows?.[0]?.id) };
+      return withTables(async ({ commentsTable }) => {
+        const updated = (await db.execute(sql`
+          UPDATE ${sql.raw(quoted(commentsTable))}
+          SET "status" = 'deleted', "updated_at" = NOW()
+          WHERE "id" = ${normalize(input.id)}
+          RETURNING "id"
+        `)) as QueryRows<{ id?: string }>;
+        return { ok: Boolean(updated.rows?.[0]?.id) };
+      });
     },
     async list(input) {
-      const conditions = [sql`1=1`];
-      if (input.contextType) conditions.push(sql`"context_type" = ${normalizeContextType(input.contextType)}`);
-      if (input.contextId) conditions.push(sql`"context_id" = ${normalize(input.contextId)}`);
-      if (input.status) conditions.push(sql`"status" = ${normalizeStatus(input.status, "pending")}`);
-      const limit = Math.max(1, Math.min(200, Math.trunc(Number(input.limit || 50))));
-      const offset = Math.max(0, Math.trunc(Number(input.offset || 0)));
-      const rows = (await db.execute(sql`
-        SELECT *
-        FROM ${sql.raw(quoted(commentsTable))}
-        WHERE ${sql.join(conditions, sql` AND `)}
-        ORDER BY "created_at" ASC, "id" ASC
-        LIMIT ${limit}
-        OFFSET ${offset}
-      `)) as QueryRows<any>;
-      const items: CommentRecord[] = [];
-      for (const row of rows.rows || []) {
-        const metadata = await loadCommentMeta(commentMetaTable, normalize(row.id));
-        items.push(toCommentRecord(siteId, row, metadata));
-      }
-      return items;
+      return withTables(async ({ commentsTable, commentMetaTable }) => {
+        const conditions = [sql`1=1`];
+        if (input.contextType) conditions.push(sql`"context_type" = ${normalizeContextType(input.contextType)}`);
+        if (input.contextId) conditions.push(sql`"context_id" = ${normalize(input.contextId)}`);
+        if (input.status) conditions.push(sql`"status" = ${normalizeStatus(input.status, "pending")}`);
+        const limit = Math.max(1, Math.min(200, Math.trunc(Number(input.limit || 50))));
+        const offset = Math.max(0, Math.trunc(Number(input.offset || 0)));
+        const rows = (await db.execute(sql`
+          SELECT *
+          FROM ${sql.raw(quoted(commentsTable))}
+          WHERE ${sql.join(conditions, sql` AND `)}
+          ORDER BY "created_at" ASC, "id" ASC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `)) as QueryRows<any>;
+        const items: CommentRecord[] = [];
+        for (const row of rows.rows || []) {
+          const metadata = await loadCommentMeta(commentMetaTable, normalize(row.id));
+          items.push(toCommentRecord(siteId, row, metadata));
+        }
+        return items;
+      });
     },
     async moderate(input) {
-      const updated = (await db.execute(sql`
-        UPDATE ${sql.raw(quoted(commentsTable))}
-        SET "status" = ${normalizeStatus(input.status, "pending")}, "updated_at" = NOW()
-        WHERE "id" = ${normalize(input.id)}
-        RETURNING *
-      `)) as QueryRows<any>;
-      const row = updated.rows?.[0];
-      if (!row) throw new Error("Comment not found.");
-      const metadata = await loadCommentMeta(commentMetaTable, normalize(input.id));
-      return toCommentRecord(siteId, row, metadata);
+      return withTables(async ({ commentsTable, commentMetaTable }) => {
+        const updated = (await db.execute(sql`
+          UPDATE ${sql.raw(quoted(commentsTable))}
+          SET "status" = ${normalizeStatus(input.status, "pending")}, "updated_at" = NOW()
+          WHERE "id" = ${normalize(input.id)}
+          RETURNING *
+        `)) as QueryRows<any>;
+        const row = updated.rows?.[0];
+        if (!row) throw new Error("Comment not found.");
+        const metadata = await loadCommentMeta(commentMetaTable, normalize(input.id));
+        return toCommentRecord(siteId, row, metadata);
+      });
     },
   };
 }
@@ -366,20 +386,13 @@ async function resolveProvider(siteId: string, preferredProviderId?: string): Pr
   if (!commentsEnabled) {
     throw new Error("No comment provider is enabled for this site.");
   }
-  const tables = await ensureSiteCommentTables(siteId);
   const normalizedPreferred = normalize(preferredProviderId).toLowerCase();
   const kernel = await createKernelForRequest(siteId);
   const pluginProviders = kernel.getAllPluginCommentProviders();
   if (!normalizedPreferred) {
-    return pluginProviders[0] || { pluginId: "core", ...createCoreProvider(siteId, tables.commentsTable, tables.commentMetaTable) };
-  }
-  if (
-    normalizedPreferred === CORE_PROVIDER_ID ||
-    normalizedPreferred === `core:${CORE_PROVIDER_ID}` ||
-    normalizedPreferred === LEGACY_CORE_PROVIDER_ID ||
-    normalizedPreferred === `core:${LEGACY_CORE_PROVIDER_ID}`
-  ) {
-    return { pluginId: "core", ...createCoreProvider(siteId, tables.commentsTable, tables.commentMetaTable) };
+    const firstProvider = pluginProviders[0];
+    if (firstProvider) return firstProvider;
+    throw new Error("No comment provider is registered for this site.");
   }
   const matched = pluginProviders.find((provider) => {
     const full = `${provider.pluginId}:${provider.id}`.toLowerCase();
@@ -395,7 +408,7 @@ async function getProviderWritingOptionStates(provider: ResolvedCommentProvider,
   for (const option of options) {
     const optionKey = normalizeOptionToken(option?.key);
     if (!optionKey || option.type !== "checkbox") continue;
-    const providerId = normalizeOptionToken(provider.id || provider.pluginId || CORE_PROVIDER_ID);
+    const providerId = normalizeOptionToken(provider.id || provider.pluginId || DEFAULT_TABLE_PROVIDER_ID);
     const settingKey = providerSettingKey(providerId, optionKey);
     const defaultValue = Boolean(option.defaultValue);
     let value = defaultValue;
@@ -853,6 +866,5 @@ export async function listCommentsForExport(siteId: string) {
     actorUserId: "system",
     limit: 5000,
     offset: 0,
-    providerId: `core:${CORE_PROVIDER_ID}`,
   });
 }

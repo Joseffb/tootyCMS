@@ -7,7 +7,6 @@ export type ThemeAuthSnapshot = {
   user_id: string;
   display_name: string;
   username: string;
-  role: string;
 };
 
 function buildThemeAuthSnapshot(session: Awaited<ReturnType<typeof getSession>>): ThemeAuthSnapshot {
@@ -20,7 +19,6 @@ function buildThemeAuthSnapshot(session: Awaited<ReturnType<typeof getSession>>)
     user_id: String(user?.id || "").trim(),
     display_name: displayName || username || name,
     username,
-    role: String(user?.role || "").trim(),
   };
 }
 

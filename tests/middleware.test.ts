@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-import middleware from "@/proxy";
+import proxy from "@/proxy";
 
 let mockedToken: Record<string, unknown> | null = null;
 vi.mock("next-auth/jwt", () => ({
@@ -20,91 +20,81 @@ describe("middleware routing", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "example.com";
     process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX = "vercel.app";
+    delete process.env.ADMIN_PATH;
+    delete process.env.NEXTAUTH_URL;
     mockedToken = null;
   });
 
-  it("redirects unauthenticated app users to login", async () => {
-    const req = makeRequest("http://app.example.com/dashboard", "app.example.com");
-
-    const response = await middleware(req);
-
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://app.example.com/login");
-  });
-
-  it("redirects authenticated users away from login page", async () => {
+  it("rewrites canonical /app/cp requests to the internal /app route", async () => {
     mockedToken = { sub: "user-1" };
     const req = makeRequest(
-      "http://app.example.com/login",
-      "app.example.com",
-      "next-auth.session-token=fake-token",
+      "http://example.com/app/cp/dashboard",
+      "example.com",
+      "next-auth.session-token=test-session",
     );
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://app.example.com/");
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/dashboard");
   });
 
-  it("rewrites authenticated app requests to /app", async () => {
+  it("rewrites the canonical /app/cp login path to the internal /app login route", async () => {
+    const req = makeRequest("http://example.com/app/cp/login", "example.com");
+
+    const response = await proxy(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/login");
+  });
+
+  it("rewrites canonical /app/cp nested requests to /app", async () => {
     mockedToken = { sub: "user-1" };
     const req = makeRequest(
-      "http://app.example.com/settings?tab=profile",
-      "app.example.com",
-      "next-auth.session-token=fake-token",
+      "http://example.com/app/cp/settings?tab=profile",
+      "example.com",
+      "next-auth.session-token=test-session",
     );
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
-      "http://app.example.com/app/settings?tab=profile",
+      "http://example.com/app/settings?tab=profile",
     );
   });
 
-  it("rewrites authenticated app root path to /app", async () => {
+  it("rewrites canonical /app/cp root path to /app", async () => {
     mockedToken = { sub: "user-1" };
     const req = makeRequest(
-      "http://app.example.com/",
-      "app.example.com",
-      "next-auth.session-token=fake-token",
+      "http://example.com/app/cp",
+      "example.com",
+      "next-auth.session-token=test-session",
     );
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
-    expect(response.headers.get("x-middleware-rewrite")).toBe("http://app.example.com/app");
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app");
   });
 
-  it("redirects authenticated users to profile when password change is required", async () => {
-    mockedToken = { sub: "user-1", forcePasswordChange: true };
-    const req = makeRequest(
-      "http://app.example.com/settings/users",
-      "app.example.com",
-      "next-auth.session-token=fake-token",
-    );
+  it("redirects explicit /app paths on the root host to the canonical /app/cp alias path", async () => {
+    const req = makeRequest("http://example.com/app/settings/users", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://app.example.com/settings/profile?forcePasswordChange=1");
+    expect(response.headers.get("location")).toBe("http://example.com/app/cp/settings/users");
   });
 
-  it("allows profile page when password change is required", async () => {
-    mockedToken = { sub: "user-1", forcePasswordChange: true };
-    const req = makeRequest(
-      "http://app.example.com/settings/profile",
-      "app.example.com",
-      "next-auth.session-token=fake-token",
-    );
+  it("preserves setup on the root host", async () => {
+    const req = makeRequest("http://example.com/setup", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
-    expect(response.headers.get("x-middleware-rewrite")).toBe("http://app.example.com/app/settings/profile");
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/setup");
   });
 
   it("rewrites root about path to shared /about page", async () => {
     const req = makeRequest("http://example.com/about", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "http://example.com/main.example.com/about",
@@ -114,7 +104,7 @@ describe("middleware routing", () => {
   it("rewrites other root paths to main site domain key", async () => {
     const req = makeRequest("http://example.com/contact?from=nav", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "http://example.com/main.example.com/contact?from=nav",
@@ -124,7 +114,7 @@ describe("middleware routing", () => {
   it("rewrites root slug permalink to main site domain key", async () => {
     const req = makeRequest("http://localhost:3000/welcome-to-tooty", "localhost:3000");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "http://localhost:3000/main.example.com/welcome-to-tooty",
@@ -134,25 +124,25 @@ describe("middleware routing", () => {
   it("keeps root homepage at /", async () => {
     const req = makeRequest("http://example.com/", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/");
   });
 
-  it("preserves direct /app paths on localhost root host", async () => {
-    const req = makeRequest("http://localhost:3001/app/login", "localhost:3001");
+  it("rewrites direct /app/cp paths on localhost root host", async () => {
+    const req = makeRequest("http://localhost:3001/app/cp/login", "localhost:3001");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://localhost:3001/app/login");
   });
 
-  it("normalizes /app/login on app subdomain to single /app/login rewrite", async () => {
-    const req = makeRequest("http://app.example.com/app/login", "app.example.com");
+  it("redirects /app/login on the root host to the canonical /app/cp/login path", async () => {
+    const req = makeRequest("http://example.com/app/login", "example.com");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
-    expect(response.headers.get("x-middleware-rewrite")).toBe("http://app.example.com/app/login");
+    expect(response.headers.get("location")).toBe("http://example.com/app/cp/login");
   });
 
   it("normalizes preview hostnames before tenant rewrite", async () => {
@@ -161,7 +151,7 @@ describe("middleware routing", () => {
       "my-site---abc123.vercel.app",
     );
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "http://my-site---abc123.vercel.app/my-site.example.com/blog/my-post",
@@ -174,7 +164,7 @@ describe("middleware routing", () => {
       "fernain-abc123-joseffbs-projects.vercel.app",
     );
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe(
       "https://fernain-abc123-joseffbs-projects.vercel.app/",
@@ -185,27 +175,37 @@ describe("middleware routing", () => {
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "localhost:3000";
     const req = makeRequest("http://main.localhost:3000/", "main.localhost:3000");
 
-    const response = await middleware(req);
+    const response = await proxy(req);
 
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://main.localhost:3000/");
   });
 
-  it("normalizes URL-shaped root-domain config for apex and app host routing", async () => {
+  it("normalizes URL-shaped root-domain config for apex and canonical admin alias routing", async () => {
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "https://RobertBetan.test:3000/";
+    process.env.NEXTAUTH_URL = "http://robertbetan.test";
 
     const apexReq = makeRequest("http://robertbetan.test/contact", "robertbetan.test");
-    const apexResponse = await middleware(apexReq);
+    const apexResponse = await proxy(apexReq);
 
     expect(apexResponse.headers.get("x-middleware-rewrite")).toBe(
       "http://robertbetan.test/main.robertbetan.test/contact",
     );
 
-    const appReq = makeRequest("http://app.robertbetan.test/login", "app.robertbetan.test");
-    const appResponse = await middleware(appReq);
+    const adminReq = makeRequest("http://robertbetan.test/app/login", "robertbetan.test");
+    const adminResponse = await proxy(adminReq);
 
-    expect(appResponse.headers.get("x-middleware-rewrite")).toBe(
-      "http://app.robertbetan.test/app/login",
+    expect(adminResponse.headers.get("location")).toBe(
+      "http://robertbetan.test/app/cp/login",
     );
   });
+
+  it("defaults to cp path alias when no explicit admin path is configured", async () => {
+    const req = makeRequest("http://example.com/app/cp/login", "example.com");
+
+    const response = await proxy(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/login");
+  });
+
 });

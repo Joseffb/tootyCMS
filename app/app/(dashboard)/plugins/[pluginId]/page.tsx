@@ -8,8 +8,12 @@ import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { sendCommunication } from "@/lib/communications";
 import MigrationKitConsole from "@/components/migration-kit-console";
 import CarouselOrderManager from "@/components/plugins/carousel-order-manager";
+import CollectionSetInlineEditor from "@/components/plugins/collection-set-inline-editor";
+import CollectionSlideEditModal from "@/components/plugins/collection-slide-edit-modal";
+import PluginSettingsInlineForm from "@/components/plugins/plugin-settings-inline-form";
+import PluginSiteSelect from "@/components/plugins/plugin-site-select";
 import db from "@/lib/db";
-import { dataDomains, domainPostMeta, domainPosts } from "@/lib/schema";
+import { dataDomains, domainPostMeta, domainPosts, media } from "@/lib/schema";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { createId } from "@paralleldrive/cuid2";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
@@ -19,19 +23,39 @@ type Props = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function humanizeCollectionLabel(value: string) {
+  const normalized = String(value || "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  if (!normalized) return "Content";
+  return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function toSlug(value: string, fallback: string) {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || fallback;
+}
+
 export default async function PluginSetupPage({ params, searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
 
   const resolvedSearchParams = (await searchParams) || {};
-  const tab = String(resolvedSearchParams.tab || "settings").trim().toLowerCase();
   const selectedSiteId = String(resolvedSearchParams.siteId || "").trim();
   const pluginId = decodeURIComponent((await params).pluginId);
   const plugin = await getPluginById(pluginId);
   if (!plugin) notFound();
   const pluginData = plugin;
+  const tab = String(resolvedSearchParams.tab || (pluginData.contentModel?.kind === "collection" ? "carousels" : "settings"))
+    .trim()
+    .toLowerCase();
   const config = (await getPluginConfig(pluginData.id)) as Record<string, unknown>;
-  const isCarousels = pluginData.id === "tooty-carousels";
+  const collectionModel = pluginData.contentModel?.kind === "collection" ? pluginData.contentModel : null;
 
   const accessibleSiteIds = await listSiteIdsForUser(session.user.id);
   const ownedSites = await db.query.sites.findMany({
@@ -79,83 +103,195 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
     ? migrationProviderPayload.providers
     : [];
 
-  if (isCarousels) {
-    const canManageCarousels = effectiveSiteId
+  if (collectionModel) {
+    const model = collectionModel;
+    const canManageCollection = effectiveSiteId
       ? await userCan("site.settings.write", session.user.id, { siteId: effectiveSiteId })
       : canUseSendMessageTool;
-    if (effectiveSiteId && !canManageCarousels) {
-      redirect("/app");
-    }
+    if (effectiveSiteId && !canManageCollection) redirect("/app");
 
-    const carouselDomain = effectiveSiteId
-      ? await db.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, "carousel"),
-          columns: { id: true },
-        })
-      : null;
+    const parentLabel = humanizeCollectionLabel(model.parentTypeKey);
+    const childLabel = humanizeCollectionLabel(model.childTypeKey);
+    const workflowStates = model.workflowStates?.length
+      ? model.workflowStates
+      : ["draft", "published", "archived"];
 
-    const slides = effectiveSiteId && carouselDomain
-      ? await (async () => {
-          const rows = await db
-            .select({
-              id: domainPosts.id,
-              title: domainPosts.title,
-              description: domainPosts.description,
-              image: domainPosts.image,
-              published: domainPosts.published,
-              createdAt: domainPosts.createdAt,
-            })
-            .from(domainPosts)
-            .where(
-              and(
-                eq(domainPosts.siteId, effectiveSiteId),
-                eq(domainPosts.dataDomainId, carouselDomain.id),
-              ),
-            )
-            .orderBy(asc(domainPosts.createdAt));
+    const [parentDomain, childDomain, mediaItems] = effectiveSiteId
+      ? await Promise.all([
+          db.query.dataDomains.findFirst({
+            where: eq(dataDomains.key, model.parentTypeKey),
+            columns: { id: true, key: true },
+          }),
+          db.query.dataDomains.findFirst({
+            where: eq(dataDomains.key, model.childTypeKey),
+            columns: { id: true, key: true },
+          }),
+          db.query.media.findMany({
+            where: eq(media.siteId, effectiveSiteId),
+            columns: { id: true, label: true, url: true },
+            orderBy: [asc(media.createdAt)],
+          }),
+        ])
+      : [null, null, []];
 
-          const ids = rows.map((row) => row.id);
-          const metaRows = ids.length
-            ? await db
-                .select({
-                  domainPostId: domainPostMeta.domainPostId,
-                  key: domainPostMeta.key,
-                  value: domainPostMeta.value,
-                })
-                .from(domainPostMeta)
-                .where(
-                  and(
-                    inArray(domainPostMeta.domainPostId, ids),
-                    inArray(domainPostMeta.key, ["cta_text", "cta_url", "panel_status", "sort_order"]),
-                  ),
-                )
-            : [];
-
-          const metaByPost = new Map<string, Record<string, string>>();
-          for (const row of metaRows) {
-            const bucket = metaByPost.get(row.domainPostId) || {};
-            bucket[row.key] = row.value;
-            metaByPost.set(row.domainPostId, bucket);
-          }
-
-          return rows
-            .map((row) => {
-              const meta = metaByPost.get(row.id) || {};
-              const sortOrder = Number(meta.sort_order || "");
-              return {
-                ...row,
-                meta,
-                sortOrder: Number.isFinite(sortOrder) ? sortOrder : 999,
-              };
-            })
-            .sort((a, b) => {
-              if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-              return a.createdAt.getTime() - b.createdAt.getTime();
-            });
-        })()
+    const setRows = effectiveSiteId && parentDomain
+      ? await db
+          .select({
+            id: domainPosts.id,
+            title: domainPosts.title,
+            description: domainPosts.description,
+            slug: domainPosts.slug,
+            published: domainPosts.published,
+            createdAt: domainPosts.createdAt,
+          })
+          .from(domainPosts)
+          .where(and(eq(domainPosts.siteId, effectiveSiteId), eq(domainPosts.dataDomainId, parentDomain.id)))
+          .orderBy(asc(domainPosts.createdAt))
       : [];
 
-    async function saveCarouselSlide(formData: FormData) {
+    const setIds = setRows.map((row) => row.id);
+    const setMetaRows = setIds.length
+      ? await db
+          .select({
+            domainPostId: domainPostMeta.domainPostId,
+            key: domainPostMeta.key,
+            value: domainPostMeta.value,
+          })
+          .from(domainPostMeta)
+          .where(
+            and(
+              inArray(domainPostMeta.domainPostId, setIds),
+              inArray(domainPostMeta.key, [model.parentHandleMetaKey, model.workflowMetaKey]),
+            ),
+          )
+      : [];
+
+    const setMetaById = new Map<string, Record<string, string>>();
+    for (const row of setMetaRows) {
+      const bucket = setMetaById.get(row.domainPostId) || {};
+      bucket[row.key] = row.value;
+      setMetaById.set(row.domainPostId, bucket);
+    }
+
+    const collections = setRows.map((row) => {
+      const meta = setMetaById.get(row.id) || {};
+      const handle = meta[model.parentHandleMetaKey] || row.slug;
+      const workflowState =
+        meta[model.workflowMetaKey] || (row.published ? "published" : "draft");
+      return { ...row, meta, handle, workflowState };
+    });
+
+    const selectedSetId =
+      String(resolvedSearchParams.set || "").trim() || collections[0]?.id || "";
+    const selectedSet = collections.find((entry) => entry.id === selectedSetId) || null;
+    const collectionView = String(resolvedSearchParams.view || (selectedSet ? "slides" : "carousels"))
+      .trim()
+      .toLowerCase() === "slides"
+      ? "slides"
+      : "carousels";
+    const showCreateSet = String(resolvedSearchParams.createSet || "").trim() === "1";
+    const showCreateSlide = String(resolvedSearchParams.createSlide || "").trim() === "1";
+    const editSetId = String(resolvedSearchParams.editSet || "").trim();
+    const deleteSetId = String(resolvedSearchParams.deleteSet || "").trim();
+    const editSlideId = String(resolvedSearchParams.editSlide || "").trim();
+    const baseParams = new URLSearchParams();
+    baseParams.set("tab", "carousels");
+    baseParams.set("view", collectionView);
+    if (effectiveSiteId) baseParams.set("siteId", effectiveSiteId);
+    if (selectedSetId) baseParams.set("set", selectedSetId);
+
+    function buildCollectionHref(
+      updates: Record<string, string | undefined>,
+      options: { preserveView?: boolean } = {},
+    ) {
+      const params = new URLSearchParams(baseParams);
+      if (!options.preserveView) {
+        params.set("view", updates.view ?? collectionView);
+      }
+      for (const [key, value] of Object.entries(updates)) {
+        if (key === "view" && options.preserveView) continue;
+        if (value === undefined || value === "") {
+          params.delete(key);
+        } else {
+          params.set(key, value);
+        }
+      }
+      return `/app/plugins/${pluginData.id}?${params.toString()}`;
+    }
+
+    const slideRows = effectiveSiteId && childDomain
+      ? await db
+          .select({
+            id: domainPosts.id,
+            title: domainPosts.title,
+            description: domainPosts.description,
+            image: domainPosts.image,
+            published: domainPosts.published,
+            createdAt: domainPosts.createdAt,
+          })
+          .from(domainPosts)
+          .where(and(eq(domainPosts.siteId, effectiveSiteId), eq(domainPosts.dataDomainId, childDomain.id)))
+          .orderBy(asc(domainPosts.createdAt))
+      : [];
+
+    const slideIds = slideRows.map((row) => row.id);
+    const slideMetaKeys = [
+      model.childParentMetaKey,
+      model.workflowMetaKey,
+      model.orderMetaKey,
+      ...(model.childParentKeyMetaKey ? [model.childParentKeyMetaKey] : []),
+      ...(model.mediaMetaKey ? [model.mediaMetaKey] : []),
+      ...(model.ctaTextMetaKey ? [model.ctaTextMetaKey] : []),
+      ...(model.ctaUrlMetaKey ? [model.ctaUrlMetaKey] : []),
+    ];
+    const slideMetaRows = slideIds.length
+      ? await db
+          .select({
+            domainPostId: domainPostMeta.domainPostId,
+            key: domainPostMeta.key,
+            value: domainPostMeta.value,
+          })
+          .from(domainPostMeta)
+          .where(and(inArray(domainPostMeta.domainPostId, slideIds), inArray(domainPostMeta.key, slideMetaKeys)))
+      : [];
+
+    const slideMetaById = new Map<string, Record<string, string>>();
+    for (const row of slideMetaRows) {
+      const bucket = slideMetaById.get(row.domainPostId) || {};
+      bucket[row.key] = row.value;
+      slideMetaById.set(row.domainPostId, bucket);
+    }
+
+    const slideCountBySet = new Map<string, number>();
+    for (const row of slideRows) {
+      const parentId = String(slideMetaById.get(row.id)?.[model.childParentMetaKey] || "").trim();
+      if (!parentId) continue;
+      slideCountBySet.set(parentId, (slideCountBySet.get(parentId) || 0) + 1);
+    }
+
+    const slides = slideRows
+      .map((row) => {
+        const meta = slideMetaById.get(row.id) || {};
+        const sortOrder = Number(meta[model.orderMetaKey] || "");
+        const workflowState =
+          meta[model.workflowMetaKey] || (row.published ? "published" : "draft");
+        return {
+          ...row,
+          meta,
+          workflowState,
+          sortOrder: Number.isFinite(sortOrder) ? sortOrder : 999,
+        };
+      })
+      .filter((row) => {
+        if (!selectedSetId) return false;
+        return row.meta[model.childParentMetaKey] === selectedSetId;
+      })
+      .sort((a, b) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      });
+
+    async function saveCollectionSet(formData: FormData) {
       "use server";
       const current = await getSession();
       if (!current?.user?.id) redirect("/login");
@@ -166,24 +302,295 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       if (!allowed) return;
 
       await createKernelForRequest(siteId);
-      const carousel = await db.query.dataDomains.findFirst({
-        where: eq(dataDomains.key, "carousel"),
+      const domain = await db.query.dataDomains.findFirst({
+        where: eq(dataDomains.key, model.parentTypeKey),
         columns: { id: true },
       });
-      if (!carousel) return;
+      if (!domain) return;
+
+      const setId = String(formData.get("setId") || "").trim();
+      const title = String(formData.get("title") || "").trim();
+      const description = String(formData.get("description") || "").trim();
+      const requestedHandle = String(formData.get("embed_key") || "").trim();
+      const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+        ? String(formData.get("workflow_state") || "draft")
+        : "draft";
+      if (!title) return;
+
+      const handle = toSlug(requestedHandle || title, "collection");
+      const targetId = setId || createId();
+      const published = workflowState === "published";
+
+      let previousHandle = "";
+      if (setId) {
+        const existingHandle = await db.query.domainPostMeta.findFirst({
+          where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
+          columns: { value: true },
+        });
+        previousHandle = String(existingHandle?.value || "").trim();
+        await db
+          .update(domainPosts)
+          .set({
+            title,
+            description,
+            slug: handle,
+            published,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, domain.id)));
+      } else {
+        await db.insert(domainPosts).values({
+          id: targetId,
+          dataDomainId: domain.id,
+          title,
+          description,
+          content: "",
+          slug: handle,
+          published,
+          siteId,
+          userId: current.user.id,
+        });
+      }
+
+      for (const entry of [
+        { key: model.parentHandleMetaKey, value: handle },
+        { key: model.workflowMetaKey, value: workflowState },
+      ]) {
+        await db
+          .insert(domainPostMeta)
+          .values({
+            domainPostId: targetId,
+            key: entry.key,
+            value: entry.value,
+          })
+          .onConflictDoUpdate({
+            target: [domainPostMeta.domainPostId, domainPostMeta.key],
+            set: {
+              value: entry.value,
+              updatedAt: new Date(),
+            },
+          });
+      }
+
+      if (
+        setId &&
+        model.childParentKeyMetaKey &&
+        handle &&
+        previousHandle &&
+        handle !== previousHandle
+      ) {
+        const childLinks = await db
+          .select({ domainPostId: domainPostMeta.domainPostId })
+          .from(domainPostMeta)
+          .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
+        for (const child of childLinks) {
+          await db
+            .insert(domainPostMeta)
+            .values({
+              domainPostId: child.domainPostId,
+              key: model.childParentKeyMetaKey,
+              value: handle,
+            })
+            .onConflictDoUpdate({
+              target: [domainPostMeta.domainPostId, domainPostMeta.key],
+              set: {
+                value: handle,
+                updatedAt: new Date(),
+              },
+            });
+        }
+      }
+
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePath(`/app/site/${siteId}/settings/plugins`);
+      redirect(
+        `/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(targetId)}&savedSet=1`,
+      );
+    }
+
+    async function deleteCollectionSet(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+
+      const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
+      const confirm = String(formData.get("confirm") || "").trim().toLowerCase();
+      if (!siteId || !setId || confirm !== "delete") return;
+      const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+      if (!allowed) return;
+
+      const childLinks = await db
+        .select({ domainPostId: domainPostMeta.domainPostId })
+        .from(domainPostMeta)
+        .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
+      const childIds = childLinks.map((row) => row.domainPostId);
+      if (childIds.length) {
+        await db.delete(domainPostMeta).where(inArray(domainPostMeta.domainPostId, childIds));
+        await db.delete(domainPosts).where(inArray(domainPosts.id, childIds));
+      }
+      await db.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, setId));
+      await db.delete(domainPosts).where(eq(domainPosts.id, setId));
+
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePath(`/app/site/${siteId}/settings/plugins`);
+      redirect(`/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}&deletedSet=1`);
+    }
+
+    async function autosaveCollectionSet(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+
+      const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
+      if (!siteId || !setId) return;
+      const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+      if (!allowed) return;
+
+      await createKernelForRequest(siteId);
+      const domain = await db.query.dataDomains.findFirst({
+        where: eq(dataDomains.key, model.parentTypeKey),
+        columns: { id: true },
+      });
+      if (!domain) return;
+
+      const title = String(formData.get("title") || "").trim() || "Untitled";
+      const description = String(formData.get("description") || "").trim();
+      const requestedHandle = String(formData.get("embed_key") || "").trim();
+      const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+        ? String(formData.get("workflow_state") || "draft")
+        : "draft";
+      const handle = toSlug(requestedHandle || title, "collection");
+
+      const existingHandle = await db.query.domainPostMeta.findFirst({
+        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
+        columns: { value: true },
+      });
+      const previousHandle = String(existingHandle?.value || "").trim();
+
+      await db
+        .update(domainPosts)
+        .set({
+          title,
+          description,
+          slug: handle,
+          published: workflowState === "published",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, domain.id)));
+
+      for (const entry of [
+        { key: model.parentHandleMetaKey, value: handle },
+        { key: model.workflowMetaKey, value: workflowState },
+      ]) {
+        await db
+          .insert(domainPostMeta)
+          .values({
+            domainPostId: setId,
+            key: entry.key,
+            value: entry.value,
+          })
+          .onConflictDoUpdate({
+            target: [domainPostMeta.domainPostId, domainPostMeta.key],
+            set: {
+              value: entry.value,
+              updatedAt: new Date(),
+            },
+          });
+      }
+
+      if (
+        model.childParentKeyMetaKey &&
+        handle &&
+        previousHandle &&
+        handle !== previousHandle
+      ) {
+        const childLinks = await db
+          .select({ domainPostId: domainPostMeta.domainPostId })
+          .from(domainPostMeta)
+          .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
+        for (const child of childLinks) {
+          await db
+            .insert(domainPostMeta)
+            .values({
+              domainPostId: child.domainPostId,
+              key: model.childParentKeyMetaKey,
+              value: handle,
+            })
+            .onConflictDoUpdate({
+              target: [domainPostMeta.domainPostId, domainPostMeta.key],
+              set: {
+                value: handle,
+                updatedAt: new Date(),
+              },
+            });
+        }
+      }
+
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}`);
+    }
+
+    async function saveCollectionChild(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+
+      const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
+      if (!siteId || !setId) return;
+      const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+      if (!allowed) return;
+
+      await createKernelForRequest(siteId);
+      const [parentDomainRow, childDomainRow] = await Promise.all([
+        db.query.dataDomains.findFirst({
+          where: eq(dataDomains.key, model.parentTypeKey),
+          columns: { id: true },
+        }),
+        db.query.dataDomains.findFirst({
+          where: eq(dataDomains.key, model.childTypeKey),
+          columns: { id: true },
+        }),
+      ]);
+      if (!parentDomainRow || !childDomainRow) return;
+
+      const setRecord = await db.query.domainPosts.findFirst({
+        where: and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, parentDomainRow.id)),
+        columns: { id: true, slug: true },
+      });
+      if (!setRecord) return;
+      const setHandleMeta = await db.query.domainPostMeta.findFirst({
+        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
+        columns: { value: true },
+      });
+      const setHandle = String(setHandleMeta?.value || setRecord.slug || "").trim();
 
       const slideId = String(formData.get("slideId") || "").trim();
       const title = String(formData.get("title") || "").trim();
       const description = String(formData.get("description") || "").trim();
-      const image = String(formData.get("image") || "").trim();
-      const ctaText = String(formData.get("cta_text") || "").trim();
-      const ctaUrl = String(formData.get("cta_url") || "").trim();
-      const panelStatus = String(formData.get("panel_status") || "").trim();
-      const sortOrderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
-      const sortOrder = Number.isFinite(sortOrderRaw) ? Math.max(0, Math.trunc(sortOrderRaw)) : 0;
-      const published = formData.get("published") === "on";
+      const imageInput = String(formData.get("image") || "").trim();
+      const mediaId = String(formData.get("media_id") || "").trim();
+      const mediaRow =
+        mediaId && model.mediaMetaKey
+          ? await db.query.media.findFirst({
+              where: and(eq(media.id, Number(mediaId)), eq(media.siteId, siteId)),
+              columns: { id: true, url: true },
+            })
+          : null;
+      const resolvedImage = imageInput || String(mediaRow?.url || "").trim();
+      const ctaText = model.ctaTextMetaKey ? String(formData.get("cta_text") || "").trim() : "";
+      const ctaUrl = model.ctaUrlMetaKey ? String(formData.get("cta_url") || "").trim() : "";
+      const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+        ? String(formData.get("workflow_state") || "draft")
+        : "draft";
+      const orderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
+      const sortOrder = Number.isFinite(orderRaw) ? Math.max(0, Math.trunc(orderRaw)) : 0;
       if (!title) return;
+
       const targetId = slideId || createId();
+      const published = workflowState === "published";
+      const slideSlug = `${toSlug(title, model.childTypeKey)}-${targetId.slice(-8)}`;
 
       if (slideId) {
         await db
@@ -191,20 +598,20 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           .set({
             title,
             description,
-            image,
+            image: resolvedImage,
             published,
             updatedAt: new Date(),
           })
-          .where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, carousel.id)));
+          .where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, childDomainRow.id)));
       } else {
         await db.insert(domainPosts).values({
           id: targetId,
-          dataDomainId: carousel.id,
+          dataDomainId: childDomainRow.id,
           title,
           description,
           content: "",
-          slug: `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "carousel-slide"}-${Date.now()}`,
-          image,
+          slug: slideSlug,
+          image: resolvedImage,
           published,
           siteId,
           userId: current.user.id,
@@ -212,10 +619,13 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       }
 
       const metaEntries = [
-        { key: "cta_text", value: ctaText },
-        { key: "cta_url", value: ctaUrl },
-        { key: "panel_status", value: panelStatus },
-        { key: "sort_order", value: String(sortOrder) },
+        { key: model.childParentMetaKey, value: setId },
+        { key: model.workflowMetaKey, value: workflowState },
+        { key: model.orderMetaKey, value: String(sortOrder) },
+        ...(model.childParentKeyMetaKey ? [{ key: model.childParentKeyMetaKey, value: setHandle }] : []),
+        ...(model.mediaMetaKey ? [{ key: model.mediaMetaKey, value: mediaId }] : []),
+        ...(model.ctaTextMetaKey ? [{ key: model.ctaTextMetaKey, value: ctaText }] : []),
+        ...(model.ctaUrlMetaKey ? [{ key: model.ctaUrlMetaKey, value: ctaUrl }] : []),
       ];
       for (const entry of metaEntries) {
         await db
@@ -234,41 +644,143 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           });
       }
 
-      revalidatePath(`/app/plugins/tooty-carousels?tab=slides&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
-      redirect(`/app/plugins/tooty-carousels?tab=slides&siteId=${encodeURIComponent(siteId)}&saved=1`);
+      redirect(
+        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&savedSlide=1`,
+      );
     }
 
-    async function deleteCarouselSlide(formData: FormData) {
+    async function deleteCollectionChild(formData: FormData) {
       "use server";
       const current = await getSession();
       if (!current?.user?.id) redirect("/login");
 
       const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
       const slideId = String(formData.get("slideId") || "").trim();
       const confirm = String(formData.get("confirm") || "").trim().toLowerCase();
       if (!siteId || !slideId || confirm !== "delete") return;
-
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
       if (!allowed) return;
 
       await db.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, slideId));
       await db.delete(domainPosts).where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId)));
 
-      revalidatePath(`/app/plugins/tooty-carousels?tab=slides&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
-      redirect(`/app/plugins/tooty-carousels?tab=slides&siteId=${encodeURIComponent(siteId)}&deleted=1`);
+      redirect(
+        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&deletedSlide=1`,
+      );
     }
 
-    async function reorderCarouselSlides(formData: FormData) {
+    async function autosaveCollectionChild(formData: FormData) {
       "use server";
       const current = await getSession();
       if (!current?.user?.id) redirect("/login");
 
       const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
+      const slideId = String(formData.get("slideId") || "").trim();
+      if (!siteId || !setId || !slideId) return;
+      const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+      if (!allowed) return;
+
+      await createKernelForRequest(siteId);
+      const [parentDomainRow, childDomainRow] = await Promise.all([
+        db.query.dataDomains.findFirst({
+          where: eq(dataDomains.key, model.parentTypeKey),
+          columns: { id: true },
+        }),
+        db.query.dataDomains.findFirst({
+          where: eq(dataDomains.key, model.childTypeKey),
+          columns: { id: true },
+        }),
+      ]);
+      if (!parentDomainRow || !childDomainRow) return;
+
+      const setRecord = await db.query.domainPosts.findFirst({
+        where: and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, parentDomainRow.id)),
+        columns: { id: true, slug: true },
+      });
+      if (!setRecord) return;
+      const setHandleMeta = await db.query.domainPostMeta.findFirst({
+        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
+        columns: { value: true },
+      });
+      const setHandle = String(setHandleMeta?.value || setRecord.slug || "").trim();
+
+      const title = String(formData.get("title") || "").trim() || "Untitled";
+      const description = String(formData.get("description") || "").trim();
+      const imageInput = String(formData.get("image") || "").trim();
+      const mediaId = String(formData.get("media_id") || "").trim();
+      const mediaRow =
+        mediaId && model.mediaMetaKey
+          ? await db.query.media.findFirst({
+              where: and(eq(media.id, Number(mediaId)), eq(media.siteId, siteId)),
+              columns: { id: true, url: true },
+            })
+          : null;
+      const resolvedImage = imageInput || String(mediaRow?.url || "").trim();
+      const ctaText = model.ctaTextMetaKey ? String(formData.get("cta_text") || "").trim() : "";
+      const ctaUrl = model.ctaUrlMetaKey ? String(formData.get("cta_url") || "").trim() : "";
+      const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+        ? String(formData.get("workflow_state") || "draft")
+        : "draft";
+      const orderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
+      const sortOrder = Number.isFinite(orderRaw) ? Math.max(0, Math.trunc(orderRaw)) : 0;
+
+      await db
+        .update(domainPosts)
+        .set({
+          title,
+          description,
+          image: resolvedImage,
+          published: workflowState === "published",
+          updatedAt: new Date(),
+        })
+        .where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, childDomainRow.id)));
+
+      const metaEntries = [
+        { key: model.childParentMetaKey, value: setId },
+        { key: model.workflowMetaKey, value: workflowState },
+        { key: model.orderMetaKey, value: String(sortOrder) },
+        ...(model.childParentKeyMetaKey ? [{ key: model.childParentKeyMetaKey, value: setHandle }] : []),
+        ...(model.mediaMetaKey ? [{ key: model.mediaMetaKey, value: mediaId }] : []),
+        ...(model.ctaTextMetaKey ? [{ key: model.ctaTextMetaKey, value: ctaText }] : []),
+        ...(model.ctaUrlMetaKey ? [{ key: model.ctaUrlMetaKey, value: ctaUrl }] : []),
+      ];
+      for (const entry of metaEntries) {
+        await db
+          .insert(domainPostMeta)
+          .values({
+            domainPostId: slideId,
+            key: entry.key,
+            value: entry.value,
+          })
+          .onConflictDoUpdate({
+            target: [domainPostMeta.domainPostId, domainPostMeta.key],
+            set: {
+              value: entry.value,
+              updatedAt: new Date(),
+            },
+          });
+      }
+
+      revalidatePath(
+        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`,
+      );
+    }
+
+    async function reorderCollectionChildren(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+
+      const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
       const rawOrder = String(formData.get("order") || "").trim();
       if (!siteId || !rawOrder) return;
-
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
       if (!allowed) return;
 
@@ -293,7 +805,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           .insert(domainPostMeta)
           .values({
             domainPostId: entry.id,
-            key: "sort_order",
+            key: model.orderMetaKey,
             value: String(Math.max(0, Math.trunc(entry.sortOrder))),
           })
           .onConflictDoUpdate({
@@ -305,181 +817,551 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           });
       }
 
-      revalidatePath(`/app/plugins/tooty-carousels?tab=slides&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
       revalidatePath(`/`);
     }
 
+    async function toggleCollectionSetEnabled(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+
+      const siteId = String(formData.get("siteId") || "").trim();
+      const setId = String(formData.get("setId") || "").trim();
+      const nextEnabled = String(formData.get("enabled") || "").trim() === "on";
+      if (!siteId || !setId) return;
+      const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+      if (!allowed) return;
+
+      await db
+        .update(domainPosts)
+        .set({
+          published: nextEnabled,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId)));
+      await db
+        .insert(domainPostMeta)
+        .values({
+          domainPostId: setId,
+          key: model.workflowMetaKey,
+          value: nextEnabled ? "published" : "draft",
+        })
+        .onConflictDoUpdate({
+          target: [domainPostMeta.domainPostId, domainPostMeta.key],
+          set: {
+            value: nextEnabled ? "published" : "draft",
+            updatedAt: new Date(),
+          },
+        });
+
+      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
+    }
+
+    async function saveInlineSettings(formData: FormData) {
+      "use server";
+      const current = await getSession();
+      if (!current?.user?.id) redirect("/login");
+      const nextConfig: Record<string, unknown> = {};
+      for (const field of pluginData.settingsFields || []) {
+        if (field.type === "checkbox") {
+          nextConfig[field.key] = formData.get(field.key) === "on";
+        } else {
+          nextConfig[field.key] = String(formData.get(field.key) || "");
+        }
+      }
+      await savePluginConfig(pluginData.id, nextConfig);
+      revalidatePath(`/app/plugins/${pluginData.id}`);
+    }
+
     return (
-      <div className="flex max-w-5xl flex-col gap-6 p-8">
+      <div className="flex max-w-6xl flex-col gap-6 p-8">
         <div>
           <h1 className="font-cal text-3xl font-bold">{pluginData.name}</h1>
           <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
-            Carousel entries are managed here. The underlying `carousel` data domain is intentionally hidden from the main content menu.
+            Manage reusable {parentLabel.toLowerCase()} sets and inline {childLabel.toLowerCase()} entries from a single workspace.
           </p>
         </div>
 
-        <form className="flex flex-wrap items-end gap-3">
-          <input type="hidden" name="tab" value="slides" />
-          <label className="grid gap-1 text-sm">
-            <span className="font-medium">Site</span>
-            <select
-              name="siteId"
-              defaultValue={effectiveSiteId}
-              className="rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-black"
-            >
-              <option value="">Select a site</option>
-              {ownedSites.map((site) => (
-                <option key={site.id} value={site.id}>
-                  {site.name || site.subdomain || site.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
-            Open Site
-          </button>
-        </form>
+        <PluginSiteSelect
+          currentValue={effectiveSiteId}
+          actionPath={`/app/plugins/${pluginData.id}`}
+          hiddenParams={{
+            tab: tab === "settings" ? "settings" : "carousels",
+            ...(tab === "carousels" ? { view: collectionView } : {}),
+            ...(tab === "carousels" && selectedSetId ? { set: selectedSetId } : {}),
+          }}
+          options={ownedSites.map((site) => ({
+            id: site.id,
+            label: site.name || site.subdomain || site.id,
+          }))}
+        />
 
-        {effectiveSiteId ? (
-          <>
-            <CarouselOrderManager
-              siteId={effectiveSiteId}
-              slides={slides.map((slide) => ({
-                id: slide.id,
-                title: slide.title || "Untitled",
-                sortOrder: slide.sortOrder,
-                status: slide.meta.panel_status || (slide.published ? "Published" : "Draft"),
-              }))}
-              saveOrderAction={reorderCarouselSlides}
-            />
-
-            <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
-              <h2 className="font-cal text-xl dark:text-white">Add Slide</h2>
-              <form action={saveCarouselSlide} className="mt-4 grid gap-3 md:grid-cols-2">
-                <input type="hidden" name="siteId" value={effectiveSiteId} />
-                <label className="grid gap-1 text-sm">
-                  <span>Title</span>
-                  <input name="title" required className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span>Image URL</span>
-                  <input name="image" className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm md:col-span-2">
-                  <span>Description</span>
-                  <textarea name="description" rows={3} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span>CTA Text</span>
-                  <input name="cta_text" className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span>CTA URL</span>
-                  <input name="cta_url" className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span>Sort Order</span>
-                  <input name="sort_order" type="number" defaultValue="0" className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span>Status</span>
-                  <select name="panel_status" className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black">
-                    <option value="">Live</option>
-                    <option value="coming-soon">Coming Soon</option>
-                  </select>
-                </label>
-                <label className="inline-flex items-center gap-2 text-sm">
-                  <input name="published" type="checkbox" defaultChecked className="h-4 w-4 rounded border-stone-300" />
-                  Published
-                </label>
-                <div className="md:col-span-2">
-                  <button className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
-                    Save Slide
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            <div className="grid gap-4">
-              {slides.map((slide) => (
-                <div key={slide.id} className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="font-semibold dark:text-white">{slide.title || "Untitled"}</h3>
-                      <p className="text-xs text-stone-500">Sort order: {slide.sortOrder}</p>
-                    </div>
-                    <span className={`rounded px-2 py-0.5 text-xs ${slide.published ? "bg-emerald-100 text-emerald-700" : "bg-stone-200 text-stone-700"}`}>
-                      {slide.published ? "Published" : "Draft"}
-                    </span>
-                  </div>
-                  <form action={saveCarouselSlide} className="grid gap-3 md:grid-cols-2">
-                    <input type="hidden" name="siteId" value={effectiveSiteId} />
-                    <input type="hidden" name="slideId" value={slide.id} />
-                    <label className="grid gap-1 text-sm">
-                      <span>Title</span>
-                      <input name="title" defaultValue={slide.title || ""} required className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm">
-                      <span>Image URL</span>
-                      <input name="image" defaultValue={slide.image || ""} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm md:col-span-2">
-                      <span>Description</span>
-                      <textarea name="description" rows={3} defaultValue={slide.description || ""} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm">
-                      <span>CTA Text</span>
-                      <input name="cta_text" defaultValue={slide.meta.cta_text || ""} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm">
-                      <span>CTA URL</span>
-                      <input name="cta_url" defaultValue={slide.meta.cta_url || ""} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm">
-                      <span>Sort Order</span>
-                      <input name="sort_order" type="number" defaultValue={String(slide.meta.sort_order || slide.sortOrder || 0)} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black" />
-                    </label>
-                    <label className="grid gap-1 text-sm">
-                      <span>Status</span>
-                      <select name="panel_status" defaultValue={slide.meta.panel_status || ""} className="rounded-md border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-black">
-                        <option value="">Live</option>
-                        <option value="coming-soon">Coming Soon</option>
-                      </select>
-                    </label>
-                    <label className="inline-flex items-center gap-2 text-sm md:col-span-2">
-                      <input name="published" type="checkbox" defaultChecked={slide.published} className="h-4 w-4 rounded border-stone-300" />
-                      Published
-                    </label>
-                    <div className="flex flex-wrap items-center gap-3 md:col-span-2">
-                      <button className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
-                        Save Slide
-                      </button>
-                    </div>
-                  </form>
-                  <form action={deleteCarouselSlide} className="mt-3 flex flex-wrap items-end gap-2">
-                    <input type="hidden" name="siteId" value={effectiveSiteId} />
-                    <input type="hidden" name="slideId" value={slide.id} />
-                    <label className="grid gap-1 text-xs">
-                      <span>Type delete to remove</span>
-                      <input name="confirm" className="rounded-md border border-rose-200 px-2 py-1 dark:border-rose-800 dark:bg-black" />
-                    </label>
-                    <button className="rounded-md border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:hover:bg-rose-950/30">
-                      Delete Slide
-                    </button>
-                  </form>
-                </div>
-              ))}
-              {slides.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
-                  No slides yet for this site.
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : (
+        {!effectiveSiteId ? (
           <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
-            Select a site to manage carousel slides.
+            Select a site to manage {parentLabel.toLowerCase()}s.
           </div>
+        ) : !parentDomain || !childDomain ? (
+          <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
+            This plugin&apos;s content types are not available yet. Refresh after plugin registration completes.
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={buildCollectionHref({ view: "carousels", createSet: undefined, editSet: undefined, createSlide: undefined, editSlide: undefined })}
+                className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                  tab === "carousels"
+                    ? "border-black bg-black text-white"
+                    : "border-stone-300 text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                }`}
+              >
+                {parentLabel}s
+              </Link>
+              <Link
+                href={`/app/plugins/${pluginData.id}?tab=settings${effectiveSiteId ? `&siteId=${encodeURIComponent(effectiveSiteId)}` : ""}`}
+                className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                  tab === "settings"
+                    ? "border-black bg-black text-white"
+                    : "border-stone-300 text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                }`}
+              >
+                Settings
+              </Link>
+            </div>
+
+            {tab === "settings" ? (
+              pluginData.settingsFields?.length ? (
+                <PluginSettingsInlineForm
+                  pluginId={pluginData.id}
+                  siteId={effectiveSiteId || undefined}
+                  fields={pluginData.settingsFields.map((field) => ({
+                    key: field.key,
+                    label: field.label,
+                    type: field.type,
+                    options: field.options,
+                    helpText: field.helpText,
+                    placeholder: field.placeholder,
+                  }))}
+                  values={config}
+                  saveAction={saveInlineSettings}
+                />
+              ) : (
+                <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
+                  This plugin does not expose additional settings yet.
+                </div>
+              )
+            ) : collectionView === "carousels" ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-stone-600 dark:text-stone-300">
+                    Manage reusable {parentLabel.toLowerCase()} sets. Choose one to edit its {childLabel.toLowerCase()}s.
+                  </p>
+                  <Link
+                    href={showCreateSet ? buildCollectionHref({ createSet: undefined }) : buildCollectionHref({ createSet: "1", editSet: undefined })}
+                    className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    {showCreateSet ? `Hide Add ${parentLabel}` : `Add ${parentLabel}`}
+                  </Link>
+                </div>
+
+                {showCreateSet ? (
+                  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
+                    <div className="w-full max-w-3xl rounded-2xl border border-stone-300 bg-white p-6 shadow-2xl">
+                      <div className="mb-5 flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-cal text-2xl text-black">Add {parentLabel}</h3>
+                          <p className="mt-1 text-sm text-stone-600">
+                            Create a new reusable carousel set.
+                          </p>
+                        </div>
+                        <Link
+                          href={buildCollectionHref({ createSet: undefined })}
+                          className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
+                        >
+                          Close
+                        </Link>
+                      </div>
+                      <form action={saveCollectionSet} className="grid gap-4 md:grid-cols-2">
+                        <input type="hidden" name="siteId" value={effectiveSiteId} />
+                        <label className="grid gap-1 text-sm text-black">
+                          <span>Title</span>
+                          <input name="title" required className="rounded-md border border-stone-300 bg-white px-3 py-2 text-black" />
+                        </label>
+                        <label className="grid gap-1 text-sm text-black">
+                          <span>Placement</span>
+                          <input name="embed_key" placeholder="homepage" className="rounded-md border border-stone-300 bg-white px-3 py-2 text-black" />
+                        </label>
+                        <label className="grid gap-1 text-sm text-black">
+                          <span>Status</span>
+                          <select name="workflow_state" defaultValue="published" className="rounded-md border border-stone-300 bg-white px-3 py-2 text-black">
+                            {workflowStates.map((state) => (
+                              <option key={state} value={state}>{humanizeCollectionLabel(state)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="hidden md:block"></div>
+                        <label className="grid gap-1 text-sm text-black md:col-span-2">
+                          <span>Description</span>
+                          <textarea name="description" rows={4} className="rounded-md border border-stone-300 bg-white px-3 py-2 text-black" />
+                        </label>
+                        <div className="md:col-span-2 flex gap-2">
+                          <button type="submit" className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
+                            Save {parentLabel}
+                          </button>
+                          <Link
+                            href={buildCollectionHref({ createSet: undefined })}
+                            className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
+                          >
+                            Cancel
+                          </Link>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="overflow-hidden rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-black">
+                  <table className="w-full text-sm">
+                    <thead className="bg-stone-50 text-left text-xs uppercase tracking-wide text-stone-500 dark:bg-stone-900 dark:text-stone-400">
+                      <tr>
+                        <th className="px-4 py-3">{parentLabel}</th>
+                        <th className="px-4 py-3">Placement</th>
+                        <th className="px-4 py-3">Slides</th>
+                        <th className="px-4 py-3">Enabled</th>
+                        <th className="px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {collections.map((entry) => {
+                        const enabled = entry.workflowState === "published";
+                        const isEditing = editSetId === entry.id;
+                        const isDeleting = deleteSetId === entry.id;
+                        const openHref = buildCollectionHref({ view: "slides", set: entry.id, editSlide: undefined, createSlide: undefined, editSet: undefined, deleteSet: undefined });
+                        return (
+                            <tr key={entry.id} className="border-t border-stone-200 align-top dark:border-stone-800">
+                              <td className="px-4 py-3">
+                                <Link
+                                  href={openHref}
+                                  className="block w-full font-medium text-stone-900 underline-offset-2 hover:underline dark:text-white"
+                                >
+                                  {entry.title || "Untitled"}
+                                  {entry.description ? (
+                                    <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">{entry.description}</div>
+                                  ) : null}
+                                </Link>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-stone-600 dark:text-stone-300">
+                                <Link href={openHref} className="block w-full hover:underline">
+                                  {entry.handle}
+                                </Link>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-stone-600 dark:text-stone-300">
+                                <Link href={openHref} className="block w-full hover:underline">
+                                  {slideCountBySet.get(entry.id) || 0}
+                                </Link>
+                              </td>
+                              <td className="px-4 py-3">
+                                <form action={toggleCollectionSetEnabled}>
+                                  <input type="hidden" name="siteId" value={effectiveSiteId} />
+                                  <input type="hidden" name="setId" value={entry.id} />
+                                  <input type="hidden" name="enabled" value={enabled ? "" : "on"} />
+                                  <button type="submit" className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${enabled ? "border-lime-300 bg-lime-50 text-lime-800 dark:border-lime-700 dark:bg-lime-950/30 dark:text-lime-200" : "border-stone-300 bg-stone-100 text-stone-700 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300"}`}>
+                                    Enabled
+                                    <span className={`inline-flex h-2.5 w-2.5 rounded-full ${enabled ? "bg-lime-300 shadow-[0_0_6px_rgba(163,230,53,0.95)]" : "bg-stone-300/70 dark:bg-stone-600"}`}></span>
+                                  </button>
+                                </form>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex flex-wrap gap-2">
+                                  <Link
+                                    href={isEditing ? buildCollectionHref({ editSet: undefined }) : buildCollectionHref({ editSet: entry.id, createSet: undefined, deleteSet: undefined })}
+                                    className="rounded-md border border-stone-300 px-2 py-1 text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                                    aria-label={`Edit ${entry.title || parentLabel}`}
+                                    title="Edit"
+                                  >
+                                    <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5 fill-current">
+                                      <path d="M11.9 1.7a1.5 1.5 0 0 1 2.1 2.1l-7.7 7.7-3.2.8.8-3.2 8-7.4Zm.7.7-.5-.5-7.3 6.8-.4 1.5 1.5-.4 6.7-7.4Z" />
+                                    </svg>
+                                  </Link>
+                                  <Link
+                                    href={isDeleting ? buildCollectionHref({ deleteSet: undefined }) : buildCollectionHref({ deleteSet: entry.id, editSet: undefined, createSet: undefined })}
+                                    className="rounded-md border border-rose-200 px-2 py-1 text-rose-700 dark:border-rose-800"
+                                    aria-label={`Delete ${entry.title || parentLabel}`}
+                                    title="Delete"
+                                  >
+                                    <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5 fill-current">
+                                      <path d="M6 1h4l.7 1H14v1H2V2h3.3L6 1Zm-1 4h1v7H5V5Zm3 0h1v7H8V5Zm3 0h1v7h-1V5ZM4 4h8l-.5 10.2A1 1 0 0 1 10.5 15h-5a1 1 0 0 1-1-.8L4 4Z" />
+                                    </svg>
+                                  </Link>
+                                </div>
+                              </td>
+                            </tr>
+                        );
+                      })}
+                      {collections.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-sm text-stone-500 dark:text-stone-400">
+                            No {parentLabel.toLowerCase()}s yet for this site.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                {editSetId
+                  ? (() => {
+                      const record = collections.find((entry) => entry.id === editSetId);
+                      if (!record) return null;
+                      return (
+                        <CollectionSetInlineEditor
+                          siteId={effectiveSiteId}
+                          parentLabel={parentLabel}
+                          closeHref={buildCollectionHref({ editSet: undefined })}
+                          workflowStates={workflowStates}
+                          record={{
+                            id: record.id,
+                            title: record.title || "",
+                            description: record.description || "",
+                            embedKey: record.handle,
+                            workflowState: record.workflowState,
+                          }}
+                          saveAction={autosaveCollectionSet}
+                          deleteAction={deleteCollectionSet}
+                        />
+                      );
+                    })()
+                  : null}
+
+                {deleteSetId
+                  ? (() => {
+                      const record = collections.find((entry) => entry.id === deleteSetId);
+                      if (!record) return null;
+                      return (
+                        <div className="rounded-lg border border-rose-200 bg-white p-5 dark:border-rose-800 dark:bg-black">
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <div>
+                              <h3 className="font-cal text-xl text-stone-900 dark:text-white">Delete {parentLabel}</h3>
+                              <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
+                                {record.title || "Untitled"} and all of its {childLabel.toLowerCase()}s will be removed.
+                              </p>
+                            </div>
+                            <Link
+                              href={buildCollectionHref({ deleteSet: undefined })}
+                              className="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                            >
+                              Cancel
+                            </Link>
+                          </div>
+                          <form action={deleteCollectionSet} className="flex flex-wrap items-end gap-2">
+                            <input type="hidden" name="siteId" value={effectiveSiteId} />
+                            <input type="hidden" name="setId" value={record.id} />
+                            <label className="grid gap-1 text-xs">
+                              <span>Type delete to remove</span>
+                              <input name="confirm" className="rounded-md border border-rose-200 px-2 py-1 dark:border-rose-800 dark:bg-black" />
+                            </label>
+                            <button type="submit" className="rounded-md border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:hover:bg-rose-950/30">
+                              Delete {parentLabel}
+                            </button>
+                          </form>
+                        </div>
+                      );
+                    })()
+                  : null}
+              </div>
+            ) : selectedSet ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
+                      <Link href={buildCollectionHref({ view: "carousels", set: selectedSet.id, editSet: undefined, createSet: undefined, createSlide: undefined, editSlide: undefined })} className="hover:underline">
+                        {parentLabel}s
+                      </Link>
+                      <span className="mx-2">/</span>
+                      <span>{selectedSet.title || selectedSet.handle}</span>
+                    </div>
+                    <h2 className="font-cal text-2xl text-stone-900 dark:text-white">{selectedSet.title || selectedSet.handle}</h2>
+                    <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">Editing {childLabel.toLowerCase()}s for placement: {selectedSet.handle}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Link
+                      href={buildCollectionHref({ view: "carousels", createSlide: undefined, editSlide: undefined })}
+                      className="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                    >
+                      Back to {parentLabel}s
+                    </Link>
+                    <Link
+                      href={showCreateSlide ? buildCollectionHref({ createSlide: undefined }) : buildCollectionHref({ createSlide: "1", editSlide: undefined })}
+                      className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white"
+                    >
+                      {showCreateSlide ? `Hide Add ${childLabel}` : `Add ${childLabel}`}
+                    </Link>
+                  </div>
+                </div>
+
+                <CarouselOrderManager
+                  siteId={effectiveSiteId}
+                  slides={slides.map((slide) => ({
+                    id: slide.id,
+                    title: slide.title || "Untitled",
+                    sortOrder: slide.sortOrder,
+                    status: humanizeCollectionLabel(slide.workflowState),
+                    editHref: buildCollectionHref({ editSlide: slide.id, createSlide: undefined }),
+                  }))}
+                  saveOrderAction={reorderCollectionChildren}
+                  extraFormData={{ setId: selectedSet.id }}
+                  title="Carousel Slides"
+                />
+
+                {showCreateSlide ? (
+                  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
+                    <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-stone-300 bg-white p-6 shadow-2xl">
+                      <form id="create-carousel-slide" action={saveCollectionChild}>
+                        <input type="hidden" name="siteId" value={effectiveSiteId} />
+                        <input type="hidden" name="setId" value={selectedSet.id} />
+
+                      <div className="mb-5 flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <label className="block px-2">
+                            <span className="sr-only">Title</span>
+                            <input
+                              name="title"
+                              required
+                              placeholder={`New ${childLabel}`}
+                              className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 font-cal text-3xl text-black outline-none focus:border-stone-300 focus:bg-stone-50"
+                            />
+                          </label>
+                          <p className="mt-2 px-2 text-sm text-stone-600">
+                            Create a new slide for the {selectedSet.title || selectedSet.handle} carousel.
+                          </p>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Status</div>
+                            <select
+                              name="workflow_state"
+                              form="create-carousel-slide"
+                              defaultValue="published"
+                              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-black"
+                            >
+                              {workflowStates.map((state) => (
+                                <option key={state} value={state}>
+                                  {humanizeCollectionLabel(state)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Sort Order</div>
+                            <input
+                              name="sort_order"
+                              form="create-carousel-slide"
+                              type="number"
+                              defaultValue="0"
+                              className="w-20 rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-black"
+                            />
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <Link
+                              href={buildCollectionHref({ createSlide: undefined })}
+                              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
+                            >
+                              Close
+                            </Link>
+                            <button type="submit" className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
+                              Save {childLabel}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+                        <div className="space-y-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
+                          <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+                            <div className="flex aspect-[4/3] items-center justify-center text-sm text-stone-400">
+                              No image selected
+                            </div>
+                          </div>
+                          <label className="grid gap-2 text-sm text-black">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Image URL</span>
+                            <textarea name="image" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
+                          </label>
+                          <label className="grid gap-2 text-sm text-black">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Media Manager</span>
+                            <select name="media_id" className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black">
+                              <option value="">Select media</option>
+                              {mediaItems.map((item) => (
+                                <option key={item.id} value={String(item.id)}>
+                                  {item.label || item.url}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        <div className="space-y-4">
+                          <label className="grid gap-2 text-sm text-black">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Description</span>
+                            <textarea name="description" rows={10} className="rounded-lg border border-stone-200 bg-white px-3 py-3 text-sm text-black" />
+                          </label>
+
+                          <label className="grid gap-2 text-sm text-black">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA Text</span>
+                            <textarea name="cta_text" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
+                          </label>
+
+                          <label className="grid gap-2 text-sm text-black">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA URL</span>
+                            <textarea name="cta_url" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
+                          </label>
+                        </div>
+                      </div>
+                      </form>
+                    </div>
+                  </div>
+                ) : null}
+
+                {editSlideId
+                  ? (() => {
+                      const slide = slides.find((entry) => entry.id === editSlideId);
+                      if (!slide) return null;
+                      return (
+                        <CollectionSlideEditModal
+                          siteId={effectiveSiteId}
+                          setId={selectedSet.id}
+                          childLabel={childLabel}
+                          closeHref={buildCollectionHref({ editSlide: undefined })}
+                          workflowStates={workflowStates}
+                          mediaItems={mediaItems.map((item) => ({
+                            id: item.id,
+                            label: item.label || item.url,
+                            url: item.url,
+                          }))}
+                          slide={{
+                            id: slide.id,
+                            title: slide.title || "",
+                            description: slide.description || "",
+                            image: slide.image || "",
+                            workflowState: slide.workflowState,
+                            mediaId: model.mediaMetaKey ? slide.meta[model.mediaMetaKey] || "" : "",
+                            ctaText: model.ctaTextMetaKey ? slide.meta[model.ctaTextMetaKey] || "" : "",
+                            ctaUrl: model.ctaUrlMetaKey ? slide.meta[model.ctaUrlMetaKey] || "" : "",
+                            sortOrder: String(slide.meta[model.orderMetaKey] || slide.sortOrder || 0),
+                          }}
+                          saveAction={autosaveCollectionChild}
+                          deleteAction={deleteCollectionChild}
+                        />
+                      );
+                    })()
+                  : null}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
+                Create a {parentLabel.toLowerCase()} first to start adding {childLabel.toLowerCase()}s.
+              </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -880,7 +1762,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   <span className="font-medium text-stone-800 dark:text-stone-100">Body</span>
                   <textarea name="body" required rows={8} placeholder="Compose message..." className="rounded-md border border-stone-300 px-2 py-1 dark:border-stone-600 dark:bg-stone-900 dark:text-white" />
                 </label>
-                <button className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Send Message</button>
+                <button type="submit" className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Send Message</button>
               </form>
             ) : (
               <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -936,7 +1818,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   ) : null}
                 </label>
               ))}
-              <button className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Save</button>
+              <button type="submit" className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Save</button>
             </form>
           ) : (
             <div className="rounded-lg border border-stone-200 bg-white p-5 text-sm text-stone-600">No plugin settings fields defined.</div>
@@ -991,7 +1873,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
               ) : null}
             </label>
           ))}
-          <button className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Save</button>
+          <button type="submit" className="w-fit rounded-md border border-stone-700 bg-stone-700 px-3 py-2 text-sm text-white">Save</button>
         </form>
       ) : (
         <div className="rounded-lg border border-stone-200 bg-white p-5 text-sm text-stone-600">No plugin settings fields defined.</div>

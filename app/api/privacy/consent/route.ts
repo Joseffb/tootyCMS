@@ -27,20 +27,29 @@ function asPositiveInt(value: unknown, fallback: number) {
 }
 
 export async function GET(req: NextRequest) {
-  const siteId = await resolveAnalyticsSiteId({ headers: req.headers });
+  let siteId: string | undefined;
+  try {
+    siteId = await resolveAnalyticsSiteId({ headers: req.headers });
+  } catch {
+    return NextResponse.json(DEFAULTS);
+  }
   if (!siteId) return NextResponse.json(DEFAULTS);
 
-  const plugins = await listPluginsWithSiteState(siteId);
-  const gdpr = plugins.find((plugin) => plugin.id === "gdpr-consent" && plugin.enabled && plugin.siteEnabled);
-  if (!gdpr) return NextResponse.json(DEFAULTS);
+  try {
+    const plugins = await listPluginsWithSiteState(siteId);
+    const gdpr = plugins.find((plugin) => plugin.id === "gdpr-consent" && plugin.enabled && plugin.siteEnabled);
+    if (!gdpr) return NextResponse.json(DEFAULTS);
 
-  const config = gdpr.effectiveConfig || {};
-  return NextResponse.json({
-    enabled: true,
-    bannerMessage: String(config.bannerMessage || DEFAULTS.bannerMessage).trim() || DEFAULTS.bannerMessage,
-    acceptText: String(config.acceptText || DEFAULTS.acceptText).trim() || DEFAULTS.acceptText,
-    declineText: String(config.declineText || DEFAULTS.declineText).trim() || DEFAULTS.declineText,
-    denyOnDismiss: asBoolean(config.denyOnDismiss, DEFAULTS.denyOnDismiss),
-    declineCooldownDays: asPositiveInt(config.declineCooldownDays, DEFAULTS.declineCooldownDays),
-  });
+    const config = gdpr.effectiveConfig || {};
+    return NextResponse.json({
+      enabled: true,
+      bannerMessage: String(config.bannerMessage || DEFAULTS.bannerMessage).trim() || DEFAULTS.bannerMessage,
+      acceptText: String(config.acceptText || DEFAULTS.acceptText).trim() || DEFAULTS.acceptText,
+      declineText: String(config.declineText || DEFAULTS.declineText).trim() || DEFAULTS.declineText,
+      denyOnDismiss: asBoolean(config.denyOnDismiss, DEFAULTS.denyOnDismiss),
+      declineCooldownDays: asPositiveInt(config.declineCooldownDays, DEFAULTS.declineCooldownDays),
+    });
+  } catch {
+    return NextResponse.json(DEFAULTS);
+  }
 }

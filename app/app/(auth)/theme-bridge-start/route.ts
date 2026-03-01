@@ -4,50 +4,26 @@ import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import { createThemeBridgeToken } from "@/lib/theme-auth-bridge";
 import { userMeta, users } from "@/lib/schema";
+import { getAdminPathAlias } from "@/lib/admin-path";
+import {
+  deriveThemeBridgeAdminBaseFromReturnUrl,
+  isAllowedThemeBridgeReturnUrl,
+} from "@/lib/theme-bridge-hosts";
 
-function isAllowedReturnUrl(rawValue: string) {
-  const value = String(rawValue || "").trim();
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
-    return hostname === "localhost" || hostname.endsWith(".localhost");
-  } catch {
-    return false;
-  }
-}
-
-function deriveAppOriginFromReturnUrl(returnUrl: string, fallbackOrigin: string) {
-  try {
-    const target = new URL(returnUrl);
-    const protocol = target.protocol || "http:";
-    const port = target.port ? `:${target.port}` : "";
-    const hostname = String(target.hostname || "").toLowerCase();
-    if (hostname === "localhost" || hostname.endsWith(".localhost")) {
-      return `${protocol}//app.localhost${port}`;
-    }
-    const parts = hostname.split(".").filter(Boolean);
-    if (parts.length >= 2) {
-      return `${protocol}//app.${parts.slice(-2).join(".")}${port}`;
-    }
-  } catch {
-    // fall through to fallback
-  }
-  return fallbackOrigin;
-}
-
-async function resolveDisplayName(userId: string) {
+async function resolveBridgeUserProfile(userId: string) {
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { id: true, username: true, name: true },
+  });
   const meta = await db.query.userMeta.findFirst({
     where: and(eq(userMeta.userId, userId), eq(userMeta.key, "display_name")),
     columns: { value: true },
   });
   const fromMeta = String(meta?.value || "").trim();
-  if (fromMeta) return fromMeta;
-  const row = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { username: true, name: true },
-  });
-  return String(row?.username || row?.name || "").trim();
+  return {
+    knownUser: Boolean(String(row?.id || "").trim()),
+    displayName: fromMeta || String(row?.username || row?.name || "").trim(),
+  };
 }
 
 function redirectNoStore(to: string | URL, status = 302) {
@@ -61,13 +37,13 @@ function redirectNoStore(to: string | URL, status = 302) {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const returnUrl = String(url.searchParams.get("return") || "").trim();
-  if (!isAllowedReturnUrl(returnUrl)) {
+  if (!isAllowedThemeBridgeReturnUrl(returnUrl)) {
     if (process.env.TRACE_PROFILE === "Test") {
       console.info("[trace:Test:theme-bridge-start] invalid return URL", { returnUrl });
     }
     return redirectNoStore(new URL("/", url), 302);
   }
-  const appOrigin = deriveAppOriginFromReturnUrl(returnUrl, url.origin);
+  const appOrigin = deriveThemeBridgeAdminBaseFromReturnUrl(returnUrl, url.origin, getAdminPathAlias());
 
   const session = await getSession();
   const userId = String(session?.user?.id || "").trim();
@@ -84,7 +60,7 @@ export async function GET(request: Request) {
     return redirectNoStore(`${appOrigin}/login?${loginParams.toString()}`, 302);
   }
 
-  const displayName = await resolveDisplayName(userId);
+  const { displayName, knownUser } = await resolveBridgeUserProfile(userId);
   const token = await createThemeBridgeToken({
     userId,
     email: String(session?.user?.email || "").trim() || undefined,
@@ -102,6 +78,7 @@ export async function GET(request: Request) {
   const hashParams = new URLSearchParams({
     tootyBridgeToken: token,
     tootyBridgeAttempted: "1",
+    tootyBridgeKnownUser: knownUser ? "1" : "0",
   });
   if (displayName) hashParams.set("tootyBridgeDisplayName", displayName);
   if (process.env.TRACE_PROFILE === "Test") {

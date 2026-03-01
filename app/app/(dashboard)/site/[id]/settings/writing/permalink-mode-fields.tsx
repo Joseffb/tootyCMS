@@ -83,6 +83,9 @@ export default function PermalinkModeFields({
             <span className="text-xs text-stone-500 dark:text-stone-400">
               Example: prefix <code>content</code> makes routes like <code>/content</code> and <code>/content/my-slug</code>.
             </span>
+            <span className="text-xs text-stone-500 dark:text-stone-400">
+              Reserved prefix: <code>app</code>.
+            </span>
           </label>
 
           <label className="flex flex-col gap-2 text-sm dark:text-white">
@@ -104,4 +107,3 @@ export default function PermalinkModeFields({
     </>
   );
 }
-

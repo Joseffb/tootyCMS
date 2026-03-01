@@ -15,6 +15,7 @@ import {
 import Script from "next/script";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 import { getThemeCacheBustToken, withCacheBust } from "@/lib/theme-cache-bust";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 export async function generateMetadata({
   params,
@@ -152,7 +153,10 @@ export default async function SiteLayout({
           />
         ),
       )}
-      <FrontendAuthBridge />
+      <FrontendAuthBridge
+        adminPathAlias={getAdminPathAlias()}
+        rootDomain={process.env.NEXT_PUBLIC_ROOT_DOMAIN || ""}
+      />
       {children}
       {themeAssets.scripts.map((src: string) => (
         <Script key={src} src={withCacheBust(src, cacheBustToken)} strategy="afterInteractive" />

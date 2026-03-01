@@ -7,6 +7,7 @@ Plugin system files:
 - Plugin dashboard page: `app/app/(dashboard)/settings/plugins/page.tsx`
 - Plugin setup route: `app/app/(dashboard)/plugins/[pluginId]/page.tsx`
 - Plugin menu API: `app/api/plugins/menu/route.ts`
+- Carousel product boundary: `docs/CAROUSELS_PRODUCT_BOUNDARY.md`
 
 ## Purpose
 
@@ -54,6 +55,27 @@ Optional:
   ]
 }
 ```
+
+Structured-content plugins may also declare a generic collection content model:
+
+```json
+{
+  "contentModel": {
+    "kind": "collection",
+    "parentTypeKey": "carousel",
+    "childTypeKey": "carousel-slide",
+    "childParentMetaKey": "carousel_id",
+    "childParentKeyMetaKey": "carousel_key",
+    "parentHandleMetaKey": "embed_key",
+    "workflowMetaKey": "workflow_state",
+    "orderMetaKey": "sort_order",
+    "mediaMetaKey": "media_id",
+    "workflowStates": ["draft", "published", "archived"]
+  }
+}
+```
+
+This is a generic plugin contract. Core stores the relationship metadata for the plugin-owned content types, and the plugin setup UI can consume that metadata to present a reusable parent/child workspace without hardcoding a plugin id.
 
 Versioning notes:
 - Core is currently in `0.x` (early-contract phase).

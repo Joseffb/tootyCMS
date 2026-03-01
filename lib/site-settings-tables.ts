@@ -84,28 +84,43 @@ async function allocateSiteTableIndex(executor: SqlExecutor, siteId: string) {
     typeof existingRaw === "number" ? existingRaw : Number.parseInt(String(existingRaw ?? "-1"), 10);
   if (Number.isFinite(existingIndex) && existingIndex >= 0) return existingIndex;
 
-  const maxResult = (await executor.execute(
-    sql.raw(`SELECT COALESCE(MAX("tableIndex"), -1) + 1 AS next_index FROM ${quoted(registryTableName)}`),
-  )) as QueryRows<{ next_index?: number | string | null }>;
-  const nextRaw = maxResult.rows?.[0]?.next_index;
-  const nextIndex =
-    typeof nextRaw === "number" ? nextRaw : Number.parseInt(String(nextRaw ?? "-1"), 10);
-  const finalIndex = Number.isFinite(nextIndex) && nextIndex >= 0 ? nextIndex : 0;
-  await executor.execute(sql`
-    INSERT INTO ${sql.raw(quoted(registryTableName))} ("siteId", "tableIndex")
-    VALUES (${siteId}, ${finalIndex})
-    ON CONFLICT ("siteId") DO NOTHING
-  `);
-  const finalRows = (await executor.execute(
+  const registryLockKey = `${normalizedPrefix}site_settings_registry`;
+  await executor.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${registryLockKey}))`);
+
+  const lockedExisting = (await executor.execute(
     sql`SELECT "tableIndex" FROM ${sql.raw(quoted(registryTableName))} WHERE "siteId" = ${siteId} LIMIT 1`,
   )) as QueryRows<{ tableIndex?: number | string | null }>;
-  const finalRaw = finalRows.rows?.[0]?.tableIndex;
-  const resolved =
-    typeof finalRaw === "number" ? finalRaw : Number.parseInt(String(finalRaw ?? "-1"), 10);
-  if (!Number.isFinite(resolved) || resolved < 0) {
-    throw new Error("Unable to allocate site settings table index.");
+  const lockedExistingRaw = lockedExisting.rows?.[0]?.tableIndex;
+  const lockedExistingIndex =
+    typeof lockedExistingRaw === "number"
+      ? lockedExistingRaw
+      : Number.parseInt(String(lockedExistingRaw ?? "-1"), 10);
+  if (Number.isFinite(lockedExistingIndex) && lockedExistingIndex >= 0) return lockedExistingIndex;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const maxResult = (await executor.execute(
+      sql.raw(`SELECT COALESCE(MAX("tableIndex"), -1) + 1 AS next_index FROM ${quoted(registryTableName)}`),
+    )) as QueryRows<{ next_index?: number | string | null }>;
+    const nextRaw = maxResult.rows?.[0]?.next_index;
+    const nextIndex =
+      typeof nextRaw === "number" ? nextRaw : Number.parseInt(String(nextRaw ?? "-1"), 10);
+    const finalIndex = Number.isFinite(nextIndex) && nextIndex >= 0 ? nextIndex : 0;
+    await executor.execute(sql`
+      INSERT INTO ${sql.raw(quoted(registryTableName))} ("siteId", "tableIndex")
+      VALUES (${siteId}, ${finalIndex})
+      ON CONFLICT DO NOTHING
+    `);
+    const finalRows = (await executor.execute(
+      sql`SELECT "tableIndex" FROM ${sql.raw(quoted(registryTableName))} WHERE "siteId" = ${siteId} LIMIT 1`,
+    )) as QueryRows<{ tableIndex?: number | string | null }>;
+    const finalRaw = finalRows.rows?.[0]?.tableIndex;
+    const resolved =
+      typeof finalRaw === "number" ? finalRaw : Number.parseInt(String(finalRaw ?? "-1"), 10);
+    if (Number.isFinite(resolved) && resolved >= 0) {
+      return resolved;
+    }
   }
-  return resolved;
+  throw new Error("Unable to allocate site settings table index.");
 }
 
 export async function ensureSiteSettingsTable(siteId: string) {
@@ -129,6 +144,13 @@ export async function ensureSiteSettingsTable(siteId: string) {
   const run = db.transaction(async (tx) => {
     const lockKey = `${normalizedPrefix}site_settings_tables:${normalizedSiteId}`;
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+    const prefixedSites = `${normalizedPrefix}sites`;
+    const lockedSite = (await tx.execute(
+      sql`SELECT "id" FROM ${sql.raw(quoted(prefixedSites))} WHERE "id" = ${normalizedSiteId} FOR UPDATE`,
+    )) as QueryRows<{ id?: string | null }>;
+    if (!String(lockedSite.rows?.[0]?.id || "").trim()) {
+      throw new Error("Invalid site.");
+    }
     const tableIndex = await allocateSiteTableIndex(tx, normalizedSiteId);
     await createPhysicalSiteSettingsTable(tx, tableIndex);
     const settingsTable = settingsTableName(tableIndex);

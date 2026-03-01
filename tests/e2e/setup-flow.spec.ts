@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "@vercel/postgres";
+import { randomUUID } from "node:crypto";
 
-const runId = `e2e-setup-${Date.now()}`;
+const runId = `e2e-setup-${randomUUID()}`;
 const adminEmail = `${runId}@example.com`;
 const adminPassword = "password123";
 const runSetupFlow = process.env.RUN_SETUP_FLOW_E2E === "1";

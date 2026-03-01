@@ -5,6 +5,7 @@ export default defineConfig([
   ...nextVitals,
   globalIgnores([
     ".next/**",
+    ".next-test-*/**",
     "out/**",
     "build/**",
     "coverage/**",

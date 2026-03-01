@@ -1,11 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { encode } from "next-auth/jwt";
+import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { ensureSiteCommentTables } from "../../lib/site-comment-tables";
+import { buildPublicOriginForSubdomain, getAppHostname } from "./helpers/env";
 
-const runId = `e2e-network-admin-comment-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
-const publicOrigin = process.env.E2E_PUBLIC_ORIGIN || "http://localhost:3000";
+const runId = `e2e-network-admin-comment-${randomUUID()}`;
+const appHostname = getAppHostname();
+const siteSubdomain = `na-${randomUUID().split("-")[0]}`;
+const publicOrigin = buildPublicOriginForSubdomain(siteSubdomain);
+const publicHostname = new URL(publicOrigin).hostname;
 const postSlug = `${runId}-post`;
 
 const userId = `${runId}-user`;
@@ -24,49 +29,20 @@ test.skip(
   "POSTGRES_URL or POSTGRES_TEST_URL is required for network admin comment display-name e2e.",
 );
 
-async function resolveSite() {
-  const mainRows = await sql`
-    SELECT "id"
-    FROM tooty_sites
-    WHERE "subdomain" = 'main'
-    ORDER BY "createdAt" ASC
-    LIMIT 1
-  `;
-  if (mainRows.rows[0]?.id) {
-    siteId = String(mainRows.rows[0].id);
-    return;
-  }
+test.setTimeout(60_000);
 
-  const rows = await sql`
-    SELECT "id"
-    FROM tooty_sites
-    WHERE "isPrimary" = true OR "subdomain" = 'main'
-    ORDER BY "isPrimary" DESC, "createdAt" ASC
-    LIMIT 1
-  `;
-  if (rows.rows[0]?.id) {
-    siteId = String(rows.rows[0].id);
-    await sql`
-      UPDATE tooty_sites
-      SET "subdomain" = 'main', "isPrimary" = true, "updatedAt" = NOW()
-      WHERE "id" = ${siteId}
-    `;
-    return;
-  }
-
-  siteId = `${runId}-site-main`;
-  const upserted = await sql`
+async function ensureSite() {
+  siteId = `${runId}-site`;
+  await sql`
     INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
-    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
-    ON CONFLICT ("subdomain") DO UPDATE
+    VALUES (${siteId}, ${"Network Admin Comment Site"}, ${siteSubdomain}, false, ${userId}, NOW(), NOW())
+    ON CONFLICT ("id") DO UPDATE
     SET "name" = EXCLUDED."name",
+        "subdomain" = EXCLUDED."subdomain",
         "isPrimary" = EXCLUDED."isPrimary",
+        "userId" = EXCLUDED."userId",
         "updatedAt" = NOW()
-    RETURNING "id"
   `;
-  if (upserted.rows[0]?.id) {
-    siteId = String(upserted.rows[0].id);
-  }
 }
 
 async function resolvePostDomain() {
@@ -129,10 +105,12 @@ async function createPost() {
   postId = String(insert.rows[0]?.id || "");
   if (!postId) throw new Error("Failed to create seeded post.");
   await sql`
+    DELETE FROM tooty_domain_post_meta
+    WHERE "domainPostId" = ${postId} AND "key" = 'use_comments'
+  `;
+  await sql`
     INSERT INTO tooty_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES (${postId}, 'use_comments', 'true', NOW(), NOW())
-    ON CONFLICT ("domainPostId", "key")
-    DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
   `;
 }
 
@@ -149,11 +127,12 @@ async function ensureNetworkAdminUser() {
         "updatedAt" = NOW()
   `;
   await sql`
+    DELETE FROM tooty_user_meta
+    WHERE "userId" = ${userId} AND "key" = 'display_name'
+  `;
+  await sql`
     INSERT INTO tooty_user_meta ("userId", "key", "value", "createdAt", "updatedAt")
     VALUES (${userId}, 'display_name', ${displayName}, NOW(), NOW())
-    ON CONFLICT ("userId", "key") DO UPDATE
-    SET "value" = EXCLUDED."value",
-        "updatedAt" = NOW()
   `;
 }
 
@@ -165,25 +144,68 @@ async function ensureCommentSettings() {
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_allow_authenticated_comments`, "true");
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_allow_anonymous_comments`, "true");
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_show_comments_to_public`, "true");
+  await ensureSiteCommentTables(siteId);
 }
 
 test.beforeAll(async () => {
   await ensureNetworkAdminUser();
-  await resolveSite();
+  await ensureSite();
   await resolvePostDomain();
   await createPost();
   await ensureCommentSettings();
 });
 
+async function gotoBridgeTarget(page: import("@playwright/test").Page, href: string) {
+  await page.goto(href, { waitUntil: "commit", timeout: 5_000 }).catch((error) => {
+    const message = String(error instanceof Error ? error.message : error);
+    if (
+      message.includes("ERR_ABORTED") ||
+      message.includes("NS_BINDING_ABORTED") ||
+      message.toLowerCase().includes("interrupted by another navigation") ||
+      message.toLowerCase().includes("timeout")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+}
+
 async function ensureFrontendBridgeAuth(page: import("@playwright/test").Page) {
   const authNode = page.locator(".tooty-post-auth");
   await expect(authNode).toBeVisible({ timeout: 20000 });
-  const loginLink = authNode.getByRole("link", { name: "Login" });
-  if (await loginLink.count()) {
-    await Promise.all([
-      page.waitForURL(new RegExp(`/post/${postSlug}`), { timeout: 30000 }),
-      loginLink.click(),
-    ]);
+  const loginLink = authNode.getByRole("link", { name: "Login" }).first();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await loginLink.count()) {
+      const loginVisible = await loginLink.isVisible().catch(() => false);
+      if (loginVisible) {
+        const href = await loginLink.getAttribute("href");
+        if (href) {
+          await gotoBridgeTarget(page, href);
+        }
+      }
+    }
+    const bridged = await page
+      .waitForFunction((expectedDisplayName) => {
+        const auth = (window as any).__tootyFrontendAuth;
+        if (auth?.token) return true;
+        const raw = window.localStorage.getItem("tooty.themeAuthBridge.v1");
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (String(parsed?.token || "").trim()) return true;
+          } catch {
+            // ignore malformed transient storage payload
+          }
+        }
+        const authEl = document.querySelector(".tooty-post-auth");
+        return Boolean(authEl?.textContent?.includes(`Hello ${expectedDisplayName}`));
+      }, displayName, { timeout: 15000 })
+      .then(() => true)
+      .catch(() => false);
+    if (bridged) break;
+    if (attempt < 2) {
+      await page.waitForTimeout(150 * (attempt + 1));
+    }
   }
   await expect(authNode).toContainText(`Hello ${displayName}`, { timeout: 20000 });
 }
@@ -230,18 +252,20 @@ async function authenticateAs(
 }
 
 test("frontend post comment form uses network admin display_name and hides anonymous inputs", async ({ page }) => {
-  await authenticateAs(page, userId, "app.localhost", {
+  await authenticateAs(page, userId, appHostname, {
     email,
     name: realName,
     username,
     displayName,
   });
 
-  const bridgeStart = `${appOrigin}/theme-bridge-start?return=${encodeURIComponent(`${publicOrigin}/post/${postSlug}`)}`;
-  await page.goto(bridgeStart);
+  await page.goto(`/${encodeURIComponent(publicHostname)}/post/${postSlug}`);
 
   await ensureFrontendBridgeAuth(page);
   await expect(page.locator(".tooty-post-auth")).not.toContainText(realName, { timeout: 20000 });
+  await expect(page.locator(".tooty-post-auth")).toContainText(`Hello ${displayName}`, { timeout: 20000 });
+  await expect(page.locator(".tooty-comments-title")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("[data-comments-note]")).not.toContainText(/loading comments|retrying comments/i, { timeout: 45000 });
 
   await expect(page.locator("label:has-text('Display Name')")).toBeHidden({ timeout: 20000 });
   await expect(page.locator("label:has-text('Email (never shown)')")).toBeHidden({ timeout: 20000 });

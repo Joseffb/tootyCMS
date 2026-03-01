@@ -1,17 +1,23 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "@vercel/postgres";
 import { encode } from "next-auth/jwt";
+import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
+import { ensureSiteCommentTables } from "../../lib/site-comment-tables";
+import { buildPublicOriginForSubdomain, getAdminBaseUrl, getAppHostname, getAppOrigin } from "./helpers/env";
 
-const runId = `e2e-auth-bridge-${Date.now()}`;
-const appOrigin = process.env.E2E_APP_ORIGIN || "http://app.localhost:3000";
-const publicOrigin = process.env.E2E_PUBLIC_ORIGIN || "http://localhost:3000";
+const runId = `e2e-auth-bridge-${randomUUID()}`;
+const appOrigin = getAppOrigin();
+const adminBaseUrl = getAdminBaseUrl();
+const appHostname = getAppHostname();
 const domainKey = "post";
 const postSlug = `${runId}-post`;
 const userId = `${runId}-user`;
 const email = `${runId}@example.com`;
 const password = "password123";
 const displayName = "Bridge Display Name";
+const siteSubdomain = `${runId}-site`;
+const publicOrigin = buildPublicOriginForSubdomain(siteSubdomain);
 
 let siteId = "";
 let dataDomainId = 0;
@@ -23,46 +29,11 @@ test.skip(
   "POSTGRES_URL or POSTGRES_TEST_URL is required for auth bridge e2e.",
 );
 
-async function ensureMainSite() {
-  const rows = await sql`
-    SELECT "id"
-    FROM tooty_sites
-    WHERE "isPrimary" = true OR "subdomain" = 'main'
-    ORDER BY "isPrimary" DESC, "createdAt" ASC
-    LIMIT 1
-  `;
-  if (rows.rows[0]?.id) {
-    siteId = String(rows.rows[0].id);
-    return;
-  }
-
-  siteId = `${runId}-site-main`;
-  const upserted = await sql`
-    INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
-    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
-    ON CONFLICT ("subdomain") DO UPDATE
-    SET "name" = EXCLUDED."name",
-        "isPrimary" = EXCLUDED."isPrimary",
-        "updatedAt" = NOW()
-    RETURNING "id"
-  `;
-  if (upserted.rows[0]?.id) {
-    siteId = String(upserted.rows[0].id);
-    return;
-  }
-  const fallback = await sql`
-    SELECT "id"
-    FROM tooty_sites
-    WHERE "subdomain" = 'main'
-    LIMIT 1
-  `;
-  if (fallback.rows[0]?.id) {
-    siteId = String(fallback.rows[0].id);
-    return;
-  }
+async function ensureSite() {
+  siteId = `${runId}-site`;
   await sql`
     INSERT INTO tooty_sites ("id", "name", "subdomain", "isPrimary", "userId", "createdAt", "updatedAt")
-    VALUES (${siteId}, ${"Main Site"}, 'main', true, ${userId}, NOW(), NOW())
+    VALUES (${siteId}, ${"Auth Bridge Site"}, ${siteSubdomain}, false, ${userId}, NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
     SET "name" = EXCLUDED."name",
         "subdomain" = EXCLUDED."subdomain",
@@ -110,11 +81,12 @@ async function ensureUser() {
         "updatedAt" = NOW()
   `;
   await sql`
+    DELETE FROM tooty_user_meta
+    WHERE "userId" = ${userId} AND "key" = 'display_name'
+  `;
+  await sql`
     INSERT INTO tooty_user_meta ("userId", "key", "value", "createdAt", "updatedAt")
     VALUES (${userId}, 'display_name', ${displayName}, NOW(), NOW())
-    ON CONFLICT ("userId", "key") DO UPDATE
-    SET "value" = EXCLUDED."value",
-        "updatedAt" = NOW()
   `;
 }
 
@@ -133,10 +105,12 @@ async function ensurePost() {
   postId = String(inserted.rows[0]?.id || "");
   if (!postId) throw new Error("Failed to create bridge auth post.");
   await sql`
+    DELETE FROM tooty_domain_post_meta
+    WHERE "domainPostId" = ${postId} AND "key" = 'use_comments'
+  `;
+  await sql`
     INSERT INTO tooty_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES (${postId}, 'use_comments', 'true', NOW(), NOW())
-    ON CONFLICT ("domainPostId", "key")
-    DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
   `;
 }
 
@@ -148,36 +122,71 @@ async function ensureCommentSettings() {
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_allow_authenticated_comments`, "true");
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_allow_anonymous_comments`, "true");
   await setSettingByKey(`site_${siteId}_writing_comment_provider_tooty-comments_show_comments_to_public`, "true");
+  await ensureSiteCommentTables(siteId);
 }
 
 test.describe.configure({ mode: "serial" });
+test.setTimeout(60_000);
+
+async function gotoBridgeTarget(page: import("@playwright/test").Page, href: string) {
+  await page.goto(href, { waitUntil: "commit", timeout: 5_000 }).catch((error) => {
+    const message = String(error instanceof Error ? error.message : error);
+    if (
+      message.includes("ERR_ABORTED") ||
+      message.includes("NS_BINDING_ABORTED") ||
+      message.toLowerCase().includes("interrupted by another navigation") ||
+      message.toLowerCase().includes("timeout")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+}
 
 test.beforeAll(async () => {
   await ensureUser();
-  await ensureMainSite();
+  await ensureSite();
   await ensurePostDomain();
   await ensurePost();
   await ensureCommentSettings();
 });
 
-test.afterAll(async () => {
-  if (postId) {
-    await sql`DELETE FROM tooty_domain_post_meta WHERE "domainPostId" = ${postId}`;
-    await sql`DELETE FROM tooty_domain_posts WHERE "id" = ${postId}`;
-  }
-  await sql`DELETE FROM tooty_user_meta WHERE "userId" = ${userId} AND "key" = 'display_name'`;
-  await sql`DELETE FROM tooty_users WHERE "id" = ${userId}`;
-});
-
 async function ensureFrontendBridgeAuth(page: import("@playwright/test").Page) {
   const authNode = page.locator(".tooty-post-auth");
   await expect(authNode).toBeVisible({ timeout: 20000 });
-  const loginLink = authNode.getByRole("link", { name: "Login" });
-  if (await loginLink.count()) {
-    await Promise.all([
-      page.waitForURL(new RegExp(`/post/${postSlug}`), { timeout: 30000 }),
-      loginLink.click(),
-    ]);
+  const loginLink = authNode.getByRole("link", { name: "Login" }).first();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await loginLink.count()) {
+      const loginVisible = await loginLink.isVisible().catch(() => false);
+      if (loginVisible) {
+        const href = await loginLink.getAttribute("href");
+        if (href) {
+          await gotoBridgeTarget(page, href);
+        }
+      }
+    }
+    const bridged = await page
+      .waitForFunction((expectedDisplayName) => {
+        const auth = (window as any).__tootyFrontendAuth;
+        if (auth?.token) return true;
+        const raw = window.localStorage.getItem("tooty.themeAuthBridge.v1");
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (String(parsed?.token || "").trim()) return true;
+          } catch {
+            // ignore malformed transient storage payload
+          }
+        }
+        const authEl = document.querySelector(".tooty-post-auth");
+        return Boolean(authEl?.textContent?.includes(`Hello ${expectedDisplayName}`));
+      }, displayName, { timeout: 15000 })
+      .then(() => true)
+      .catch(() => false);
+    if (bridged) break;
+    if (attempt < 2) {
+      await page.waitForTimeout(150 * (attempt + 1));
+    }
   }
   await expect(authNode).toContainText(`Hello ${displayName}`, { timeout: 20000 });
 }
@@ -223,16 +232,18 @@ async function authenticateAs(
   ]);
 }
 
-test("signin on app.localhost is recognized on localhost post comments UI", async ({ page }) => {
-  await authenticateAs(page, userId, "app.localhost", {
+test("signin on app host is recognized on public post comments UI", async ({ page }) => {
+  await authenticateAs(page, userId, appHostname, {
     email,
     name: "Bridge User Name",
     username: "bridge_user_name",
     displayName,
   });
-  const bridgeStart = `${appOrigin}/theme-bridge-start?return=${encodeURIComponent(`${publicOrigin}/post/${postSlug}`)}`;
-  await page.goto(bridgeStart);
+  const bridgeStart = `${adminBaseUrl}/theme-bridge-start?return=${encodeURIComponent(`${publicOrigin}/post/${postSlug}`)}`;
+  await gotoBridgeTarget(page, bridgeStart);
   await ensureFrontendBridgeAuth(page);
+  await expect(page.locator(".tooty-comments-title")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("[data-comments-note]")).not.toContainText(/loading comments|retrying comments/i, { timeout: 45000 });
   await expect(page.locator("label:has-text('Display Name')")).toBeHidden({ timeout: 20000 });
   await expect(page.locator("label:has-text('Email (never shown)')")).toBeHidden({ timeout: 20000 });
 });

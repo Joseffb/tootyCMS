@@ -1,4 +1,13 @@
-export async function register() {
-  // The canonical provider orchestration is implemented in comments-spine.
-  // This core plugin exists for site-level enable/disable and settings UX.
+export async function register(kernel, api) {
+  if (api?.registerCommentProvider && api?.core?.comments?.createTableBackedProvider) {
+    api.registerCommentProvider(
+      api.core.comments.createTableBackedProvider({
+        id: "tooty-comments",
+      }),
+    );
+  }
+  kernel.enqueueScript({
+    id: "tooty-comments-widget",
+    src: "/plugin-assets/tooty-comments/comments-widget.js",
+  });
 }

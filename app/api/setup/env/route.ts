@@ -14,11 +14,20 @@ import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 import { ensureMainSiteForUser } from "@/lib/bootstrap";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { setSettingByKey } from "@/lib/settings-store";
+import { sitePluginEnabledKey } from "@/lib/plugins";
+import { getPluginById } from "@/lib/plugins";
+import { getAvailableThemes, setSiteTheme, setThemeEnabled } from "@/lib/themes";
+import { getSetupDefaultPluginIds, getSetupDefaultThemeId } from "@/lib/setup-defaults";
 import {
   applyPendingDatabaseMigrations,
   getDatabaseHealthReport,
   markDatabaseSchemaCurrent,
 } from "@/lib/db-health";
+import {
+  ALL_EXPECTED_SETUP_TABLE_SUFFIXES,
+  OPTIONAL_LEGACY_SETUP_TABLE_SUFFIXES,
+  REQUIRED_SETUP_TABLE_SUFFIXES,
+} from "@/lib/setup-schema";
 
 const execFileAsync = promisify(execFile);
 
@@ -92,79 +101,6 @@ function inferSiteUrl(values: Record<string, string>) {
   return "";
 }
 
-const REQUIRED_TABLE_SUFFIXES = [
-  "communication_attempts",
-  "communication_messages",
-  "cms_settings",
-  "data_domains",
-  "domain_post_meta",
-  "domain_posts",
-  "media",
-  "rbac_roles",
-  "sessions",
-  "site_data_domains",
-  "sites",
-  "site_user_table_registry",
-  "term_relationships",
-  "term_taxonomies",
-  "term_taxonomy_domains",
-  "term_taxonomy_meta",
-  "terms",
-  "users",
-  "user_meta",
-  "verificationTokens",
-  "accounts",
-  "webcallback_events",
-  "webhook_subscriptions",
-  "webhook_deliveries",
-] as const;
-
-const OPTIONAL_LEGACY_TABLE_SUFFIXES = [
-  "categories",
-  "examples",
-  "post_categories",
-  "post_meta",
-  "post_tags",
-  "posts",
-  "tags",
-] as const;
-
-const ALL_EXPECTED_TABLE_SUFFIXES = [
-  "accounts",
-  "categories",
-  "communication_attempts",
-  "communication_messages",
-  "cms_settings",
-  "data_domains",
-  "domain_post_meta",
-  "domain_posts",
-  "examples",
-  "media",
-  "post_categories",
-  "post_meta",
-  "post_tags",
-  "posts",
-  "rbac_roles",
-  "sessions",
-  "site_data_domains",
-  "sites",
-  "site_user_table_registry",
-  "tags",
-  "term_relationships",
-  "term_taxonomies",
-  "term_taxonomy_domains",
-  "term_taxonomy_meta",
-  "terms",
-  "users",
-  "user_meta",
-  "verificationTokens",
-  "webcallback_events",
-  "webhook_subscriptions",
-  "webhook_deliveries",
-] as const;
-
-const DEFAULT_ENABLED_PLUGINS = ["hello-teety", "tooty-comments"] as const;
-
 async function tableExists(tableName: string) {
   const result = (await db.execute(
     sql`select exists (
@@ -180,13 +116,13 @@ async function tableExists(tableName: string) {
 async function getMissingTableSets(values: Record<string, string>) {
   const prefix = normalizedPrefixFromValues(values);
   const missing: string[] = [];
-  for (const suffix of ALL_EXPECTED_TABLE_SUFFIXES) {
+  for (const suffix of ALL_EXPECTED_SETUP_TABLE_SUFFIXES) {
     const fullName = `${prefix}${suffix}`;
     const exists = await tableExists(fullName);
     if (!exists) missing.push(fullName);
   }
-  const requiredSet = new Set(REQUIRED_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
-  const optionalSet = new Set(OPTIONAL_LEGACY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
+  const requiredSet = new Set(REQUIRED_SETUP_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
+  const optionalSet = new Set(OPTIONAL_LEGACY_SETUP_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`));
 
   const missingRequired = missing.filter((tableName) => requiredSet.has(tableName));
   const missingOptional = missing.filter((tableName) => optionalSet.has(tableName));
@@ -339,7 +275,10 @@ export async function POST(req: Request) {
     await setSettingByKey("site_url", inferredSiteUrl);
   }
 
-  for (const pluginId of DEFAULT_ENABLED_PLUGINS) {
+  const setupPluginIds = getSetupDefaultPluginIds(process.env.SETUP_DEFAULT_ENABLED_PLUGINS);
+  for (const pluginId of setupPluginIds) {
+    const plugin = await getPluginById(pluginId);
+    if (!plugin) continue;
     await setSettingByKey(`plugin_${pluginId}_enabled`, "true");
   }
 
@@ -356,6 +295,24 @@ export async function POST(req: Request) {
     memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
     memberSites[0]?.id ||
     null;
+
+  if (mainSiteId) {
+    for (const pluginId of setupPluginIds) {
+      const plugin = await getPluginById(pluginId);
+      if (!plugin || plugin.scope !== "site") continue;
+      await setSettingByKey(sitePluginEnabledKey(mainSiteId, pluginId), "true");
+    }
+
+    const defaultThemeId = getSetupDefaultThemeId(process.env.SETUP_DEFAULT_THEME_ID);
+    if (defaultThemeId) {
+      const availableThemes = await getAvailableThemes();
+      const matchingTheme = availableThemes.find((theme) => theme.id === defaultThemeId);
+      if (matchingTheme) {
+        await setThemeEnabled(defaultThemeId, true);
+        await setSiteTheme(mainSiteId, defaultThemeId);
+      }
+    }
+  }
 
   await advanceSetupLifecycleTo("ready");
   trace("setup", "setup save completed successfully");

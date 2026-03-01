@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   userCan: vi.fn(),
   createKernelForRequest: vi.fn(),
   ensureSiteCommentTables: vi.fn(),
+  getSiteBooleanSetting: vi.fn(),
   emitDomainEvent: vi.fn(),
   createId: vi.fn(),
   dbExecute: vi.fn(),
@@ -20,6 +21,10 @@ vi.mock("@/lib/plugin-runtime", () => ({
 
 vi.mock("@/lib/site-comment-tables", () => ({
   ensureSiteCommentTables: mocks.ensureSiteCommentTables,
+}));
+
+vi.mock("@/lib/cms-config", () => ({
+  getSiteBooleanSetting: mocks.getSiteBooleanSetting,
 }));
 
 vi.mock("@/lib/domain-dispatch", () => ({
@@ -52,11 +57,18 @@ describe("comments spine invariants", () => {
     mocks.userCan.mockReset();
     mocks.createKernelForRequest.mockReset();
     mocks.ensureSiteCommentTables.mockReset();
+    mocks.getSiteBooleanSetting.mockReset();
     mocks.emitDomainEvent.mockReset();
     mocks.createId.mockReset();
     mocks.dbExecute.mockReset();
     mocks.communicationInsertValues.mockReset();
     mocks.createId.mockReturnValue("comment-new-1");
+    mocks.getSiteBooleanSetting.mockImplementation(async (_siteId: string, key: string, fallback: boolean) => {
+      if (String(key).includes("allow_anonymous_comments")) return true;
+      if (String(key).includes("allow_authenticated_comments")) return true;
+      if (String(key).includes("show_comments_to_public")) return true;
+      return fallback;
+    });
   });
 
   it("rejects update when actor is neither author nor moderator", async () => {
@@ -135,8 +147,10 @@ describe("comments spine invariants", () => {
       commentsTable: "tooty_site_0_comments",
       commentMetaTable: "tooty_site_0_comment_meta",
     });
+    const { createComment, createTableBackedCommentProvider } = await import("@/lib/comments-spine");
+    const provider = createTableBackedCommentProvider("site-1");
     mocks.createKernelForRequest.mockResolvedValue({
-      getAllPluginCommentProviders: () => [],
+      getAllPluginCommentProviders: () => [{ pluginId: "tooty-comments", ...provider }],
       applyFilters: vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
       doAction: vi.fn(),
     });
@@ -147,7 +161,6 @@ describe("comments spine invariants", () => {
       }
       return { rows: [] };
     });
-    const { createComment } = await import("@/lib/comments-spine");
 
     await expect(
       createComment({
@@ -167,14 +180,15 @@ describe("comments spine invariants", () => {
       commentsTable: "tooty_site_0_comments",
       commentMetaTable: "tooty_site_0_comment_meta",
     });
+    const { createComment, createTableBackedCommentProvider } = await import("@/lib/comments-spine");
+    const provider = createTableBackedCommentProvider("site-1");
     mocks.createKernelForRequest.mockResolvedValue({
-      getAllPluginCommentProviders: () => [],
+      getAllPluginCommentProviders: () => [{ pluginId: "tooty-comments", ...provider }],
       applyFilters: vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
       doAction: vi.fn(),
     });
     const dbModule = await import("@/lib/db");
     (dbModule.default.query.domainPosts.findFirst as any).mockResolvedValueOnce(null);
-    const { createComment } = await import("@/lib/comments-spine");
 
     await expect(
       createComment({
@@ -185,5 +199,30 @@ describe("comments spine invariants", () => {
         body: "reply",
       }),
     ).rejects.toThrow(/context entry was not found for this site/i);
+  });
+
+  it("does not provision site comment tables when only resolving public capabilities", async () => {
+    const { getPublicCommentCapabilities, createTableBackedCommentProvider } = await import("@/lib/comments-spine");
+    const provider = createTableBackedCommentProvider("site-1");
+    mocks.createKernelForRequest.mockResolvedValue({
+      getAllPluginCommentProviders: () => [{ pluginId: "tooty-comments", ...provider }],
+    });
+
+    const capabilities = await getPublicCommentCapabilities("site-1");
+
+    expect(capabilities.commentsVisibleToPublic).toBe(true);
+    expect(capabilities.canPostAuthenticated).toBe(true);
+    expect(capabilities.canPostAnonymously).toBe(true);
+    expect(mocks.ensureSiteCommentTables).not.toHaveBeenCalled();
+  });
+
+  it("requires a plugin-registered comment provider and does not synthesize a core fallback", async () => {
+    mocks.createKernelForRequest.mockResolvedValue({
+      getAllPluginCommentProviders: () => [],
+    });
+    const { getPublicCommentCapabilities } = await import("@/lib/comments-spine");
+
+    await expect(getPublicCommentCapabilities("site-1")).rejects.toThrow(/no comment provider is registered/i);
+    expect(mocks.ensureSiteCommentTables).not.toHaveBeenCalled();
   });
 });

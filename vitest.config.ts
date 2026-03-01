@@ -14,7 +14,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
-      include: ["app/api/uploadImage/route.ts", "lib/uploadSmart.tsx", "middleware.ts"],
+      include: ["app/api/uploadImage/route.ts", "lib/uploadSmart.tsx", "proxy.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

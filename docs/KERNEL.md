@@ -10,6 +10,14 @@ The kernel is the extension runtime. Everything else integrates through it.
 2. Register and execute filter hooks.
 3. Register menu locations and merge menu items.
 4. Guarantee deterministic execution through priority ordering.
+5. Preserve generic extension contracts instead of carrying plugin-specific one-off behavior.
+
+## Governance Constraints
+
+- Kernel hooks and filters are shared platform contracts, not escape hatches for one plugin or one theme.
+- Do not add plugin-specific or theme-specific hook semantics that only exist to satisfy a single extension.
+- New hook/filter surfaces should be generic, reusable, and justified at the platform level.
+- If a governance-sensitive capability needs a hard kill switch, prefer a core-team-controlled spine service plugin boundary over embedding that behavior directly into kernel-specific special cases.
 
 ## Core types
 

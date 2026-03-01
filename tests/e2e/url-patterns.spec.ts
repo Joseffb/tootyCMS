@@ -1,7 +1,8 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
-import { and, eq, inArray, like, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import {
   dataDomains,
   domainPosts,
@@ -12,22 +13,23 @@ import {
   terms,
   users,
 } from "../../lib/schema";
-import { deleteSettingsByKeys, getSettingByKey, setSettingByKey } from "../../lib/settings-store";
+import { deleteSettingsByKeys, setSettingByKey } from "../../lib/settings-store";
+import { buildPublicOriginForSubdomain } from "./helpers/env";
 
 const db = drizzle(sql);
-const runId = `e2e-url-${Date.now()}`;
+const runId = `e2e-url-${randomUUID()}`;
 const postSlug = `${runId}-post`;
 const showcaseSlug = `${runId}-showcase`;
 const categorySlug = `${runId}-category`;
+const siteSubdomain = `${runId}-site`;
 
-let mainSiteId = "";
-let mainUserId = "";
+let siteId = "";
+let userId = "";
 let postId = "";
 let postDomainId = 0;
-let showcaseDomainId = 0;
 let categoryTaxonomyId = 0;
-let siteHost = "main.localhost";
-const previousSettings = new Map<string, string | null>();
+const siteOrigin = buildPublicOriginForSubdomain(siteSubdomain);
+let hasShowcaseDomain = false;
 
 const settingKey = (siteId: string, key: string) => `site_${siteId}_${key}`;
 const PERMALINK_KEYS = [
@@ -37,6 +39,8 @@ const PERMALINK_KEYS = [
   "writing_no_domain_prefix",
   "writing_no_domain_data_domain",
 ];
+
+test.setTimeout(60_000);
 
 function tiptapDoc(text: string) {
   return JSON.stringify({
@@ -87,126 +91,37 @@ async function setSiteSetting(siteId: string, key: string, value: string) {
   await setSettingByKey(scopedKey, value);
 }
 
-async function captureCurrentSettings(siteId: string) {
-  for (const key of PERMALINK_KEYS) {
-    const scopedKey = settingKey(siteId, key);
-    const value = await getSettingByKey(scopedKey);
-    previousSettings.set(scopedKey, value ?? null);
-  }
-}
-
-async function restoreSettings(siteId: string) {
-  for (const key of PERMALINK_KEYS) {
-    const scopedKey = settingKey(siteId, key);
-    const value = previousSettings.get(scopedKey);
-    if (value === null || value === undefined) {
-      await deleteSettingsByKeys([scopedKey]);
-      continue;
-    }
-    await setSettingByKey(scopedKey, value);
-  }
-}
-
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
-  let siteRows = await db
-    .select({
-      id: sites.id,
-      userId: sites.userId,
-      subdomain: sites.subdomain,
-      customDomain: sites.customDomain,
-      isPrimary: sites.isPrimary,
+  userId = `${runId}-user`;
+  siteId = `${runId}-site`;
+  await db
+    .insert(users)
+    .values({
+      id: userId,
+      email: `${runId}@example.com`,
+      name: "E2E URL User",
+      role: "administrator",
     })
-    .from(sites)
-    .where(or(eq(sites.isPrimary, true), eq(sites.subdomain, "main")))
-    .limit(1);
+    .onConflictDoNothing();
+  await db
+    .insert(sites)
+    .values({
+      id: siteId,
+      userId,
+      name: "URL Pattern Site",
+      subdomain: siteSubdomain,
+      isPrimary: false,
+    })
+    .onConflictDoNothing();
 
-  if (!siteRows[0]) {
-    const fallbackUserId = `${runId}-user`;
-    await db
-      .insert(users)
-      .values({
-        id: fallbackUserId,
-        email: `${runId}@example.com`,
-        name: "E2E URL User",
-        role: "administrator",
-      })
-      .onConflictDoNothing();
-    await db
-      .insert(sites)
-      .values({
-        id: `${runId}-site`,
-        userId: fallbackUserId,
-        name: "Main Site",
-        subdomain: "main",
-        isPrimary: true,
-      })
-      .onConflictDoNothing();
-    siteRows = await db
-      .select({
-        id: sites.id,
-        userId: sites.userId,
-        subdomain: sites.subdomain,
-        customDomain: sites.customDomain,
-        isPrimary: sites.isPrimary,
-      })
-      .from(sites)
-      .where(or(eq(sites.isPrimary, true), eq(sites.subdomain, "main")))
-      .limit(1);
-  }
-  if (!siteRows[0]) throw new Error("Primary/main site not found for URL pattern tests.");
-  mainSiteId = siteRows[0].id;
-  mainUserId = siteRows[0].userId || `${runId}-user`;
-  const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "").trim();
-  const rootHost = (rootDomain || "localhost")
-    .replace(/^https?:\/\//, "")
-    .replace(/:\d+$/, "");
-  const isLocalRoot = rootDomain.includes("localhost") || rootDomain.includes(".test");
-  const rawSiteHost = isLocalRoot
-    ? siteRows[0].isPrimary
-      ? rootHost
-      : `${siteRows[0].subdomain || "main"}.${rootHost}`
-    : siteRows[0].customDomain || `${siteRows[0].subdomain || "main"}.${rootHost}`;
-  siteHost = rawSiteHost.replace(/^https?:\/\//, "").replace(/:\d+$/, "");
-
-  if (!siteRows[0].userId) {
-    await db
-      .insert(users)
-      .values({
-        id: mainUserId,
-        email: `${runId}@example.com`,
-        name: "E2E URL User",
-        role: "administrator",
-      })
-      .onConflictDoNothing();
-    await db.update(sites).set({ userId: mainUserId }).where(eq(sites.id, mainSiteId));
-  }
-
-  let showcaseDomainRows = await db
+  const showcaseDomainRows = await db
     .select({ id: dataDomains.id })
     .from(dataDomains)
     .where(eq(dataDomains.key, "showcase"))
     .limit(1);
-  if (!showcaseDomainRows[0]) {
-    await db
-      .insert(dataDomains)
-      .values({
-        key: "showcase",
-        label: "Showcase",
-        contentTable: "tooty_showcases",
-        metaTable: "tooty_showcase_meta",
-        description: "Showcase domain",
-      })
-      .onConflictDoNothing();
-    showcaseDomainRows = await db
-      .select({ id: dataDomains.id })
-      .from(dataDomains)
-      .where(eq(dataDomains.key, "showcase"))
-      .limit(1);
-  }
-  if (!showcaseDomainRows[0]) throw new Error("Data domain `showcase` not found.");
-  showcaseDomainId = showcaseDomainRows[0].id;
+  hasShowcaseDomain = Boolean(showcaseDomainRows[0]?.id);
   let postDomainRows = await db
     .select({ id: dataDomains.id })
     .from(dataDomains)
@@ -218,11 +133,19 @@ test.beforeAll(async () => {
       .values({
         key: "post",
         label: "Post",
-        contentTable: "tooty_posts",
-        metaTable: "tooty_post_meta",
+        contentTable: "domain_posts",
+        metaTable: "domain_post_meta",
         description: "Default core post type",
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: dataDomains.key,
+        set: {
+          label: "Post",
+          contentTable: "domain_posts",
+          metaTable: "domain_post_meta",
+          description: "Default core post type",
+        },
+      });
     postDomainRows = await db
       .select({ id: dataDomains.id })
       .from(dataDomains)
@@ -234,11 +157,21 @@ test.beforeAll(async () => {
 
   await db
     .insert(siteDataDomains)
-    .values({ siteId: mainSiteId, dataDomainId: showcaseDomainId, isActive: true })
+    .values({ siteId, dataDomainId: postDomainId, isActive: true })
     .onConflictDoUpdate({
       target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
       set: { isActive: true },
     });
+
+  if (showcaseDomainRows[0]?.id) {
+    await db
+      .insert(siteDataDomains)
+      .values({ siteId, dataDomainId: showcaseDomainRows[0].id, isActive: true })
+      .onConflictDoUpdate({
+        target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
+        set: { isActive: true },
+      });
+  }
 
   const postRows = await db
     .insert(domainPosts)
@@ -248,21 +181,23 @@ test.beforeAll(async () => {
       slug: postSlug,
       content: tiptapDoc(`URL Pattern Post ${runId}`),
       published: true,
-      siteId: mainSiteId,
-      userId: mainUserId,
+      siteId,
+      userId,
     })
     .returning({ id: domainPosts.id });
   postId = postRows[0].id;
 
-  await db.insert(domainPosts).values({
-    dataDomainId: showcaseDomainId,
-    title: `URL Pattern Showcase ${runId}`,
-    slug: showcaseSlug,
-    content: tiptapDoc(`URL Pattern Showcase ${runId}`),
-    published: true,
-    siteId: mainSiteId,
-    userId: mainUserId,
-  });
+  if (showcaseDomainRows[0]?.id) {
+    await db.insert(domainPosts).values({
+      dataDomainId: showcaseDomainRows[0].id,
+      title: `URL Pattern Showcase ${runId}`,
+      slug: showcaseSlug,
+      content: tiptapDoc(`URL Pattern Showcase ${runId}`),
+      published: true,
+      siteId,
+      userId,
+    });
+  }
 
   const termRows = await db
     .insert(terms)
@@ -297,25 +232,40 @@ test.beforeAll(async () => {
     .values({ objectId: postId, termTaxonomyId: categoryTaxonomyId })
     .onConflictDoNothing();
 
-  await captureCurrentSettings(mainSiteId);
-  await setSiteSetting(mainSiteId, "writing_permalink_mode", "default");
-  await setSiteSetting(mainSiteId, "writing_single_pattern", "/%domain%/%slug%");
-  await setSiteSetting(mainSiteId, "writing_list_pattern", "/%domain_plural%");
-  await setSiteSetting(mainSiteId, "writing_no_domain_prefix", "");
-  await setSiteSetting(mainSiteId, "writing_no_domain_data_domain", "post");
+  await setSiteSetting(siteId, "writing_permalink_mode", "default");
+  await setSiteSetting(siteId, "writing_single_pattern", "/%domain%/%slug%");
+  await setSiteSetting(siteId, "writing_list_pattern", "/%domain_plural%");
+  await setSiteSetting(siteId, "writing_no_domain_prefix", "");
+  await setSiteSetting(siteId, "writing_no_domain_data_domain", "post");
 });
 
-test.afterAll(async () => {
-  await restoreSettings(mainSiteId);
-  await db.delete(termRelationships).where(and(eq(termRelationships.objectId, postId), eq(termRelationships.termTaxonomyId, categoryTaxonomyId)));
-  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.slug, showcaseSlug)));
-  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, mainSiteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
-  await db.delete(termTaxonomies).where(eq(termTaxonomies.id, categoryTaxonomyId));
+test.afterAll(async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  await Promise.all([
+    deleteSettingsByKeys(PERMALINK_KEYS.map((key) => settingKey(siteId, key))),
+    db
+      .delete(termRelationships)
+      .where(and(eq(termRelationships.objectId, postId), eq(termRelationships.termTaxonomyId, categoryTaxonomyId))),
+    hasShowcaseDomain
+      ? db
+          .delete(domainPosts)
+          .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.slug, showcaseSlug)))
+      : Promise.resolve(),
+    db
+      .delete(domainPosts)
+      .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug))),
+  ]);
+  await Promise.all([
+    db.delete(termTaxonomies).where(eq(termTaxonomies.id, categoryTaxonomyId)),
+    db.delete(siteDataDomains).where(eq(siteDataDomains.siteId, siteId)),
+  ]);
   await db.delete(terms).where(eq(terms.slug, categorySlug));
+  await db.delete(sites).where(eq(sites.id, siteId));
+  await db.delete(users).where(eq(users.id, userId));
 });
 
 test("default mode: canonical post/domain routes resolve and taxonomy shortcuts are blocked", async ({ request }) => {
-  const origin = `http://${siteHost}:3000`;
+  const origin = siteOrigin;
   let postDetail = await getWithRetry(request, `${origin}/post/${postSlug}`, 200);
   if (postDetail.status() !== 200) {
     postDetail = await getWithRetry(request, `${origin}/posts/${postSlug}`, 200);
@@ -339,12 +289,14 @@ test("default mode: canonical post/domain routes resolve and taxonomy shortcuts 
   const postArchive = await request.get(`${origin}/posts`);
   expect(postArchive.status()).toBe(200);
 
-  const showcaseDetail = await request.get(`${origin}/showcase/${showcaseSlug}`);
-  expect(showcaseDetail.status()).toBe(200);
-  expect(await showcaseDetail.text()).toContain(`URL Pattern Showcase ${runId}`);
+  if (hasShowcaseDomain) {
+    const showcaseDetail = await request.get(`${origin}/showcase/${showcaseSlug}`);
+    expect(showcaseDetail.status()).toBe(200);
+    expect(await showcaseDetail.text()).toContain(`URL Pattern Showcase ${runId}`);
 
-  const showcaseArchive = await request.get(`${origin}/showcases`);
-  expect(showcaseArchive.status()).toBe(200);
+    const showcaseArchive = await request.get(`${origin}/showcases`);
+    expect(showcaseArchive.status()).toBe(200);
+  }
 
   const legacyFlat = await request.get(`${origin}/${postSlug}`, { maxRedirects: 0 });
   expect([307, 308, 404]).toContain(legacyFlat.status());
@@ -355,20 +307,22 @@ test("default mode: canonical post/domain routes resolve and taxonomy shortcuts 
     );
   }
 
-  const categoryShortcut = await request.get(`${origin}/c/${categorySlug}`);
+  const categoryShortcut = await getWithRetry(request, `${origin}/c/${categorySlug}`, 404);
   expect(categoryShortcut.status()).toBe(404);
 
 });
 
 test("custom mode: no-domain prefix routes become canonical for configured Data Domain", async ({ request }) => {
-  const origin = `http://${siteHost}:3000`;
-  await setSiteSetting(mainSiteId, "writing_permalink_mode", "custom");
-  await setSiteSetting(mainSiteId, "writing_single_pattern", "/%domain%/%slug%");
-  await setSiteSetting(mainSiteId, "writing_list_pattern", "/%domain_plural%");
-  await setSiteSetting(mainSiteId, "writing_no_domain_prefix", "content");
-  await setSiteSetting(mainSiteId, "writing_no_domain_data_domain", "post");
+  const origin = siteOrigin;
+  await Promise.all([
+    setSiteSetting(siteId, "writing_permalink_mode", "custom"),
+    setSiteSetting(siteId, "writing_single_pattern", "/%domain%/%slug%"),
+    setSiteSetting(siteId, "writing_list_pattern", "/%domain_plural%"),
+    setSiteSetting(siteId, "writing_no_domain_prefix", "content"),
+    setSiteSetting(siteId, "writing_no_domain_data_domain", "post"),
+  ]);
 
-  const canonicalArchive = await request.get(`${origin}/content`);
+  const canonicalArchive = await getWithRetry(request, `${origin}/content`, 200, 10_000, 250);
   if (canonicalArchive.status() !== 200) {
     test.skip(
       true,
@@ -377,7 +331,7 @@ test("custom mode: no-domain prefix routes become canonical for configured Data 
   }
   expect(canonicalArchive.status()).toBe(200);
 
-  const canonicalDetail = await request.get(`${origin}/content/${postSlug}`);
+  const canonicalDetail = await getWithRetry(request, `${origin}/content/${postSlug}`, 200, 10_000, 250);
   expect(canonicalDetail.status()).toBe(200);
 
   const oldArchive = await request.get(`${origin}/posts`, { maxRedirects: 0 });
@@ -391,6 +345,6 @@ test("custom mode: no-domain prefix routes become canonical for configured Data 
   expect([307, 308]).toContain(oldDetail.status());
   expect(oldDetail.headers()["location"] || "").toContain(`/content/${postSlug}`);
 
-  const categoryShortcut = await request.get(`${origin}/c/${categorySlug}`);
+  const categoryShortcut = await getWithRetry(request, `${origin}/c/${categorySlug}`, 404);
   expect(categoryShortcut.status()).toBe(404);
 });

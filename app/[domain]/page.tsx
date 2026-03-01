@@ -55,6 +55,11 @@ interface Data {
 
 
 export async function generateStaticParams() {
+  const installState = await getInstallState();
+  if (installState.setupRequired || !installState.dbReachable || !installState.hasSites) {
+    return [];
+  }
+
   let allSites: Array<{ subdomain: string | null; customDomain: string | null }> = [];
   try {
     allSites = await db.query.sites.findMany({
@@ -158,7 +163,6 @@ export default async function SiteHomePage({ params }: { params: Params }) {
     const html = renderThemeTemplate(themedTemplate.template, {
       theme_header: themedTemplate.partials?.header || "",
       theme_footer: themedTemplate.partials?.footer || "",
-      theme_comments: themedTemplate.partials?.comments || "",
       theme_comment_item: themedTemplate.partials?.commentItem || "",
       theme_password: themedTemplate.partials?.password || "",
       site: {

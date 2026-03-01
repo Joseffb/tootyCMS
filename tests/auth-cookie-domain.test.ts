@@ -6,7 +6,11 @@ describe("auth local cookie domain", () => {
     expect(deriveLocalCookieDomainForUrl("http://localhost:3000")).toBeUndefined();
   });
 
-  it("uses host-only cookies when NEXTAUTH_URL host already has local subdomain", () => {
-    expect(deriveLocalCookieDomainForUrl("http://app.localhost:3000")).toBeUndefined();
+  it("uses host-only cookies when NEXTAUTH_URL is the local root host", () => {
+    expect(deriveLocalCookieDomainForUrl("http://localhost:3000")).toBeUndefined();
+  });
+
+  it("uses host-only cookies for any local admin-style subdomain", () => {
+    expect(deriveLocalCookieDomainForUrl("http://portal.localhost:3000")).toBeUndefined();
   });
 });

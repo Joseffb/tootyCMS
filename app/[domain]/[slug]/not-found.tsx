@@ -50,7 +50,6 @@ export default async function NotFound() {
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
-        theme_comments: themeTemplate.partials?.comments || "",
         site: {
           id: data?.id || "",
           name: data?.name || "Tooty Site",

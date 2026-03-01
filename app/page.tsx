@@ -6,6 +6,7 @@ import Script from "next/script";
 import { getInstallState } from "@/lib/install-state";
 import { redirect } from "next/navigation";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 export const metadata: Metadata = {
   title: "Tooty CMS",
@@ -39,7 +40,10 @@ export default async function RootPage() {
       {themeAssets.styles.map((href: string) => (
         <link key={href} rel="stylesheet" href={href} />
       ))}
-      <FrontendAuthBridge />
+      <FrontendAuthBridge
+        adminPathAlias={getAdminPathAlias()}
+        rootDomain={process.env.NEXT_PUBLIC_ROOT_DOMAIN || ""}
+      />
       <SiteHomePage params={Promise.resolve({ domain: mainDomain })} />
       {themeAssets.scripts.map((src: string) => (
         <Script key={src} src={src} strategy="afterInteractive" />

@@ -85,6 +85,11 @@ export type PluginContentTypeRegistration = {
   label?: string;
   description?: string;
   showInMenu?: boolean;
+  parentKey?: string;
+  parentMetaKey?: string;
+  embedHandleMetaKey?: string;
+  workflowStates?: string[];
+  mediaFieldKeys?: string[];
 };
 
 export type PluginServerHandlerRegistration = {

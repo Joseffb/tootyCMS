@@ -48,13 +48,16 @@ function collectAllowedOrigins() {
     const portSuffix = !rootHasPort && localLike && nextAuthPort ? `:${nextAuthPort}` : "";
 
     origins.add(rootHasPort ? rootDomain : `${rootHostOnly}${portSuffix}`);
-    origins.add(`app.${rootHostOnly}${portSuffix}`);
   }
 
   return [...origins].filter(Boolean);
 }
 
 const nextConfig = {
+  poweredByHeader: false,
+  ...(typeof process.env.NEXT_DIST_DIR === "string" && process.env.NEXT_DIST_DIR.trim()
+    ? { distDir: process.env.NEXT_DIST_DIR.trim() }
+    : {}),
   turbopack: {
     root: __dirname,
   },

@@ -36,6 +36,21 @@ export type PluginMenuConfig = {
   order?: number;
 };
 
+export type PluginCollectionContentModel = {
+  kind: "collection";
+  parentTypeKey: string;
+  childTypeKey: string;
+  childParentMetaKey: string;
+  childParentKeyMetaKey?: string;
+  parentHandleMetaKey: string;
+  workflowMetaKey: string;
+  orderMetaKey: string;
+  mediaMetaKey?: string;
+  ctaTextMetaKey?: string;
+  ctaUrlMetaKey?: string;
+  workflowStates?: string[];
+};
+
 export type PluginContract = {
   kind: "plugin";
   id: string;
@@ -64,6 +79,7 @@ export type PluginContract = {
   menu?: PluginMenuConfig;
   settingsMenu?: PluginMenuConfig;
   settingsFields?: ExtensionSettingsField[];
+  contentModel?: PluginCollectionContentModel;
   editor?: {
     snippets?: PluginEditorSnippet[];
   };
@@ -148,6 +164,54 @@ function cleanField(field: unknown): ExtensionSettingsField | null {
   };
 }
 
+function normalizeMetaKey(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]/g, "")
+    .slice(0, 80);
+}
+
+function cleanCollectionContentModel(input: unknown): PluginCollectionContentModel | undefined {
+  const candidate = asRecord(input);
+  if (String(candidate.kind ?? "").trim().toLowerCase() !== "collection") return undefined;
+
+  const parentTypeKey = normalizeExtensionId(String(candidate.parentTypeKey ?? ""));
+  const childTypeKey = normalizeExtensionId(String(candidate.childTypeKey ?? ""));
+  const childParentMetaKey = normalizeMetaKey(candidate.childParentMetaKey);
+  const parentHandleMetaKey = normalizeMetaKey(candidate.parentHandleMetaKey);
+  const workflowMetaKey = normalizeMetaKey(candidate.workflowMetaKey);
+  const orderMetaKey = normalizeMetaKey(candidate.orderMetaKey);
+  if (!parentTypeKey || !childTypeKey || !childParentMetaKey || !parentHandleMetaKey || !workflowMetaKey || !orderMetaKey) {
+    return undefined;
+  }
+
+  const workflowStates = Array.isArray(candidate.workflowStates)
+    ? Array.from(
+        new Set(
+          candidate.workflowStates
+            .map((entry) => normalizeExtensionId(String(entry ?? "")))
+            .filter(Boolean),
+        ),
+      )
+    : undefined;
+
+  return {
+    kind: "collection",
+    parentTypeKey,
+    childTypeKey,
+    childParentMetaKey,
+    childParentKeyMetaKey: normalizeMetaKey(candidate.childParentKeyMetaKey) || undefined,
+    parentHandleMetaKey,
+    workflowMetaKey,
+    orderMetaKey,
+    mediaMetaKey: normalizeMetaKey(candidate.mediaMetaKey) || undefined,
+    ctaTextMetaKey: normalizeMetaKey(candidate.ctaTextMetaKey) || undefined,
+    ctaUrlMetaKey: normalizeMetaKey(candidate.ctaUrlMetaKey) || undefined,
+    workflowStates: workflowStates?.length ? workflowStates : undefined,
+  };
+}
+
 export function validatePluginContract(input: unknown, fallbackId: string): PluginContract | null {
   const candidate = asRecord(input);
   const id = normalizeExtensionId(String(candidate.id ?? fallbackId));
@@ -224,6 +288,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
         }
       : undefined,
     settingsFields: settingsRaw.map(cleanField).filter((field): field is ExtensionSettingsField => Boolean(field)),
+    contentModel: cleanCollectionContentModel(candidate.contentModel),
     editor: editor
       ? {
           snippets: snippetsRaw.flatMap<PluginEditorSnippet>((snippet, index) => {

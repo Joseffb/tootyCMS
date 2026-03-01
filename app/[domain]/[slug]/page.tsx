@@ -152,7 +152,6 @@ export default async function SitePostPage({
             const html = renderThemeTemplate(themeTemplate.template, {
               theme_header: themeTemplate.partials?.header || "",
               theme_footer: themeTemplate.partials?.footer || "",
-              theme_comments: themeTemplate.partials?.comments || "",
               site: {
                 id: site.id,
                 name: site.name || "Tooty Site",
@@ -336,7 +335,6 @@ export default async function SitePostPage({
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
-        theme_comments: themeTemplate.partials?.comments || "",
         site: {
           id: (data as any)?.site?.id,
           name: (data as any)?.site?.name || "Tooty Site",
@@ -357,8 +355,6 @@ export default async function SitePostPage({
           content_html: toThemePostHtml((data as any)?.content || ""),
           use_comments: useComments,
         },
-        comments_enabled: commentsPluginEnabled,
-        comments_gate_enabled: commentsGateEnabled,
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
         content: toThemePostHtml((data as any)?.content || ""),
         links: {

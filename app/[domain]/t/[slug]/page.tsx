@@ -63,7 +63,6 @@ export default async function TagArchivePage({ params }: { params: Params }) {
       const html = renderThemeTemplate(tagTemplate.template, {
         theme_header: tagTemplate.partials?.header || "",
         theme_footer: tagTemplate.partials?.footer || "",
-        theme_comments: tagTemplate.partials?.comments || "",
         theme_comment_item: tagTemplate.partials?.commentItem || "",
         theme_password: tagTemplate.partials?.password || "",
         site: {

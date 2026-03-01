@@ -20,6 +20,34 @@ function normalize(value: unknown) {
   return String(value || "").trim();
 }
 
+function hasSessionCookie(request: Request) {
+  const cookieHeader = String(request.headers.get("cookie") || "");
+  return (
+    cookieHeader.includes("next-auth.session-token=") ||
+    cookieHeader.includes("__Secure-next-auth.session-token=")
+  );
+}
+
+function hasBridgeHeader(request: Request) {
+  return Boolean(String(request.headers.get("x-tooty-theme-bridge") || "").trim());
+}
+
+function isTransientDatabaseError(error: unknown) {
+  const message = String((error as { message?: unknown })?.message || "").toLowerCase();
+  return (
+    message.includes("deadlock detected") ||
+    message.includes("could not serialize access") ||
+    message.includes("concurrent update") ||
+    message.includes("lock timeout") ||
+    message.includes("statement timeout")
+  );
+}
+
+async function waitBeforeRetry(attempt: number) {
+  const delayMs = 40 * (attempt + 1);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 function parseContextType(value: unknown): CommentContextType | undefined {
   const normalized = normalize(value).toLowerCase();
   if (!normalized) return undefined;
@@ -187,10 +215,12 @@ async function enrichCommentDisplayNames(items: any[]) {
 }
 
 export async function GET(request: Request) {
-  const session = await getSession();
-  const bridgeUser = await resolveBridgeUser(request);
+  const session = hasSessionCookie(request) ? await getSession() : null;
+  const bridgeUser = hasBridgeHeader(request) ? await resolveBridgeUser(request) : null;
   const url = new URL(request.url);
   const siteId = normalize(url.searchParams.get("siteId"));
+  const viewMode = normalize(url.searchParams.get("view")).toLowerCase();
+  const capabilitiesOnly = viewMode === "capabilities";
   const providerId = normalize(url.searchParams.get("providerId")) || undefined;
   const contextType = parseContextType(url.searchParams.get("contextType"));
   const contextId = normalize(url.searchParams.get("contextId")) || undefined;
@@ -198,107 +228,121 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, error: "siteId is required." }, { status: 400 });
   }
 
-  try {
-    const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
-    const sessionUserId = normalize(session?.user?.id);
-    const bridgeUserId = normalize(bridgeUser?.id);
-    const isAuthenticated = Boolean(sessionUserId || bridgeUserId);
-    const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
-    const canPostAsKnownUser = Boolean(validAuthorUserId);
-    if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:comments.auth] permission inputs", {
-        hasSessionUser: Boolean(normalize(session?.user?.id)),
-        hasBridgeUser: Boolean(bridgeUser?.id),
-        isAuthenticated,
-        canPostAsKnownUser,
-      });
-    }
-    const capabilities = await getPublicCommentCapabilities(siteId, providerId);
-    const canViewComments = passwordAccess
-      ? true
-      : await canUserViewComments(siteId, validAuthorUserId || null, providerId);
-    if (!canViewComments) {
-      return NextResponse.json({
-        ok: true,
-        items: [],
-        permissions: {
-          ...capabilities,
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
+      const sessionUserId = normalize(session?.user?.id);
+      const bridgeUserId = normalize(bridgeUser?.id);
+      const isAuthenticated = Boolean(sessionUserId || bridgeUserId);
+      const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
+      const canPostAsKnownUser = Boolean(validAuthorUserId);
+      if (process.env.TRACE_PROFILE === "Test") {
+        console.info("[trace:Test:comments.auth] permission inputs", {
+          hasSessionUser: Boolean(normalize(session?.user?.id)),
+          hasBridgeUser: Boolean(bridgeUser?.id),
           isAuthenticated,
-          canPostAsUser: false,
-          canViewComments: false,
-        },
-      });
-    }
-    const listInput = {
-      providerId,
-      siteId,
-      contextType,
-      contextId,
-      status: parseStatus(url.searchParams.get("status")),
-      limit: Number(url.searchParams.get("limit") || 50),
-      offset: Number(url.searchParams.get("offset") || 0),
-    };
-    if (passwordAccess && contextType && contextId) {
-      const items = await enrichCommentDisplayNames(await listPublicComments(listInput));
-      return NextResponse.json({
-        ok: true,
-        items,
-        permissions: {
-          ...capabilities,
-          isAuthenticated,
-          commentsVisibleToPublic: true,
-          canPostAuthenticated: true,
-          canPostAnonymously: true,
-          canPostAsUser: canPostAsKnownUser,
-          canViewComments: true,
-        },
-      });
-    }
-    if (isAuthenticated && validAuthorUserId) {
-      try {
-        const items = await listComments({
-          actorUserId: validAuthorUserId,
-          ...listInput,
+          canPostAsKnownUser,
         });
-        const itemsWithDisplayNames = await enrichCommentDisplayNames(items);
-        return NextResponse.json({
-          ok: true,
-          items: itemsWithDisplayNames,
-          permissions: {
-            ...capabilities,
-            isAuthenticated,
-            canPostAsUser: canPostAsKnownUser && Boolean(capabilities.canPostAuthenticated),
-            canViewComments,
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        const fallbackToPublic = message.includes("Forbidden: missing capability site.comment.read") && contextType && contextId;
-        if (!fallbackToPublic) throw error;
       }
-    }
-    const items = await enrichCommentDisplayNames(await listPublicComments(listInput));
-    return NextResponse.json({
-      ok: true,
-      items,
-      permissions: {
+      const capabilities = await getPublicCommentCapabilities(siteId, providerId);
+      const canViewComments = passwordAccess
+        ? true
+        : await canUserViewComments(siteId, validAuthorUserId || null, providerId);
+      const permissions = {
         ...capabilities,
         isAuthenticated,
         canPostAsUser: canPostAsKnownUser && Boolean(capabilities.canPostAuthenticated),
         canViewComments,
-      },
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Failed to list comments." },
-      { status: 400 },
-    );
+      };
+      if (!canViewComments) {
+        return NextResponse.json({
+          ok: true,
+          items: [],
+          permissions: { ...permissions, canPostAsUser: false, canViewComments: false },
+        });
+      }
+      if (capabilitiesOnly) {
+        return NextResponse.json({
+          ok: true,
+          items: [],
+          permissions: passwordAccess
+            ? {
+                ...permissions,
+                commentsVisibleToPublic: true,
+                canPostAuthenticated: true,
+                canPostAnonymously: true,
+                canPostAsUser: canPostAsKnownUser,
+                canViewComments: true,
+              }
+            : permissions,
+        });
+      }
+      const listInput = {
+        providerId,
+        siteId,
+        contextType,
+        contextId,
+        status: parseStatus(url.searchParams.get("status")),
+        limit: Number(url.searchParams.get("limit") || 50),
+        offset: Number(url.searchParams.get("offset") || 0),
+      };
+      if (passwordAccess && contextType && contextId) {
+        const items = await enrichCommentDisplayNames(await listPublicComments(listInput));
+        return NextResponse.json({
+          ok: true,
+          items,
+          permissions: {
+            ...permissions,
+            commentsVisibleToPublic: true,
+            canPostAuthenticated: true,
+            canPostAnonymously: true,
+            canPostAsUser: canPostAsKnownUser,
+            canViewComments: true,
+          },
+        });
+      }
+      if (isAuthenticated && validAuthorUserId) {
+        try {
+          const items = await listComments({
+            actorUserId: validAuthorUserId,
+            ...listInput,
+          });
+          const itemsWithDisplayNames = await enrichCommentDisplayNames(items);
+          return NextResponse.json({
+            ok: true,
+            items: itemsWithDisplayNames,
+            permissions,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          const fallbackToPublic = message.includes("Forbidden: missing capability site.comment.read") && contextType && contextId;
+          if (!fallbackToPublic) throw error;
+        }
+      }
+      const items = await enrichCommentDisplayNames(await listPublicComments(listInput));
+      return NextResponse.json({
+        ok: true,
+        items,
+        permissions,
+      });
+    } catch (error) {
+      if (isTransientDatabaseError(error) && attempt < 2) {
+        await waitBeforeRetry(attempt);
+        continue;
+      }
+      return NextResponse.json(
+        { ok: false, error: error instanceof Error ? error.message : "Failed to list comments." },
+        { status: 400 },
+      );
+    }
   }
+
+  return NextResponse.json({ ok: false, error: "Failed to list comments." }, { status: 400 });
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
-  const bridgeUser = await resolveBridgeUser(request);
+  const session = hasSessionCookie(request) ? await getSession() : null;
+  const bridgeUser = hasBridgeHeader(request) ? await resolveBridgeUser(request) : null;
   let body: Record<string, unknown> = {};
   try {
     body = (await request.json()) as Record<string, unknown>;
@@ -318,106 +362,115 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const capabilities = await getPublicCommentCapabilities(siteId, providerId);
-  const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
   const sessionUserId = normalize(session?.user?.id);
   const bridgeUserId = normalize(bridgeUser?.id);
   const isAuthenticated = Boolean(sessionUserId || bridgeUserId);
-  const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
-  const isAnonymous = !validAuthorUserId;
-  const resolvedProfileDisplayName = sessionUserId ? await resolveUserDisplayName(sessionUserId) : "";
-  const sessionDisplayName = resolveAuthenticatedDisplayName({
-    displayName:
-      resolvedProfileDisplayName ||
-      String(session?.user?.displayName || bridgeUser?.displayName || ""),
-    username: session?.user?.username || bridgeUser?.username || session?.user?.name || bridgeUser?.name || "",
-  });
-  const sessionEmail = normalize(session?.user?.email || bridgeUser?.email).toLowerCase();
-  const effectiveAuthorName = authorName || (isAuthenticated ? sessionDisplayName : "");
-  const effectiveAuthorEmail = authorEmail || (isAuthenticated ? sessionEmail : "");
-  if (!passwordAccess && !isAnonymous && !capabilities.canPostAuthenticated) {
-    return NextResponse.json({ ok: false, error: "Signed-in comments are disabled." }, { status: 403 });
-  }
-  if (!passwordAccess && isAnonymous && !capabilities.canPostAnonymously) {
-    return NextResponse.json({ ok: false, error: "Anonymous comments are disabled." }, { status: 403 });
-  }
-  if (isAnonymous && capabilities.anonymousIdentityFields.name && !effectiveAuthorName) {
-    return NextResponse.json({ ok: false, error: "Name is required for anonymous comments." }, { status: 400 });
-  }
-  if (isAnonymous && capabilities.anonymousIdentityFields.email && !effectiveAuthorEmail) {
-    return NextResponse.json({ ok: false, error: "Email is required for anonymous comments." }, { status: 400 });
-  }
-  if (effectiveAuthorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(effectiveAuthorEmail)) {
-    return NextResponse.json({ ok: false, error: "Email is invalid." }, { status: 400 });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const capabilities = await getPublicCommentCapabilities(siteId, providerId);
+      const passwordAccess = await hasEntryPasswordAccess(siteId, contextType, contextId);
+      const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
+      const isAnonymous = !validAuthorUserId;
+      const resolvedProfileDisplayName = sessionUserId ? await resolveUserDisplayName(sessionUserId) : "";
+      const sessionDisplayName = resolveAuthenticatedDisplayName({
+        displayName:
+          resolvedProfileDisplayName ||
+          String(session?.user?.displayName || bridgeUser?.displayName || ""),
+        username: session?.user?.username || bridgeUser?.username || session?.user?.name || bridgeUser?.name || "",
+      });
+      const sessionEmail = normalize(session?.user?.email || bridgeUser?.email).toLowerCase();
+      const effectiveAuthorName = authorName || (isAuthenticated ? sessionDisplayName : "");
+      const effectiveAuthorEmail = authorEmail || (isAuthenticated ? sessionEmail : "");
+      if (!passwordAccess && !isAnonymous && !capabilities.canPostAuthenticated) {
+        return NextResponse.json({ ok: false, error: "Signed-in comments are disabled." }, { status: 403 });
+      }
+      if (!passwordAccess && isAnonymous && !capabilities.canPostAnonymously) {
+        return NextResponse.json({ ok: false, error: "Anonymous comments are disabled." }, { status: 403 });
+      }
+      if (isAnonymous && capabilities.anonymousIdentityFields.name && !effectiveAuthorName) {
+        return NextResponse.json({ ok: false, error: "Name is required for anonymous comments." }, { status: 400 });
+      }
+      if (isAnonymous && capabilities.anonymousIdentityFields.email && !effectiveAuthorEmail) {
+        return NextResponse.json({ ok: false, error: "Email is required for anonymous comments." }, { status: 400 });
+      }
+      if (effectiveAuthorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(effectiveAuthorEmail)) {
+        return NextResponse.json({ ok: false, error: "Email is invalid." }, { status: 400 });
+      }
+
+      const metadata: Record<string, unknown> =
+        body.metadata && typeof body.metadata === "object" ? (body.metadata as Record<string, unknown>) : {};
+      if (isAnonymous) {
+        if (effectiveAuthorName) {
+          metadata.author_name = effectiveAuthorName;
+          metadata.author_display_name = effectiveAuthorName;
+        }
+        if (effectiveAuthorEmail) metadata.author_email = effectiveAuthorEmail;
+      } else {
+        const signedInDisplayName = await resolveUserDisplayName(String(session?.user?.id || ""));
+        if (signedInDisplayName) {
+          metadata.author_display_name = signedInDisplayName;
+          metadata.author_name = signedInDisplayName;
+        }
+      }
+      const createPayload = {
+        providerId,
+        siteId,
+        contextType,
+        contextId,
+        body: commentBody,
+        parentId: normalize(body.parentId) || undefined,
+        status: parseStatus(body.status),
+      } as const;
+      if (passwordAccess) {
+        const item = await createComment({
+          actorUserId: validAuthorUserId,
+          ...createPayload,
+          metadata,
+          skipCapabilityChecks: true,
+        });
+        return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
+      }
+      try {
+        const item = await createComment({
+          actorUserId: validAuthorUserId,
+          ...createPayload,
+          metadata,
+        });
+        return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create comment.";
+        const shouldFallbackToAnonymous =
+          isAuthenticated &&
+          capabilities.canPostAnonymously &&
+          message.includes("Forbidden: missing capability site.comment.create");
+        if (!shouldFallbackToAnonymous) {
+          throw error;
+        }
+        // Signed-in user without create capability can still post as anonymous if provider allows it.
+        if (effectiveAuthorName) {
+          metadata.author_name = effectiveAuthorName;
+          metadata.author_display_name = effectiveAuthorName;
+        }
+        if (effectiveAuthorEmail) metadata.author_email = effectiveAuthorEmail;
+        const item = await createComment({
+          actorUserId: null,
+          ...createPayload,
+          metadata,
+        });
+        return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
+      }
+    } catch (error) {
+      if (isTransientDatabaseError(error) && attempt < 2) {
+        await waitBeforeRetry(attempt);
+        continue;
+      }
+      return NextResponse.json(
+        { ok: false, error: error instanceof Error ? error.message : "Failed to create comment." },
+        { status: 400 },
+      );
+    }
   }
 
-  try {
-    const metadata: Record<string, unknown> =
-      body.metadata && typeof body.metadata === "object" ? (body.metadata as Record<string, unknown>) : {};
-    if (isAnonymous) {
-      if (effectiveAuthorName) {
-        metadata.author_name = effectiveAuthorName;
-        metadata.author_display_name = effectiveAuthorName;
-      }
-      if (effectiveAuthorEmail) metadata.author_email = effectiveAuthorEmail;
-    } else {
-      const signedInDisplayName = await resolveUserDisplayName(String(session?.user?.id || ""));
-      if (signedInDisplayName) {
-        metadata.author_display_name = signedInDisplayName;
-        metadata.author_name = signedInDisplayName;
-      }
-    }
-    const createPayload = {
-      providerId,
-      siteId,
-      contextType,
-      contextId,
-      body: commentBody,
-      parentId: normalize(body.parentId) || undefined,
-      status: parseStatus(body.status),
-    } as const;
-    if (passwordAccess) {
-      const item = await createComment({
-        actorUserId: validAuthorUserId,
-        ...createPayload,
-        metadata,
-        skipCapabilityChecks: true,
-      });
-      return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
-    }
-    try {
-      const item = await createComment({
-        actorUserId: validAuthorUserId,
-        ...createPayload,
-        metadata,
-      });
-      return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to create comment.";
-      const shouldFallbackToAnonymous =
-        isAuthenticated &&
-        capabilities.canPostAnonymously &&
-        message.includes("Forbidden: missing capability site.comment.create");
-      if (!shouldFallbackToAnonymous) {
-        throw error;
-      }
-      // Signed-in user without create capability can still post as anonymous if provider allows it.
-      if (effectiveAuthorName) {
-        metadata.author_name = effectiveAuthorName;
-        metadata.author_display_name = effectiveAuthorName;
-      }
-      if (effectiveAuthorEmail) metadata.author_email = effectiveAuthorEmail;
-      const item = await createComment({
-        actorUserId: null,
-        ...createPayload,
-        metadata,
-      });
-      return NextResponse.json({ ok: true, item: { ...item, metadata: sanitizePublicCommentMetadata(item.metadata) } });
-    }
-  } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Failed to create comment." },
-      { status: 400 },
-    );
-  }
+  return NextResponse.json({ ok: false, error: "Failed to create comment." }, { status: 400 });
 }

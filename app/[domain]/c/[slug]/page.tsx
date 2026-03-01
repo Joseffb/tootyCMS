@@ -63,7 +63,6 @@ export default async function CategoryArchivePage({ params }: { params: Params }
       const html = renderThemeTemplate(categoryTemplate.template, {
         theme_header: categoryTemplate.partials?.header || "",
         theme_footer: categoryTemplate.partials?.footer || "",
-        theme_comments: categoryTemplate.partials?.comments || "",
         theme_comment_item: categoryTemplate.partials?.commentItem || "",
         theme_password: categoryTemplate.partials?.password || "",
         site: {

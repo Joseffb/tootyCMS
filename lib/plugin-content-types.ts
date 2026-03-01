@@ -28,6 +28,36 @@ function normalizeShowInMenu(value: unknown) {
   return value !== false;
 }
 
+function normalizeMetaKey(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]/g, "")
+    .slice(0, 80);
+}
+
+function normalizeWorkflowStates(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => normalizeDomainKey(String(entry ?? "")))
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeMediaFieldKeys(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => normalizeMetaKey(entry))
+        .filter(Boolean),
+    ),
+  );
+}
+
 async function ensurePluginContentType(
   pluginId: string,
   registration: PluginContentTypeRegistration,
@@ -38,6 +68,11 @@ async function ensurePluginContentType(
 
   const label = normalizeLabel(registration.label || "", key);
   const showInMenu = normalizeShowInMenu(registration.showInMenu);
+  const parentKey = normalizeDomainKey(registration.parentKey || "");
+  const parentMetaKey = normalizeMetaKey(registration.parentMetaKey);
+  const embedHandleMetaKey = normalizeMetaKey(registration.embedHandleMetaKey);
+  const workflowStates = normalizeWorkflowStates(registration.workflowStates);
+  const mediaFieldKeys = normalizeMediaFieldKeys(registration.mediaFieldKeys);
   let existing = await db.query.dataDomains.findFirst({
     where: eq(dataDomains.key, key),
     columns: {
@@ -101,6 +136,11 @@ async function ensurePluginContentType(
             pluginOwner: pluginId,
             pluginManaged: true,
             showInMenu,
+            ...(parentKey ? { parentKey } : {}),
+            ...(parentMetaKey ? { parentMetaKey } : {}),
+            ...(embedHandleMetaKey ? { embedHandleMetaKey } : {}),
+            ...(workflowStates.length ? { workflowStates } : {}),
+            ...(mediaFieldKeys.length ? { mediaFieldKeys } : {}),
           },
         })
         .onConflictDoNothing()
@@ -142,6 +182,11 @@ async function ensurePluginContentType(
             pluginOwner: pluginId,
             pluginManaged: true,
             showInMenu,
+            ...(parentKey ? { parentKey } : {}),
+            ...(parentMetaKey ? { parentMetaKey } : {}),
+            ...(embedHandleMetaKey ? { embedHandleMetaKey } : {}),
+            ...(workflowStates.length ? { workflowStates } : {}),
+            ...(mediaFieldKeys.length ? { mediaFieldKeys } : {}),
           },
           description: String(registration.description || "").trim(),
         })

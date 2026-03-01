@@ -87,6 +87,7 @@ import { canTransitionContentState, stateFromPublishedFlag } from "@/lib/content
 import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
 import { getSettingsByKeys, listSettingsByLikePatterns, setSettingByKey } from "@/lib/settings-store";
 import { getCommentProviderWritingOptions, hasEnabledCommentProvider } from "@/lib/comments-spine";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 function emitCmsLifecycleEvent(input: {
   name: "content_published" | "content_deleted" | "custom_event";
@@ -2602,6 +2603,14 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "") || "post";
+  const reservedAdminAlias = getAdminPathAlias();
+
+  if (noDomainPrefix === "app") {
+    return { error: "The `app` path is reserved for the admin system." };
+  }
+  if (noDomainPrefix === reservedAdminAlias) {
+    return { error: `The \`${reservedAdminAlias}\` path is reserved for the admin system.` };
+  }
 
   await Promise.all([
     setSiteBooleanSetting(site.id, "random_default_images_enabled", randomDefaultsEnabled),

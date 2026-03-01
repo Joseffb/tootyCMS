@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 function normalizeConfiguredHost(value: string) {
   return String(value || "")
@@ -62,11 +63,19 @@ function isAllowedAppCallback(rawUrl: string) {
 }
 
 function readLastSiteId(req: NextRequest) {
-  return String(req.cookies.get("tooty_last_site_id")?.value || "").trim();
+  return String(
+    req.cookies.get("cms_last_site_id")?.value ||
+      req.cookies.get("tooty_last_site_id")?.value ||
+      "",
+  ).trim();
 }
 
 function readLastAppPath(req: NextRequest) {
-  const value = String(req.cookies.get("tooty_last_app_path")?.value || "").trim();
+  const value = String(
+    req.cookies.get("cms_last_admin_path")?.value ||
+      req.cookies.get("tooty_last_app_path")?.value ||
+      "",
+  ).trim();
   if (!value.startsWith("/site/")) return "";
   return value;
 }
@@ -74,7 +83,7 @@ function readLastAppPath(req: NextRequest) {
 function setLastSiteId(res: NextResponse, siteId: string) {
   const normalized = String(siteId || "").trim();
   if (!normalized) return;
-  res.cookies.set("tooty_last_site_id", normalized, {
+  res.cookies.set("cms_last_site_id", normalized, {
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
     sameSite: "lax",
@@ -85,12 +94,20 @@ function setLastSiteId(res: NextResponse, siteId: string) {
 function setLastAppPath(res: NextResponse, appPath: string) {
   const normalized = String(appPath || "").trim();
   if (!normalized.startsWith("/site/")) return;
-  res.cookies.set("tooty_last_app_path", normalized, {
+  res.cookies.set("cms_last_admin_path", normalized, {
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
     sameSite: "lax",
     secure: false,
   });
+}
+
+function normalizeAdminAliasPath(path: string, adminPathAlias: string) {
+  const raw = String(path || "").trim() || "/";
+  if (raw === "/" || raw === "/app" || raw === `/${adminPathAlias}`) return "/";
+  if (raw.startsWith("/app/")) return raw.slice(4) || "/";
+  if (raw.startsWith(`/${adminPathAlias}/`)) return raw.slice(adminPathAlias.length + 1) || "/";
+  return raw;
 }
 
 export const config = {
@@ -99,7 +116,7 @@ export const config = {
   ],
 };
 
-export default async function middleware(req: NextRequest) {
+export default async function proxy(req: NextRequest) {
   const url = req.nextUrl;
   const path = url.pathname;
   const searchParams = url.searchParams.toString();
@@ -131,6 +148,7 @@ export default async function middleware(req: NextRequest) {
   };
   const normalizedRootDomain =
     normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
+  const adminPathAlias = getAdminPathAlias();
   traceEdge("middleware", "incoming request", {
     traceId,
     path,
@@ -154,13 +172,11 @@ export default async function middleware(req: NextRequest) {
   // Normalize Vercel preview deployment URLs.
   // Handles both "<branch>---<project>.vercel.app" and
   // "<project>-<hash>-<scope>.vercel.app" URL shapes by treating preview hosts
-  // as root-domain requests unless they explicitly target app.<root>.
+  // as root-domain requests.
   const vercelSuffix = process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX || "vercel.app";
   if (hostname.endsWith(`.${vercelSuffix}`)) {
     if (hostname.includes("---")) {
       hostname = `${hostname.split("---")[0]}.${normalizedRootDomain}`;
-    } else if (hostname.startsWith("app-")) {
-      hostname = `app.${normalizedRootDomain}`;
     } else {
       hostname = normalizedRootDomain;
     }
@@ -177,20 +193,21 @@ export default async function middleware(req: NextRequest) {
   const isRootDomain =
     hostname === "localhost" || hostname === normalizedRootDomain;
 
-  const isAppDomain = hostname === `app.${normalizedRootDomain}`;
+  // ✅ Keep setup route reachable on root domain.
+  if (isRootDomain && path.startsWith("/setup")) {
+    traceEdge("middleware", "preserve setup path on root", { traceId, to: fullPath });
+    return preserveWithTrace(fullPath);
+  }
 
-  // 🧠 APP subdomain
-  if (isAppDomain) {
-    const appPath = path.startsWith("/app")
-      ? path.replace(/^\/app/, "") || "/"
-      : path;
+  const externalAdminBase = `/app/${adminPathAlias}`;
+  const isExternalAdminPath =
+    path === externalAdminBase || path.startsWith(`${externalAdminBase}/`);
+
+  if (isRootDomain && isExternalAdminPath) {
+    const appPath = normalizeAdminAliasPath(path.replace(/^\/app/, ""), adminPathAlias);
     const appFullPath = `${appPath}${searchParams ? `?${searchParams}` : ""}`;
+    traceEdge("middleware", "rewrite external admin alias path on root", { traceId, to: `/app${appPath === "/" ? "" : appFullPath}` });
 
-    traceEdge("middleware", "app-domain route", { hostname, path });
-    if (appPath === "/setup") {
-      traceEdge("middleware", "allow setup on app-domain", { traceId, to: "/setup" });
-      return preserveWithTrace("/setup");
-    }
     const hasCookie = hasSessionCookie(req);
     const sessionToken = hasCookie
       ? await getToken({
@@ -202,57 +219,57 @@ export default async function middleware(req: NextRequest) {
     const forcePasswordChange = Boolean((sessionToken as any)?.forcePasswordChange);
     const isPublicBridgePath = appPath === "/theme-bridge-client" || appPath === "/theme-bridge-start";
     if (!isAuthenticated && appPath !== "/login" && !isPublicBridgePath) {
-      traceEdge("middleware", "redirect unauthenticated app user", { traceId, to: "/login" });
-      return redirectWithTrace("/login");
+      traceEdge("middleware", "redirect unauthenticated admin-path user", { traceId, to: `${externalAdminBase}/login` });
+      return redirectWithTrace(`${externalAdminBase}/login`);
     }
     if (isAuthenticated && appPath === "/login") {
       const callbackUrl = String(req.nextUrl.searchParams.get("callbackUrl") || "").trim();
       if (callbackUrl && isAllowedAppCallback(callbackUrl)) {
-        traceEdge("middleware", "redirect authenticated app user to callback", { traceId, to: callbackUrl });
+        traceEdge("middleware", "redirect authenticated admin-path user to callback", { traceId, to: callbackUrl });
         const res = NextResponse.redirect(callbackUrl);
         res.headers.set("x-trace-id", traceId);
         return res;
       }
-      traceEdge("middleware", "redirect authenticated app user", { traceId, to: "/" });
-      return redirectWithTrace("/");
+      traceEdge("middleware", "redirect authenticated admin-path user", { traceId, to: externalAdminBase });
+      return redirectWithTrace(externalAdminBase);
     }
     if (isAuthenticated && (appPath === "/" || appPath === "")) {
       const lastAppPath = readLastAppPath(req);
       if (lastAppPath) {
-        traceEdge("middleware", "redirect app-domain /app to last path", {
+        traceEdge("middleware", "redirect admin-path root to last path", {
           traceId,
-          to: `/app${lastAppPath}`,
+          to: `${externalAdminBase}${lastAppPath}`,
         });
-        return redirectWithTrace(`/app${lastAppPath}`);
+        return redirectWithTrace(`${externalAdminBase}${lastAppPath}`);
       }
       const lastSiteId = readLastSiteId(req);
       if (lastSiteId) {
-        traceEdge("middleware", "redirect app-domain /app to last site", {
+        traceEdge("middleware", "redirect admin-path root to last site", {
           traceId,
-          to: `/app/site/${lastSiteId}`,
+          to: `${externalAdminBase}/site/${lastSiteId}`,
         });
-        return redirectWithTrace(`/app/site/${lastSiteId}`);
+        return redirectWithTrace(`${externalAdminBase}/site/${lastSiteId}`);
       }
     }
     if (isAuthenticated && (appPath === "/sites" || appPath === "/sites/")) {
       const lastAppPath = readLastAppPath(req);
       if (lastAppPath) {
-        traceEdge("middleware", "redirect app-domain /sites to last path", {
+        traceEdge("middleware", "redirect admin-path /sites to last path", {
           traceId,
-          to: `/app${lastAppPath}`,
+          to: `${externalAdminBase}${lastAppPath}`,
         });
-        return redirectWithTrace(`/app${lastAppPath}`);
+        return redirectWithTrace(`${externalAdminBase}${lastAppPath}`);
       }
       const lastSiteId = readLastSiteId(req);
       if (lastSiteId) {
-        traceEdge("middleware", "redirect app-domain /sites to last site", {
+        traceEdge("middleware", "redirect admin-path /sites to last site", {
           traceId,
-          to: `/app/site/${lastSiteId}`,
+          to: `${externalAdminBase}/site/${lastSiteId}`,
         });
-        return redirectWithTrace(`/app/site/${lastSiteId}`);
+        return redirectWithTrace(`${externalAdminBase}/site/${lastSiteId}`);
       }
-      traceEdge("middleware", "redirect app-domain /sites to /app", { traceId, to: "/app" });
-      return redirectWithTrace("/app");
+      traceEdge("middleware", "redirect admin-path /sites to admin root", { traceId, to: externalAdminBase });
+      return redirectWithTrace(externalAdminBase);
     }
     if (
       isAuthenticated &&
@@ -260,15 +277,14 @@ export default async function middleware(req: NextRequest) {
       appPath !== "/settings/profile" &&
       !appPath.startsWith("/settings/profile?")
     ) {
-      traceEdge("middleware", "force password change redirect", { traceId, to: "/settings/profile?forcePasswordChange=1" });
-      return redirectWithTrace("/settings/profile?forcePasswordChange=1");
+      traceEdge("middleware", "force password change redirect", {
+        traceId,
+        to: `${externalAdminBase}/settings/profile?forcePasswordChange=1`,
+      });
+      return redirectWithTrace(`${externalAdminBase}/settings/profile?forcePasswordChange=1`);
     }
-    const rewriteTarget = `/app${appPath === "/" ? "" : appFullPath}`;
-    traceEdge("middleware", "rewrite app-domain", {
-      traceId,
-      to: rewriteTarget,
-    });
-    const rewritten = rewriteWithTrace(rewriteTarget);
+
+    const rewritten = rewriteWithTrace(`/app${appPath === "/" ? "" : appFullPath}`);
     const siteMatch = appPath.match(/^\/site\/([^/?#]+)/);
     if (siteMatch?.[1]) {
       setLastSiteId(rewritten, decodeURIComponent(siteMatch[1]));
@@ -277,18 +293,14 @@ export default async function middleware(req: NextRequest) {
     return rewritten;
   }
 
-  // ✅ Keep setup route reachable on root domain.
-  if (isRootDomain && path.startsWith("/setup")) {
-    traceEdge("middleware", "preserve setup path on root", { traceId, to: fullPath });
-    return preserveWithTrace(fullPath);
+  if (isRootDomain && (path === "/app" || path.startsWith("/app/"))) {
+    const cleanPath = normalizeAdminAliasPath(path, adminPathAlias);
+    const target = `/app/${adminPathAlias}${cleanPath === "/" ? "" : cleanPath}${searchParams ? `?${searchParams}` : ""}`;
+    traceEdge("middleware", "redirect internal app path to admin alias", { traceId, to: target });
+    return redirectWithTrace(target);
   }
 
   // Preserve direct dashboard routes on localhost/root domain.
-  if (isRootDomain && path.startsWith("/app")) {
-    traceEdge("middleware", "preserve direct app path on root", { traceId, to: fullPath });
-    return preserveWithTrace(fullPath);
-  }
-
   // ✅ Root homepage serves primary site directly.
   if (isRootDomain && path === "/") {
     traceEdge("middleware", "preserve root homepage", { traceId, to: "/" });

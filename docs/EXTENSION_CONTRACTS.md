@@ -11,6 +11,33 @@ Core is the only authority for:
 - Render pipeline and extension loading
 - Side effects (must flow through Core APIs)
 
+Core must remain platform-generic:
+
+- Core must not be changed to satisfy one specific plugin or one specific theme.
+- Plugins and themes must adapt to published core contracts and extension points.
+- If a request pressures core toward a one-off extension-specific behavior, the default answer is to reject it or solve it through existing generic contracts.
+
+## Governance Exception: Spine Service Plugins (RARE, MUST)
+
+There is one narrow exception to the no-one-off-core-change rule:
+
+- A governance-sensitive capability may be implemented as a spine service in plugin form when compliance, audit, or operational policy requires that the entire capability can be disabled or removed in one action.
+- The purpose of this pattern is kill-switch control across a whole activity class, not convenience customization for one extension.
+
+Examples:
+
+- export/import
+- data extraction/export surfaces
+- other tightly governed system capabilities that may need platform-wide disablement
+
+Mandatory constraints:
+
+- Spine service plugins must be rare.
+- They must be designed so disabling the plugin cleanly kills that class of activity.
+- They are platform service boundaries, not ordinary third-party extension surfaces.
+- Third-party or normal plugin developers must not define new spine service plugin categories.
+- Only the Tooty core team may approve and implement a new spine service plugin pattern.
+
 ## Naming Contracts (MUST)
 
 ### Data Domain Naming
@@ -49,6 +76,21 @@ Per-site overrides:
 
 Typed contract: `PluginContract` (`lib/extension-contracts.ts`)
 
+Core's responsibility for plugins is limited to the plugin spine:
+
+- registry and discovery
+- lifecycle and hook dispatch
+- capability bridge
+- loading/activation mechanism
+
+Hard boundary:
+
+- Core must not contain plugin business logic.
+- Core must not contain plugin feature-specific UI.
+- Core must not contain plugin-owned routes.
+- Core must not contain plugin feature code or feature semantics.
+- Feature behavior, business rules, admin UI, and route handlers belong in the plugin itself unless the user explicitly approves a platform-level architectural change.
+
 Plugins may:
 
 - Register hooks and admin extensions through Core kernel APIs
@@ -66,6 +108,60 @@ Plugins may:
   - `menuPlacement: "settings" | "root" | "both"`
   - default is `"settings"`
   - `settingsMenu` may provide a dedicated settings route/label when the primary `menu` is a root workspace
+- Declare a generic structured content model for richer plugin-managed workspaces:
+  - `contentModel.kind: "collection"` is the current supported model
+  - it describes a parent content type plus a child content type linked through metadata
+  - core persists this as generic plugin content-type registration metadata; core does not special-case the plugin id
+  - themes consume the resulting content through normal theme queries, not direct plugin rendering
+
+### Plugin Admin UX + Accessibility (MUST)
+
+Plugin and theme contributions that expose admin or interactive UI are expected to satisfy the baseline rules in [`docs/PLUGIN_ADMIN_UX.md`](./PLUGIN_ADMIN_UX.md).
+
+This is an acceptance rule, not optional polish.
+
+Minimum baseline:
+
+- keyboard-reachable interaction
+- explicit labels for interactive controls
+- visible mutation feedback
+- no color-only state meaning
+- explicit button semantics
+- image alternatives where images are not purely decorative
+
+Where an enforceable baseline audit exists in core or extension repositories:
+
+- CI should fail on violations
+- maintainers should require revision before acceptance
+
+### Collection Content Model Contract (MUST)
+
+Use this when a plugin manages reusable parent/child content collections (for example sets + items).
+
+Required fields:
+
+- `parentTypeKey`
+- `childTypeKey`
+- `childParentMetaKey`
+- `parentHandleMetaKey`
+- `workflowMetaKey`
+- `orderMetaKey`
+
+Optional fields:
+
+- `childParentKeyMetaKey`
+- `mediaMetaKey`
+- `ctaTextMetaKey`
+- `ctaUrlMetaKey`
+- `workflowStates`
+
+Contract rules:
+
+- Parent and child content types must still be registered through normal plugin content-type registration.
+- Relationships are metadata-driven; plugins do not get direct schema bypasses.
+- Workflow states are declarative and must map onto core-owned lifecycle handling.
+- Media linkage is metadata-backed and must resolve through core-managed media records.
+- Theme rendering remains query-first. Plugin content models do not grant plugins direct control over frontend rendering.
 
 Scope governance:
 
@@ -182,6 +278,7 @@ Plugins may not:
 - Bypass auth checks
 - Write raw DB tables directly as an extension contract
 - Mutate routing/auth/schema outside Core
+- Require one-off core changes for plugin-specific behavior outside published contracts
 
 Plugin admin menu placement contract:
 
@@ -196,13 +293,25 @@ Plugin admin menu placement contract:
 All spine systems follow one model:
 
 - plugin-provider registration contract for extension providers
-- built-in native core provider as baseline/default implementation
+- optional core-owned adapter helpers for provider registration, when the capability spine needs a reusable baseline storage or transport adapter
 
 Implications:
 
+- provider behavior is active only when a plugin registers it through the declared contract
+- core may expose generic adapter helpers, but core must not silently synthesize or auto-enable a provider when no plugin registered one
 - plugin providers extend or replace delivery/query behavior through declared contracts
-- core baseline behavior remains available even when no plugin provider is enabled
 - new spine systems (for example search, comments, messaging, analytics adapters) must adopt this same pattern
+
+Governance note:
+
+- When a spine system is also governance-sensitive, the preferred implementation is a core-team-controlled spine service plugin so the capability can be disabled in one action.
+- This does not permit normal plugin developers to create new privileged spine categories.
+
+Comment provider adapter note:
+
+- For site-scoped comment providers, Core may expose a generic adapter helper through the extension API (`api.core.comments.createTableBackedProvider()`).
+- This is a reusable storage adapter, not an active provider by itself.
+- The plugin must still call `registerCommentProvider()` to make the provider live.
 
 ### Comment Provider Writing Options UI Contract (MUST)
 
@@ -227,6 +336,7 @@ Themes may:
 
 - Provide layouts, components, styles, and assets
 - Use lightweight template conditionals for presentation decisions
+- Consume DTO/query data already prepared by Core or plugins and render UI
 
 Theme template precedence for plugin-owned content types:
 
@@ -242,9 +352,21 @@ Notes:
 
 Themes may not:
 
+- Contain business logic
+- Perform direct data access outside Core-provided theme query/DTO surfaces
+- Own or alter routing
+- Evaluate capabilities, permissions, or governance decisions
 - Execute server-side side effects
 - Perform DB writes
 - Alter auth, routing, or schema
+- Depend on feature-specific control booleans injected by Core for one plugin
+
+Governance boundary:
+
+- Themes are presentation modules only.
+- All feature behavior belongs in plugins.
+- Core contains only spines and contracts for extension behavior.
+- Themes should consume generic slots, DTOs, and query results rather than plugin-specific permission flags.
 
 Runtime guardrails:
 

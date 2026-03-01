@@ -24,7 +24,7 @@
     <article class="post-card">
       {{ post.content_html | safe }}
     </article>
-    {% if comments_enabled and comments_gate_enabled and post.use_comments %}
+    {% if post.use_comments %}
     <section
       class="tooty-comments-block"
       data-tooty-comments
