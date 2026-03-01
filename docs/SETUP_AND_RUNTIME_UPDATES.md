@@ -109,7 +109,8 @@ Bootstrap flow:
 - setup creates/updates the native admin row with administrator role
 - first login works with native credentials immediately after setup
 
-OAuth providers are plugin-backed and controlled by auth plugins at runtime.
+OAuth providers are currently core-owned pre-v1.
+First-party auth plugins act as integration manifests/config shells and global enablement gates, but core still instantiates the runtime providers.
 Current setup gate still requires one OAuth provider pair to complete setup.
 
 Starter content seeding safety:
@@ -203,14 +204,15 @@ For branded local installs, pair the proxy with env values such as:
 
 If no local reverse proxy is used, keep the explicit port in local URLs (for example `:3000`).
 
-## Experimental Auth Extension Surface
+## Reserved Auth Extension Surface
 
 Plugin capability surface includes:
-- `authExtensions` (experimental)
+- `authExtensions` (reserved pre-v1)
 
 Guardrails:
 - plugin runtime enforces declared capabilities for guarded operations
 - undeclared guarded operations continue to raise `[plugin-guard]` errors
+- first-party auth plugins may use this as a classification flag today, but core still owns runtime provider instantiation
 
 ## Vercel Deployment Lessons (2026-02-23)
 

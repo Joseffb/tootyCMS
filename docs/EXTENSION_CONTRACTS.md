@@ -167,17 +167,24 @@ Scope governance:
 
 - Network plugins are for network-wide behavior and platform operations.
 - Site plugins are for tenant/site-owned behavior, integrations, and content features.
-- Analytics providers and consent/GDPR behavior are typically `scope: "site"` plugins unless a network policy explicitly requires forced rollout.
+- Analytics providers are typically `scope: "site"` plugins unless a network policy explicitly requires forced rollout.
+- Consent/GDPR UX may be packaged as a site plugin, but consent enforcement remains core-owned pre-v1 unless a future plugin contract replaces it.
 
-### Auth Provider Plugin Contract (MUST)
+### Auth Provider Ownership (PRE-V1, MUST)
 
 - Native auth is core baseline and always available.
-- OAuth providers are plugin-backed and must declare:
-  - `capabilities.authExtensions: true`
-  - `authProviderId` (for example: `github`, `google`, `facebook`, `apple`)
+- OAuth provider resolution is currently core-owned.
+- First-party auth provider plugins are currently integration manifests/config shells only.
+- `capabilities.authExtensions` is reserved for future true auth-extension surfaces; third-party plugin authors must not assume runtime provider registration support before v1.
 - Global plugin enabled state controls provider availability at login.
-- Multiple auth provider plugins may be enabled at the same time.
+- Multiple first-party provider integrations may be enabled at the same time.
 - Core user records are global and are not site-bound in current contract.
+
+Until a true auth extension runtime exists:
+
+- docs must not claim plugin-owned auth provider behavior
+- core remains the authority for provider instantiation and callback flow
+- first-party auth plugins are metadata/distribution boundaries, not runtime provider engines
 
 ### Analytics Contract (MUST)
 

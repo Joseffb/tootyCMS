@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SetupWizard from "@/app/setup/setup-wizard";
 
 const { pushMock, refreshMock } = vi.hoisted(() => ({
@@ -21,6 +24,10 @@ vi.mock("next-auth/react", () => ({
 }));
 
 describe("SetupWizard", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     pushMock.mockReset();
     refreshMock.mockReset();

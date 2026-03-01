@@ -5,6 +5,6 @@
       <a class="tooty-post-link" href="{{item.href}}" {% if item.external %}target="_blank" rel="noopener noreferrer"{% endif %}>{{item.label}}</a>
       {% endfor %}
     </nav>
-    <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or auth.username or "there" }}{% endif %}</p>
+    <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or "there" }}{% endif %}</p>
   </div>
 </section>

@@ -1,5 +1,5 @@
 export async function register(kernel) {
-  // Consent enforcement remains in Core (`privacy-consent`) for now; this plugin
-  // exists as the site-level contract owner for consent UX/config migration.
+  // Pre-v1: consent enforcement remains core-owned (`privacy-consent`).
+  // This first-party plugin currently exists as the site-level UX/config shell.
   kernel.addFilter("domain:scripts", (current = []) => current);
 }

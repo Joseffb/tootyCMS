@@ -242,7 +242,7 @@ Plugin capabilities are enforced at runtime:
 - `adminExtensions`: required for dashboard/menu extension registration
 - `contentTypes`: required for `api.registerContentType(...)`
 - `serverHandlers`: required for `api.registerServerHandler(...)`
-- `authExtensions`: required for experimental auth extension surfaces
+- `authExtensions`: reserved for future auth-extension surfaces. Pre-v1, first-party auth plugins use it as a classification flag only; runtime auth provider ownership remains in core.
 - `scheduleJobs`: required for scheduler APIs and `registerScheduleHandler(...)`
 - `communicationProviders`: required for communication transport registration
 - `webCallbacks`: required for first-class callback handler registration

@@ -5,9 +5,7 @@ import { getThemeQueryRequestsForSite } from "@/lib/theme-runtime";
 
 export type ThemeAuthSnapshot = {
   logged_in: boolean;
-  user_id: string;
   display_name: string;
-  username: string;
 };
 
 export type ThemeSlotMap = Record<string, string>;
@@ -24,9 +22,7 @@ function buildThemeAuthSnapshot(session: Awaited<ReturnType<typeof getSession>>)
   const name = String(user?.name || "").trim();
   return {
     logged_in: Boolean(String(user?.id || "").trim()),
-    user_id: String(user?.id || "").trim(),
     display_name: displayName || username || name,
-    username,
   };
 }
 

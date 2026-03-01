@@ -299,20 +299,23 @@ export default function FrontendAuthBridge({
       bridgePromise = (async () => {
         try {
           let payloadSource: "current" | "hash" | "storage" | null = null;
-          let payload =
-            !forceRefresh && current?.ready && current.token && isTokenUsable(current.token)
-              ? { token: String(current.token || ""), user: current.user || null }
-              : null;
-          if (payload?.token) payloadSource = "current";
-          if (!payload?.token) {
-            payload = consumeHashPayload();
-            if (payload?.token) payloadSource = "hash";
-          }
-          if (payload?.token) {
-            persistPayload(payload);
-          } else {
-            payload = readStoredPayload();
-            if (payload?.token) payloadSource = "storage";
+          let payload = null;
+          if (!forceRefresh) {
+            payload =
+              current?.ready && current.token && isTokenUsable(current.token)
+                ? { token: String(current.token || ""), user: current.user || null }
+                : null;
+            if (payload?.token) payloadSource = "current";
+            if (!payload?.token) {
+              payload = consumeHashPayload();
+              if (payload?.token) payloadSource = "hash";
+            }
+            if (payload?.token) {
+              persistPayload(payload);
+            } else {
+              payload = readStoredPayload();
+              if (payload?.token) payloadSource = "storage";
+            }
           }
 
           if (

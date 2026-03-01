@@ -74,9 +74,7 @@ describe("theme render context", () => {
     });
     expect(result.auth).toMatchObject({
       logged_in: true,
-      user_id: "user-1",
       display_name: "Test User",
-      username: "test-user",
     });
   });
 });

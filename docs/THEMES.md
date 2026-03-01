@@ -184,10 +184,11 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.pluginSettings`
 - `tooty.slots` (plugin-provided render slots such as optional mounts/partials)
 - `tooty.query` (Core-resolved, read-only query results)
-- `auth` (current viewer snapshot: `logged_in`, `display_name`, `username`, `user_id`)
+- `auth` (current viewer snapshot: `logged_in`, `display_name`)
 
 Theme-facing auth is presentation-safe only.
 Do not expect theme contracts to expose roles, capabilities, or other permission semantics.
+Do not expect stable identifiers such as user ids or usernames in theme context.
 
 ### Theme Slot Contract
 

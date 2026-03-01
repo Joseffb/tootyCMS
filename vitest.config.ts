@@ -9,7 +9,12 @@ export default defineConfig({
   },
   test: {
     setupFiles: ["./tests/setup.ts"],
-    include: ["tests/**/*.test.ts", "plugins/**/tests/**/*.test.ts"],
+    include: [
+      "tests/**/*.test.ts",
+      "tests/**/*.test.tsx",
+      "plugins/**/tests/**/*.test.ts",
+      "plugins/**/tests/**/*.test.tsx",
+    ],
     exclude: ["tests/e2e/**", "node_modules/**", "coverage/**", ".next/**"],
     coverage: {
       provider: "v8",
