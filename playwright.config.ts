@@ -25,7 +25,7 @@ if (process.env.POSTGRES_TEST_URL) {
 }
 
 const explicitTestPort = Number.parseInt(process.env.TEST_PORT || "", 10);
-const preferredPort = explicitTestPort || Number.parseInt(process.env.PLAYWRIGHT_DEFAULT_TEST_PORT || "3000", 10) || 3000;
+const preferredPort = explicitTestPort || Number.parseInt(process.env.PLAYWRIGHT_DEFAULT_TEST_PORT || "3123", 10) || 3123;
 const resolvedPort = explicitTestPort || Number.parseInt(
   execFileSync(process.execPath, [path.join(process.cwd(), "scripts/resolve-test-port.mjs"), String(preferredPort)], {
     encoding: "utf8",

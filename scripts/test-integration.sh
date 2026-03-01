@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TEST_PORT="${TEST_PORT:-3000}"
+TEST_PORT="${TEST_PORT:-3123}"
 TEST_PORT="$(node ./scripts/resolve-test-port.mjs "${TEST_PORT}")"
 export TEST_PORT
 

@@ -33,7 +33,7 @@ export async function resolveTestPort(preferredPort = 3000, maxAttempts = 50) {
 }
 
 async function main() {
-  const port = await resolveTestPort(process.argv[2] || "3000");
+  const port = await resolveTestPort(process.argv[2] || "3123");
   process.stdout.write(String(port));
 }
 
