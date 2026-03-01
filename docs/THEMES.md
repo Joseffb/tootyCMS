@@ -182,11 +182,27 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.settings.seoMetaDescription`
 - `tooty.domains`
 - `tooty.pluginSettings`
+- `tooty.slots` (plugin-provided render slots such as optional mounts/partials)
 - `tooty.query` (Core-resolved, read-only query results)
 - `auth` (current viewer snapshot: `logged_in`, `display_name`, `username`, `user_id`)
 
 Theme-facing auth is presentation-safe only.
 Do not expect theme contracts to expose roles, capabilities, or other permission semantics.
+
+### Theme Slot Contract
+
+Themes may render generic plugin-provided slots from `tooty.slots`.
+
+Example:
+
+- `{% if tooty.slots.comments %}{{ tooty.slots.comments | safe }}{% endif %}`
+
+Rules:
+
+- Slots are optional; themes must tolerate absence.
+- Themes may decide where to render a slot.
+- Themes must not depend on plugin-specific permission booleans injected by core.
+- Plugins own the behavior behind the slot; themes render only the provided slot content.
 
 ### Theme Query Contract
 

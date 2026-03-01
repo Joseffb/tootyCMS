@@ -20,23 +20,12 @@ import { isDomainArchiveSegment, normalizeDomainKeyFromSegment, normalizeDomainS
 import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
 import { buildArchivePath, buildDetailPath, domainPluralSegment, resolveNoDomainPrefixDomain } from "@/lib/permalink";
 import { trace } from "@/lib/debug";
-import { hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
-
-function readBooleanMeta(entries: Array<{ key?: string; value?: string }> | undefined, key: string, fallback = true) {
-  const match = (entries || []).find((entry) => String(entry?.key || "").trim().toLowerCase() === key.toLowerCase());
-  if (!match) return fallback;
-  const normalized = String(match.value || "").trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
-  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
-  return fallback;
-}
 
 export default async function SitePostPage({
                                              params,
@@ -313,9 +302,6 @@ export default async function SitePostPage({
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
   const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
-  const commentsPluginEnabled = siteId ? await hasEnabledCommentProvider(siteId) : false;
-  const commentsGateEnabled = commentsPluginEnabled && Boolean(writing.enableComments);
-  const useComments = readBooleanMeta(postMeta, "use_comments", commentsGateEnabled);
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
@@ -327,11 +313,25 @@ export default async function SitePostPage({
       (await getThemeLayoutTemplateForSite(siteId, { layout: normalizedLayout })) ||
       (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"]));
     if (themeTemplate) {
-      const themeRuntime = await getThemeRenderContext(siteId, "domain_detail", [
-        themeTemplate.template,
-        themeTemplate.partials?.header,
-        themeTemplate.partials?.footer,
-      ]);
+      const themeRuntime = await getThemeRenderContext(
+        siteId,
+        "domain_detail",
+        [
+          themeTemplate.template,
+          themeTemplate.partials?.header,
+          themeTemplate.partials?.footer,
+        ],
+        {
+          kernel,
+          slotContext: {
+            entry: {
+              id: (data as any)?.id || "",
+              dataDomain: "post",
+              meta: postMeta,
+            },
+          },
+        },
+      );
       const html = renderThemeTemplate(themeTemplate.template, {
         theme_header: themeTemplate.partials?.header || "",
         theme_footer: themeTemplate.partials?.footer || "",
@@ -353,7 +353,6 @@ export default async function SitePostPage({
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
           content_html: toThemePostHtml((data as any)?.content || ""),
-          use_comments: useComments,
         },
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
         content: toThemePostHtml((data as any)?.content || ""),

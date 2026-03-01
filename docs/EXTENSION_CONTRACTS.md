@@ -368,6 +368,13 @@ Governance boundary:
 - Core contains only spines and contracts for extension behavior.
 - Themes should consume generic slots, DTOs, and query results rather than plugin-specific permission flags.
 
+Generic theme slot contract:
+
+- Plugins may contribute renderable theme slots through the `theme:slots` filter.
+- Slots are keyed strings exposed to templates as `tooty.slots.<key>`.
+- Core may pass route-scoped context into the slot filter, but core must remain generic and must not synthesize feature-specific slot markup on behalf of a plugin.
+- Themes may render a slot if present, but must not re-implement plugin behavior around that slot.
+
 Runtime guardrails:
 
 - `createThemeExtensionApi()` throws when side-effect methods are called (`setSetting`, `setPluginSetting`).

@@ -21,6 +21,7 @@ export type KernelFilterName =
   | "content:transform"
   | "nav:items"
   | "theme:tokens"
+  | "theme:slots"
   | "page:meta"
   | "render:layout"
   | "admin:environment-badge"

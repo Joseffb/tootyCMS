@@ -24,13 +24,8 @@
     <article class="post-card">
       {{ post.content_html | safe }}
     </article>
-    {% if post.use_comments %}
-    <section
-      class="tooty-comments-block"
-      data-tooty-comments
-      data-site-id="{{site.id}}"
-      data-context-id="{{post.id}}"
-    ></section>
+    {% if tooty.slots.comments %}
+    {{ tooty.slots.comments | safe }}
     {% endif %}
   </section>
 

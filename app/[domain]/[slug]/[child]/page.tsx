@@ -14,22 +14,11 @@ import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system"
 import { normalizeDomainKeyFromSegment } from "@/lib/data-domain-routing";
 import { buildArchivePath, buildDetailPath, resolveNoDomainPrefixDomain } from "@/lib/permalink";
 import { trace } from "@/lib/debug";
-import { hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 
 type Params = Promise<{ domain: string; slug: string; child: string }>;
-
-function readBooleanMeta(entries: Array<{ key?: string; value?: string }> | undefined, key: string, fallback = true) {
-  const match = (entries || []).find((entry) => String(entry?.key || "").trim().toLowerCase() === key.toLowerCase());
-  if (!match) return fallback;
-  const normalized = String(match.value || "").trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
-  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
-  return fallback;
-}
 
 export default async function DomainPostPage({
   params,
@@ -149,10 +138,7 @@ export default async function DomainPostPage({
   });
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
-  const commentsEnabled = siteId ? await hasEnabledCommentProvider(siteId) : false;
-  const commentsGateEnabled = commentsEnabled && Boolean(writing.enableComments);
   const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
-  const useComments = readBooleanMeta(postMeta, "use_comments", commentsGateEnabled);
   const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
   const rawMenuItems = siteId
     ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
@@ -180,11 +166,25 @@ export default async function DomainPostPage({
           (await getThemeTemplateFromCandidates(siteId, ["single.html", "index.html"])));
 
     if (themedTemplate) {
-      const themeRuntime = await getThemeRenderContext(siteId, "domain_detail", [
-        themedTemplate.template,
-        themedTemplate.partials?.header,
-        themedTemplate.partials?.footer,
-      ]);
+      const themeRuntime = await getThemeRenderContext(
+        siteId,
+        "domain_detail",
+        [
+          themedTemplate.template,
+          themedTemplate.partials?.header,
+          themedTemplate.partials?.footer,
+        ],
+        {
+          kernel,
+          slotContext: {
+            entry: {
+              id: (data as any)?.id || "",
+              dataDomain: decodedDataDomain,
+              meta: postMeta,
+            },
+          },
+        },
+      );
       const html = renderThemeTemplate(themedTemplate.template, {
         theme_header: themedTemplate.partials?.header || "",
         theme_footer: themedTemplate.partials?.footer || "",
@@ -206,7 +206,6 @@ export default async function DomainPostPage({
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
           content_html: toThemePostHtml((data as any)?.content || ""),
-          use_comments: useComments,
         },
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
         content: toThemePostHtml((data as any)?.content || ""),
