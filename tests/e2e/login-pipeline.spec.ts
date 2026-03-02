@@ -12,6 +12,23 @@ const appHostname = getAppHostname();
 const userId = `${runId}-user`;
 const email = `${runId}@example.com`;
 
+async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code || "") : "";
+      if (code !== "40P01" || attempt === attempts) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
+  throw lastError;
+}
+
 test.skip(
   !(process.env.POSTGRES_URL || process.env.POSTGRES_TEST_URL),
   "POSTGRES_URL or POSTGRES_TEST_URL is required for login pipeline e2e.",
@@ -34,7 +51,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await sql`DELETE FROM tooty_users WHERE "id" = ${userId}`;
+  await withDeadlockRetry(() => sql`DELETE FROM tooty_users WHERE "id" = ${userId}`);
 });
 
 test("native login persists a valid session and grants /app access", async ({ page }) => {

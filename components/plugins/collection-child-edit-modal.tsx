@@ -251,20 +251,6 @@ export default function CollectionChildEditModal({
               )}
             </div>
             <div>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Image URL</div>
-              <textarea
-                value={draft.image}
-                onChange={(event) => setDraft((current) => ({ ...current, image: event.target.value }))}
-                onBlur={(event) => {
-                  const nextValue = normalizeImageValue(event.target.value);
-                  if (nextValue === draft.image) return;
-                  commit({ ...draft, image: nextValue }, "Image URL");
-                }}
-                placeholder={IMAGE_URL_PLACEHOLDER}
-                className="min-h-16 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black"
-              />
-            </div>
-            <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Media Manager</div>
               <button
                 type="button"

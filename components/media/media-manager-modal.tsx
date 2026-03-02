@@ -391,34 +391,54 @@ export default function MediaManagerModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, siteId]);
 
-  async function handleUpload(file: File | null) {
-    if (!file || !siteId) return;
-    setIsUploading(true);
-    setStatus("Uploading...");
-    try {
-      const formData = new FormData();
-      formData.append("siteId", siteId);
-      formData.append("name", file.name);
-      formData.append("file", file);
+  async function uploadSingleFile(file: File) {
+    if (!siteId) return "";
+    const formData = new FormData();
+    formData.append("siteId", siteId);
+    formData.append("name", file.name);
+    formData.append("file", file);
 
-      const response = await fetch("/api/media/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = String(json?.error || "Upload failed.");
-        setStatus(message);
-        toast.error(message);
-        return;
+    const response = await fetch("/api/media/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(String(json?.error || "Upload failed."));
+    }
+    return String(json?.mediaId || "").trim();
+  }
+
+  async function handleUploadFiles(input: FileList | File[] | null | undefined) {
+    const files = Array.from(input || []).filter((file): file is File => Boolean(file));
+    if (files.length === 0 || !siteId) return;
+    setIsUploading(true);
+    setStatus(files.length === 1 ? "Uploading..." : `Uploading ${files.length} files...`);
+    try {
+      const uploadedIds: string[] = [];
+      for (const file of files) {
+        const nextId = await uploadSingleFile(file);
+        if (nextId) {
+          uploadedIds.push(nextId);
+        }
       }
-      const nextId = String(json?.mediaId || "").trim();
-      setStatus("Upload complete.");
-      toast.success("Media uploaded.");
-      await loadItems(nextId);
-      if (nextId) {
-        setSelected((current) => (multiSelect ? Array.from(new Set([...current, nextId])) : [nextId]));
-        setFocusedId(nextId);
+      const lastUploadedId = uploadedIds[uploadedIds.length - 1] || "";
+      setStatus(
+        uploadedIds.length <= 1
+          ? "Upload complete."
+          : `Upload complete. ${uploadedIds.length} files added.`,
+      );
+      toast.success(
+        uploadedIds.length <= 1
+          ? "Media uploaded."
+          : `${uploadedIds.length} media files uploaded.`,
+      );
+      await loadItems(lastUploadedId);
+      if (lastUploadedId) {
+        setSelected((current) =>
+          multiSelect ? Array.from(new Set([...current, ...uploadedIds])) : [lastUploadedId],
+        );
+        setFocusedId(lastUploadedId);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Upload failed.";
@@ -631,10 +651,10 @@ export default function MediaManagerModal({
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   className="hidden"
                   onChange={(event) => {
-                    const file = event.target.files?.[0] ?? null;
-                    void handleUpload(file);
+                    void handleUploadFiles(event.target.files);
                   }}
                 />
               </div>
@@ -663,8 +683,7 @@ export default function MediaManagerModal({
             onDrop={(event) => {
               event.preventDefault();
               setIsDropTarget(false);
-              const file = event.dataTransfer.files?.[0] ?? null;
-              void handleUpload(file);
+              void handleUploadFiles(event.dataTransfer.files);
             }}
             className={`mx-5 mt-4 rounded-xl border border-dashed px-4 py-3 text-sm ${
               isDropTarget
@@ -676,7 +695,45 @@ export default function MediaManagerModal({
           </div>
         ) : null}
 
-        <div className="flex min-h-0 flex-1 overflow-hidden px-5 py-4">
+        <div
+          onDragEnter={
+            allowUpload
+              ? (event) => {
+                  event.preventDefault();
+                  setIsDropTarget(true);
+                }
+              : undefined
+          }
+          onDragOver={
+            allowUpload
+              ? (event) => {
+                  event.preventDefault();
+                  setIsDropTarget(true);
+                }
+              : undefined
+          }
+          onDragLeave={
+            allowUpload
+              ? (event) => {
+                  event.preventDefault();
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                  setIsDropTarget(false);
+                }
+              : undefined
+          }
+          onDrop={
+            allowUpload
+              ? (event) => {
+                  event.preventDefault();
+                  setIsDropTarget(false);
+                  void handleUploadFiles(event.dataTransfer.files);
+                }
+              : undefined
+          }
+          className={`flex min-h-0 flex-1 overflow-hidden px-5 py-4 ${
+            allowUpload && isDropTarget ? "bg-cyan-50/40" : ""
+          }`}
+        >
           {isLoading ? (
             <p className="text-sm text-stone-600">Loading media...</p>
           ) : visibleItems.length === 0 ? (

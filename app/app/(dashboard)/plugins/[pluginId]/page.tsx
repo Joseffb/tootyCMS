@@ -1295,10 +1295,6 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                               No image selected
                             </div>
                           </div>
-                          <label className="grid gap-2 text-sm text-black">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Image URL</span>
-                            <textarea name="image" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
-                          </label>
                           <MediaPickerField
                             siteId={effectiveSiteId}
                             name="media_id"

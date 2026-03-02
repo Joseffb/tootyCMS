@@ -69,6 +69,19 @@ export default async function SiteSettingsIndex({ params }: Props) {
         />
 
         <Form
+          title="Site Card Image"
+          description="Primary site image used for site cards and the default social/SEO share image."
+          helpText="Choose an image from the shared Media Manager. Leave blank to fall back to your default site imagery."
+          inputAttrs={{
+            name: "image",
+            type: "text",
+            defaultValue: data?.image || "",
+            placeholder: "",
+          }}
+          handleSubmit={updateSite}
+        />
+
+        <Form
           title="Site Motto / Subtitle"
           description="Short subheading for your site brand voice. This is theme-neutral content."
           helpText="Keep it concise and human. This is commonly shown under titles in themes."
@@ -132,7 +145,7 @@ export default async function SiteSettingsIndex({ params }: Props) {
               </p>
               <div className="w-fit">
                 <CreateSiteButton label="Add New Site">
-                  <CreateSiteModal successRedirectPath="/app/sites" />
+                  <CreateSiteModal successRedirectPath="/app/site/:id/settings" />
                 </CreateSiteButton>
               </div>
             </div>

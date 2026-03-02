@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { listThemesWithState, getSiteThemeId, saveThemeConfig, setSiteTheme, setThemeEnabled } from "@/lib/themes";
+import { listThemesWithState, getSiteThemeId, saveSiteThemeConfig, setSiteTheme, setThemeEnabled } from "@/lib/themes";
 import { notFound, redirect } from "next/navigation";
 import Image from "next/image";
 import { revalidatePath, revalidateTag } from "next/cache";
@@ -36,7 +36,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   const singleSiteMode = siteIds.length === 1;
   const activeTab = singleSiteMode ? requestedTab : "installed";
 
-  const [themes, activeThemeId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteData.id)]);
+  const [themes, activeThemeId] = await Promise.all([listThemesWithState(siteData.id), getSiteThemeId(siteData.id)]);
   const installedIds = await listLocalInstalledIds("theme");
   let discoverEntries: Awaited<ReturnType<typeof listRepoCatalog>> = [];
   let discoverError = "";
@@ -63,7 +63,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
     "use server";
     const themeId = String(formData.get("themeId") || "");
     if (!themeId) return;
-    const availableThemes = await listThemesWithState();
+    const availableThemes = await listThemesWithState(siteData.id);
     const selected = availableThemes.find((theme) => theme.id === themeId && (singleSiteMode || theme.enabled));
     if (!selected) return;
     if (singleSiteMode && !selected.enabled) {
@@ -94,7 +94,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   async function saveThemeSettings(formData: FormData) {
     "use server";
     const themeId = String(formData.get("themeId") || "");
-    const theme = (await listThemesWithState()).find((t) => t.id === themeId);
+    const theme = (await listThemesWithState(siteData.id)).find((t) => t.id === themeId);
     if (!theme) return;
 
     const config: Record<string, unknown> = { ...(theme.config || {}) };
@@ -115,7 +115,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
       }
     }
 
-    await saveThemeConfig(themeId, config);
+    await saveSiteThemeConfig(siteData.id, themeId, config);
     revalidatePath(`/app/site/${siteData.id}/settings/themes`);
     revalidatePath("/", "layout");
     revalidatePath("/[domain]", "layout");

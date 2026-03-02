@@ -93,4 +93,25 @@ describe("MediaPickerField", () => {
     expect(urlInput?.value).toBe("https://cdn.example.com/hero.png");
     expect(idInput?.value).toBe("31");
   });
+
+  it("can clear an existing selection", () => {
+    render(
+      <MediaPickerField
+        siteId="site-a"
+        name="hero_image"
+        label="Hero Image"
+        initialValue="https://cdn.example.com/hero.png"
+        initialMediaId="31"
+        valueMode="url"
+        companionMediaIdName="hero_image__mediaId"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Selection" }));
+
+    const urlInput = document.querySelector('input[name="hero_image"]') as HTMLInputElement | null;
+    const idInput = document.querySelector('input[name="hero_image__mediaId"]') as HTMLInputElement | null;
+    expect(urlInput?.value).toBe("");
+    expect(idInput?.value).toBe("");
+  });
 });

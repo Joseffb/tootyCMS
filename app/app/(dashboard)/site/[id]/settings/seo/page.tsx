@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getSiteSeoSettingsAdmin, updateSiteSeoSettings } from "@/lib/actions";
+import MediaPickerField from "@/components/media/media-picker-field";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -83,19 +84,26 @@ export default async function SiteSeoSettingsPage({ params }: Props) {
           />
         </label>
 
-        <label className="flex flex-col gap-2 text-sm dark:text-white">
-          <span>Social Image URL (Open Graph/Twitter)</span>
-          <input
-            type="text"
-            name="social_meta_image"
-            defaultValue={result.socialMetaImage}
-            placeholder={result.defaults.socialImage || "/tooty/sprites/tooty-reading-cropped.png"}
-            className="max-w-xl rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900 dark:border-stone-600 dark:bg-black dark:text-white"
-          />
+        <div className="grid gap-2 text-sm dark:text-white">
+          <span>Social Image Override (Open Graph/Twitter)</span>
           <span className="text-xs text-stone-500 dark:text-stone-400">
-            Supports absolute URLs or site-relative paths.
+            Defaults to the Site Card Image. Set an override here only if you want social sharing to use a different image.
           </span>
-        </label>
+          <MediaPickerField
+            siteId={result.siteId}
+            name="social_meta_image"
+            label="Social Image Override"
+            initialValue={result.socialMetaImage}
+            initialMediaId={result.socialMetaImageMediaId}
+            valueMode="url"
+            companionMediaIdName="social_meta_image__mediaId"
+          />
+          {!result.socialMetaImage && result.defaults.socialImage ? (
+            <span className="text-xs text-stone-500 dark:text-stone-400">
+              Current default: {result.defaults.socialImage}
+            </span>
+          ) : null}
+        </div>
 
         <button className="rounded-md border border-black bg-black px-3 py-2 text-sm text-white hover:bg-white hover:text-black">
           Save SEO & Social Settings

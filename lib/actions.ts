@@ -23,6 +23,7 @@ import {
   SEO_META_TITLE_KEY,
   SOCIAL_META_DESCRIPTION_KEY,
   SOCIAL_META_IMAGE_KEY,
+  SOCIAL_META_IMAGE_MEDIA_ID_KEY,
   SOCIAL_META_TITLE_KEY,
   SCHEDULES_ENABLED_KEY,
   SCHEDULES_PING_SITEMAP_KEY,
@@ -1154,6 +1155,7 @@ export const updateSite = withSiteAuth(
       const maybeFile = formData.get(key);
       const maybeUrl = formData.get(`${key}Url`) as string | null;
       const maybeFinal = formData.get(`${key}FinalName`) as string | null;
+      const companionMediaId = String(formData.get(`${key}__mediaId`) || "").trim();
 
       // 🔎 Safely pick final URL in priority order: FinalName > Url > undefined
       const finalUrl =
@@ -1162,6 +1164,8 @@ export const updateSite = withSiteAuth(
           : (typeof maybeUrl === "string" && maybeUrl.length > 0)
             ? maybeUrl
             : undefined;
+      const directUrl = typeof maybeFile === "string" ? maybeFile.trim() : "";
+      const resolvedManagedUrl = finalUrl || directUrl || undefined;
 
       // --- Handle custom domain logic ---
       if (key === "customDomain") {
@@ -1208,15 +1212,15 @@ export const updateSite = withSiteAuth(
             .returning()
             .then((res) => res[0]);
 
-        } else if (finalUrl) {
-          // ⬇️ Local upload path (finalUrl)
+        } else if (resolvedManagedUrl) {
+          // Shared media-manager / URL path
           const blurhash = key === "image"
-            ? await getBlurDataURL(`${process.cwd()}/public${finalUrl}`)
+            ? await getBlurDataURL(resolvedManagedUrl)
             : null;
 
           response = await db.update(sites)
             .set({
-              [key]: finalUrl,
+              [key]: resolvedManagedUrl,
               ...(blurhash && { imageBlurhash: blurhash }),
             })
             .where(eq(sites.id, site.id))
@@ -1226,6 +1230,8 @@ export const updateSite = withSiteAuth(
         } else {
           return { error: `No valid file or URL provided for ${key}` };
         }
+
+        await setSiteTextSetting(site.id, `${key}_media_id`, companionMediaId);
 
         // --- Handle generic string updates ---
       } else {
@@ -2610,7 +2616,15 @@ export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
-  const [indexingEnabled, seoMetaTitle, seoMetaDescription, socialMetaTitle, socialMetaDescription, socialMetaImage] =
+  const [
+    indexingEnabled,
+    seoMetaTitle,
+    seoMetaDescription,
+    socialMetaTitle,
+    socialMetaDescription,
+    socialMetaImage,
+    socialMetaImageMediaId,
+  ] =
     await Promise.all([
       getSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, true),
       getSiteTextSetting(site.id, SEO_META_TITLE_KEY, ""),
@@ -2618,6 +2632,7 @@ export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
       getSiteTextSetting(site.id, SOCIAL_META_TITLE_KEY, ""),
       getSiteTextSetting(site.id, SOCIAL_META_DESCRIPTION_KEY, ""),
       getSiteTextSetting(site.id, SOCIAL_META_IMAGE_KEY, ""),
+      getSiteTextSetting(site.id, SOCIAL_META_IMAGE_MEDIA_ID_KEY, ""),
     ]);
 
   const defaultDescription = (site.heroSubtitle || site.description || "").trim();
@@ -2637,6 +2652,7 @@ export const getSiteSeoSettingsAdmin = async (siteIdRaw: string) => {
     socialMetaTitle,
     socialMetaDescription,
     socialMetaImage,
+    socialMetaImageMediaId,
   };
 };
 
@@ -2652,6 +2668,7 @@ export const updateSiteSeoSettings = async (formData: FormData) => {
   const socialMetaTitle = ((formData.get("social_meta_title") as string | null) ?? "").trim();
   const socialMetaDescription = ((formData.get("social_meta_description") as string | null) ?? "").trim();
   const socialMetaImage = ((formData.get("social_meta_image") as string | null) ?? "").trim();
+  const socialMetaImageMediaId = ((formData.get("social_meta_image__mediaId") as string | null) ?? "").trim();
 
   await Promise.all([
     setSiteBooleanSetting(site.id, SEO_INDEXING_ENABLED_KEY, indexingEnabled),
@@ -2660,6 +2677,7 @@ export const updateSiteSeoSettings = async (formData: FormData) => {
     setSiteTextSetting(site.id, SOCIAL_META_TITLE_KEY, socialMetaTitle),
     setSiteTextSetting(site.id, SOCIAL_META_DESCRIPTION_KEY, socialMetaDescription),
     setSiteTextSetting(site.id, SOCIAL_META_IMAGE_KEY, socialMetaImage),
+    setSiteTextSetting(site.id, SOCIAL_META_IMAGE_MEDIA_ID_KEY, socialMetaImageMediaId),
   ]);
 
   const rootDomain = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost").replace(/:\d+$/, "");

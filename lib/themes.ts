@@ -51,6 +51,7 @@ const fallbackTokens: ThemeTokens = {
 const siteThemeKey = (siteId: string) => `site_${siteId}_theme`;
 const themeEnabledKey = (themeId: string) => `theme_${themeId}_enabled`;
 const themeConfigKey = (themeId: string) => `theme_${themeId}_config`;
+const siteThemeConfigKey = (siteId: string, themeId: string) => `site_${siteId}_theme_${themeId}_config`;
 const DEFAULT_SITE_THEME_ID = "tooty-light";
 const loggedDuplicateThemeSkips = new Set<string>();
 const LEGACY_THEME_ID_ALIASES: Record<string, string> = {
@@ -83,6 +84,13 @@ function parseThemeIdFromThemeKey(key: string): string | null {
   return themeId || null;
 }
 
+function parseThemeIdFromSiteThemeConfigKey(key: string): string | null {
+  const match = key.match(/^site_[^_]+_theme_(.+)_config$/);
+  if (!match) return null;
+  const themeId = String(match[1] || "").trim();
+  return themeId || null;
+}
+
 async function cleanupStaleThemeSettings(themes: ThemeManifest[]) {
   const installedThemeIds = new Set(themes.map((theme) => theme.id));
   for (const [legacyId, currentId] of Object.entries(LEGACY_THEME_ID_ALIASES)) {
@@ -92,6 +100,7 @@ async function cleanupStaleThemeSettings(themes: ThemeManifest[]) {
     "theme_%_enabled",
     "theme_%_config",
     "site_%_theme",
+    "site_%_theme_%_config",
   ]);
 
   const staleKeys = rows
@@ -103,8 +112,10 @@ async function cleanupStaleThemeSettings(themes: ThemeManifest[]) {
         return !installedThemeIds.has(resolveThemeIdAlias(selectedThemeId));
       }
       const themeId = parseThemeIdFromThemeKey(key);
-      if (!themeId) return false;
-      return !installedThemeIds.has(themeId);
+      if (themeId) return !installedThemeIds.has(themeId);
+      const siteScopedThemeId = parseThemeIdFromSiteThemeConfigKey(key);
+      if (!siteScopedThemeId) return false;
+      return !installedThemeIds.has(siteScopedThemeId);
     })
     .map((row) => row.key);
   if (!staleKeys.length) return;
@@ -193,7 +204,7 @@ export async function getAvailableThemes(): Promise<ThemeManifest[]> {
   return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function listThemesWithState(): Promise<ThemeWithState[]> {
+export async function listThemesWithState(siteId?: string): Promise<ThemeWithState[]> {
   const themes = await getAvailableThemes();
   if (themes.length === 0) {
     return [
@@ -215,9 +226,17 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
 
   const keys = themes.flatMap((theme) => {
     const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
-    return legacyId
+    const baseKeys = legacyId
       ? [themeEnabledKey(theme.id), themeConfigKey(theme.id), themeEnabledKey(legacyId), themeConfigKey(legacyId)]
       : [themeEnabledKey(theme.id), themeConfigKey(theme.id)];
+    if (!siteId) return baseKeys;
+    return legacyId
+      ? [
+          ...baseKeys,
+          siteThemeConfigKey(siteId, theme.id),
+          siteThemeConfigKey(siteId, legacyId),
+        ]
+      : [...baseKeys, siteThemeConfigKey(siteId, theme.id)];
   });
   const byKey = await getSettingsByKeys(keys);
 
@@ -225,6 +244,10 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
     const legacyId = Object.entries(LEGACY_THEME_ID_ALIASES).find(([, current]) => current === theme.id)?.[0];
     const storedConfigRaw = byKey[themeConfigKey(theme.id)] ?? (legacyId ? byKey[themeConfigKey(legacyId)] : undefined);
     const storedConfig = storedConfigRaw ? parseJson<Record<string, unknown>>(storedConfigRaw, {}) : {};
+    const siteConfigRaw = siteId
+      ? byKey[siteThemeConfigKey(siteId, theme.id)] ?? (legacyId ? byKey[siteThemeConfigKey(siteId, legacyId)] : undefined)
+      : undefined;
+    const siteConfig = siteConfigRaw ? parseJson<Record<string, unknown>>(siteConfigRaw, {}) : {};
     const enabledRaw = byKey[themeEnabledKey(theme.id)] ?? (legacyId ? byKey[themeEnabledKey(legacyId)] : undefined);
     const fieldDefaults = Object.fromEntries(
       (theme.settingsFields || [])
@@ -238,6 +261,7 @@ export async function listThemesWithState(): Promise<ThemeWithState[]> {
       config: normalizeThemeConfig({
         ...fieldDefaults,
         ...storedConfig,
+        ...siteConfig,
       }),
       sourceDir: (theme as ThemeManifestResolved).sourceDir,
     };
@@ -252,6 +276,11 @@ export async function setThemeEnabled(themeId: string, enabled: boolean) {
 export async function saveThemeConfig(themeId: string, config: Record<string, unknown>) {
   const resolvedThemeId = resolveThemeIdAlias(themeId);
   await setSettingByKey(themeConfigKey(resolvedThemeId), JSON.stringify(config));
+}
+
+export async function saveSiteThemeConfig(siteId: string, themeId: string, config: Record<string, unknown>) {
+  const resolvedThemeId = resolveThemeIdAlias(themeId);
+  await setSettingByKey(siteThemeConfigKey(siteId, resolvedThemeId), JSON.stringify(config));
 }
 
 export async function setSiteTheme(siteId: string, themeId: string) {
@@ -274,7 +303,7 @@ export async function getSiteThemeId(siteId: string) {
 }
 
 export async function getSiteThemeTokens(siteId: string): Promise<ThemeTokens> {
-  const [themes, selectedId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteId)]);
+  const [themes, selectedId] = await Promise.all([listThemesWithState(siteId), getSiteThemeId(siteId)]);
   const enabledThemes = themes.filter((theme) => theme.enabled);
   const chosen =
     enabledThemes.find((theme) => theme.id === selectedId) ||

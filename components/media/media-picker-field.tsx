@@ -86,6 +86,19 @@ export default function MediaPickerField({
         >
           Open Media Manager
         </button>
+        {mediaId || mediaUrl ? (
+          <button
+            type="button"
+            onClick={() => {
+              setMediaId("");
+              setMediaLabel("");
+              setMediaUrl("");
+            }}
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-black"
+          >
+            Clear Selection
+          </button>
+        ) : null}
         <p className="text-xs text-stone-600">{displayLabel}</p>
       </div>
       {mediaPickerElement}

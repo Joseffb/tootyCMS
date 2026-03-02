@@ -89,7 +89,7 @@ function getThemeBaseDir(active: ThemeWithState) {
 }
 
 export async function getActiveThemeForSite(siteId: string): Promise<ThemeWithState | null> {
-  const [themes, selectedId] = await Promise.all([listThemesWithState(), getSiteThemeId(siteId)]);
+  const [themes, selectedId] = await Promise.all([listThemesWithState(siteId), getSiteThemeId(siteId)]);
   if (!themes.length) return null;
   const enabledThemes = themes.filter((theme) => theme.enabled);
   return enabledThemes.find((theme) => theme.id === selectedId) || enabledThemes[0] || themes[0] || null;

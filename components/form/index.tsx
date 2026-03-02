@@ -8,7 +8,7 @@ import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import DomainStatus from "./domain-status";
 import DomainConfiguration from "./domain-configuration";
-import Uploader from "./uploader";
+import MediaPickerField from "@/components/media/media-picker-field";
 
 interface FormProps {
   title: string;
@@ -84,10 +84,13 @@ export default function Form({
         {inputAttrs.name === "image" ||
         inputAttrs.name === "logo" ||
         inputAttrs.name === "heroImage" ? (
-          <Uploader
-            defaultValue={inputAttrs.defaultValue as string}
-            name={inputAttrs.name}
+          <MediaPickerField
             siteId={siteId}
+            name={inputAttrs.name}
+            label={title}
+            initialValue={String(inputAttrs.defaultValue || "")}
+            valueMode="url"
+            companionMediaIdName={`${inputAttrs.name}__mediaId`}
           />
         ) : inputAttrs.name === "font" ? (
           <div className="flex max-w-sm items-center overflow-hidden rounded-lg border border-stone-600">

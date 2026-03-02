@@ -9,6 +9,7 @@ export const SEO_META_DESCRIPTION_KEY = "seo_meta_description";
 export const SOCIAL_META_TITLE_KEY = "social_meta_title";
 export const SOCIAL_META_DESCRIPTION_KEY = "social_meta_description";
 export const SOCIAL_META_IMAGE_KEY = "social_meta_image";
+export const SOCIAL_META_IMAGE_MEDIA_ID_KEY = "social_meta_image_media_id";
 export const MAIN_HEADER_ENABLED_KEY = "main_header_enabled";
 export const MAIN_HEADER_SHOW_NETWORK_SITES_KEY = "main_header_show_network_sites";
 export const WRITING_PERMALINK_STYLE_KEY = "writing_permalink_style";
