@@ -104,7 +104,7 @@ export default function CollectionSetInlineEditor({
           </div>
           <Link
             href={closeHref}
-            className="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+            className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-stone-50 dark:border-stone-700 dark:bg-white dark:text-black"
           >
             Close
           </Link>
@@ -160,7 +160,7 @@ export default function CollectionSetInlineEditor({
                 const nextState = workflowStates[(currentIndex + 1 + workflowStates.length) % workflowStates.length] || draft.workflowState;
                 commit({ ...draft, workflowState: nextState }, "Workflow");
               }}
-              className="inline-flex w-fit items-center gap-2 rounded-full border border-stone-300 px-3 py-2 text-sm font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+              className="inline-flex w-fit items-center gap-2 rounded-full border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-black hover:bg-stone-50 dark:border-stone-700 dark:bg-white dark:text-black"
             >
               {humanizeValue(draft.workflowState)}
               <span className={`inline-flex h-2.5 w-2.5 rounded-full ${draft.workflowState === "published" ? "bg-lime-300 shadow-[0_0_6px_rgba(163,230,53,0.95)]" : "bg-stone-300/70 dark:bg-stone-600"}`}></span>

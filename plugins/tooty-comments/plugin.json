@@ -1,7 +1,7 @@
 {
   "id": "tooty-comments",
   "name": "Tooty Comments",
-  "description": "Baseline comment provider and governance controls for site content.",
+  "description": "Enables Tooty's native comments system using the built-in table-backed provider.",
   "version": "0.1.0",
   "minCoreVersion": "0.1.x",
   "scope": "site",

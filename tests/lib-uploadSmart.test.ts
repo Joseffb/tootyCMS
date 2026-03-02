@@ -13,7 +13,7 @@ describe("uploadSmart", () => {
     vi.unstubAllGlobals();
   });
 
-  it("tries blob upload first and returns url when successful", async () => {
+  it("uses the canonical media upload endpoint and returns url when successful", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(JSON.stringify({ url: "https://blob.example/image.png" }), {
         status: 200,
@@ -31,41 +31,13 @@ describe("uploadSmart", () => {
     expect(response.url).toBe("https://blob.example/image.png");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/uploadImage",
+      "/api/media/upload",
       expect.objectContaining({ method: "POST" }),
     );
   });
 
-  it("falls back to local upload when blob upload fails", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("blob failed", { status: 500 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ url: "/uploads/site-1/image.png" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const response = await uploadSmart({
-      file: new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" }),
-      name: "heroImage",
-      siteId: "site-1",
-    });
-
-    expect(response.url).toBe("/uploads/site-1/image.png");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/uploadImage");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/uploadImageLocal");
-  });
-
-  it("throws when both upload backends fail", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("blob failed", { status: 500 }))
-      .mockResolvedValueOnce(new Response("local failed", { status: 500 }))
-      .mockResolvedValueOnce(new Response("db failed", { status: 500 }));
+  it("throws when the canonical media upload endpoint fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response("upload failed", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -74,7 +46,10 @@ describe("uploadSmart", () => {
         name: "heroImage",
         siteId: "site-1",
       }),
-    ).rejects.toThrow("/api/uploadImageDb failed (500)");
+    ).rejects.toThrow("/api/media/upload failed (500)");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/media/upload");
   });
 
   it("uses db blob endpoint when mode is dbblob", async () => {
@@ -95,10 +70,10 @@ describe("uploadSmart", () => {
 
     expect(response.url).toContain("data:image/png");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/uploadImageDb");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/media/upload?provider=dbblob");
   });
 
-  it("uses blob endpoint only when mode is blob", async () => {
+  it("uses canonical media upload with blob provider override when mode is blob", async () => {
     process.env.NEXT_PUBLIC_MEDIA_UPLOAD_PROVIDER = "blob";
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(JSON.stringify({ url: "https://blob.example/image.png" }), {
@@ -115,10 +90,10 @@ describe("uploadSmart", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/uploadImage");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/media/upload?provider=blob");
   });
 
-  it("uses local endpoint only when mode is s3", async () => {
+  it("uses canonical media upload with s3 provider override when mode is s3", async () => {
     process.env.NEXT_PUBLIC_MEDIA_UPLOAD_PROVIDER = "s3";
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(JSON.stringify({ url: "/uploads/site-1/image.png" }), {
@@ -135,7 +110,7 @@ describe("uploadSmart", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/uploadImageLocal");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/media/upload?provider=s3");
   });
 
   it("falls back to non-crypto traceId generation when crypto is unavailable", async () => {

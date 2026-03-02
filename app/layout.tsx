@@ -66,10 +66,6 @@ export default function RootLayout({
         <BotIdClient
           protect={[
             { path: "/api/generate", method: "POST" },
-            { path: "/api/uploadImage", method: "POST" },
-            { path: "/api/uploadImageLocal", method: "POST" },
-            { path: "/api/uploadImageDb", method: "POST" },
-            { path: "/api/media/upload-file", method: "POST" },
           ]}
         />
         <AnalyticsConditional />

@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 const cards = [
-  { title: "Sites", href: "/settings/sites", desc: "Tabular site index with links to site-specific settings." },
+  { title: "Sites", href: "/app/sites", desc: "Tabular site index with links to site-specific settings." },
   { title: "Themes", href: "/settings/themes", desc: "Enable themes and manage theme-level options." },
   { title: "Plugins", href: "/settings/plugins", desc: "Enable plugins and configure plugin settings." },
   { title: "Database", href: "/settings/database", desc: "Check schema compatibility and run safe update fixes." },

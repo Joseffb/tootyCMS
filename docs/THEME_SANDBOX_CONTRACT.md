@@ -15,6 +15,7 @@ Themes are presentation modules only.
 - Themes may not evaluate capabilities, permissions, or governance decisions.
 - Themes may not rely on feature-specific control booleans injected by Core for one plugin.
 - Themes should consume generic DTOs, slots, and query results instead of plugin-specific permission flags.
+- Themes may render media URLs and metadata already resolved by Core, but may not infer storage provider details or interact with media storage directly.
 - Feature behavior belongs in plugins.
 - Core contains only spines and contracts for extension behavior.
 
@@ -76,4 +77,5 @@ Core computes final URLs using active site permalink settings.
 - No mascot/theme-brand imports in CMS route files under `app/[domain]/**` unless the route is a theme renderer.
 - Theme decisions are implemented in `themes/<theme-id>/**`.
 - Theme code does not implement capability checks, routing rules, or feature/business semantics.
+- Theme code does not infer media provider internals, access storage buckets, or perform media cleanup logic.
 - Tracing logs show normal request lifecycle (`request:begin` -> `render:*` -> `request:end`) after changes.

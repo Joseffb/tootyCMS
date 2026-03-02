@@ -4,7 +4,7 @@ import { SITE_CAPABILITIES, type SiteCapability } from "@/lib/rbac";
 
 export type ExtensionKind = "plugin" | "theme";
 
-export type ExtensionFieldType = "text" | "textarea" | "password" | "number" | "checkbox" | "select";
+export type ExtensionFieldType = "text" | "textarea" | "password" | "number" | "checkbox" | "select" | "media";
 
 export type ExtensionSettingsOption = {
   label: string;
@@ -142,7 +142,8 @@ function cleanField(field: unknown): ExtensionSettingsField | null {
       candidate.type === "password" ||
       candidate.type === "number" ||
       candidate.type === "checkbox" ||
-      candidate.type === "select"
+      candidate.type === "select" ||
+      candidate.type === "media"
         ? candidate.type
         : "text",
     options: Array.isArray(candidate.options)

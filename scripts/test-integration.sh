@@ -141,7 +141,7 @@ function check() {
 NODE
 
 set +e
-pnpm exec playwright test "$@"
+pnpm exec playwright test --reporter=line "$@"
 PLAYWRIGHT_STATUS=$?
 set -e
 

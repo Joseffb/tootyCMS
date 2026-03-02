@@ -145,7 +145,7 @@ export default async function SitesSettingsIndexPage() {
                 </td>
                 <td className="px-4 py-3">
                   <Link
-                    href={`/site/${site.id}/settings`}
+                    href={`/app/site/${site.id}/settings`}
                     className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white"
                   >
                     Open Site Settings

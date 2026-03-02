@@ -88,7 +88,7 @@ describe("extension guardrails", () => {
     ).toThrow(/plugin-guard/i);
   });
 
-  it("forwards comment provider when capability is enabled", () => {
+  it("forwards comment provider when capability is enabled, including external providers that do not use the native table adapter", () => {
     const registerCommentProvider = vi.fn();
     const api = createPluginExtensionApi("declared-plugin", {
       capabilities: { commentProviders: true },

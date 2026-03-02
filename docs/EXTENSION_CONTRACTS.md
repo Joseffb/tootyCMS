@@ -10,6 +10,7 @@ Core is the only authority for:
 - Database writes and schema changes
 - Render pipeline and extension loading
 - Side effects (must flow through Core APIs)
+- Infrastructure spine services (for example media)
 
 Core must remain platform-generic:
 
@@ -20,6 +21,8 @@ Core must remain platform-generic:
 ## Governance Exception: Spine Service Plugins (RARE, MUST)
 
 There is one narrow exception to the no-one-off-core-change rule:
+
+A spine service is a kernel-owned infrastructural subsystem that defines canonical transport, persistence authority, and extension contracts.
 
 - A governance-sensitive capability may be implemented as a spine service in plugin form when compliance, audit, or operational policy requires that the entire capability can be disabled or removed in one action.
 - The purpose of this pattern is kill-switch control across a whole activity class, not convenience customization for one extension.
@@ -86,12 +89,26 @@ Core's responsibility for plugins is limited to the plugin spine:
 - capability bridge
 - loading/activation mechanism
 
+Infrastructure note:
+
+- Media is a core spine service, not a normal plugin feature surface.
+- Media provider/storage selection may be abstracted behind Core contracts, but media transport, indexing, access enforcement, and cleanup remain Core-owned.
+- See [Media Spine System](./MEDIA_SPINE.md).
+
 Hard boundary:
 
 - Core must not contain plugin business logic.
 - Core must not contain plugin feature-specific UI.
 - Core must not contain plugin-owned routes.
 - Core must not contain plugin feature code or feature semantics.
+- Core must not contain plugin-specific files.
+- If a file exists only to serve one specific plugin, it does not belong in Core.
+- Core may contain only:
+  - generic extension spines
+  - generic reusable primitives
+  - kernel-owned infrastructure services
+  - platform-wide default implementations that remain provider-replaceable through a spine contract
+- Before any new extension-facing feature work continues, existing plugin-specific files must be removed or generalized so they are truly platform-generic.
 - The only pre-v1 exception is the governed `export-import` spine service. Its transport may remain kernel-owned because it is treated as a platform service packaged in plugin form, not as a normal feature plugin.
 - Feature behavior, business rules, admin UI, and route handlers belong in the plugin itself unless the user explicitly approves a platform-level architectural change.
 
@@ -166,6 +183,55 @@ Contract rules:
 - Workflow states are declarative and must map onto core-owned lifecycle handling.
 - Media linkage is metadata-backed and must resolve through core-managed media records.
 - Theme rendering remains query-first. Plugin content models do not grant plugins direct control over frontend rendering.
+
+### Media Spine Contract (MUST)
+
+Media is a governed core spine service.
+
+Core owns:
+
+- upload routes
+- storage provider selection
+- DB index writes
+- media URL resolution
+- access enforcement
+- cleanup execution
+
+Plugins may:
+
+- consume media through canonical media references
+- store media ids or media-linked metadata through normal contracts
+- use core-managed media APIs and selectors
+
+Plugins must not:
+
+- write directly to storage providers
+- write directly to `tooty_media`
+- bypass `/api/media` or governed upload routes
+- perform direct media capability checks in place of core authorization
+
+Themes must remain presentation-only consumers of media DTOs and URLs.
+
+Recommended media capability vocabulary:
+
+- `media.upload`
+- `media.list.all`
+- `media.list.own`
+- `media.attach`
+- `media.update.any`
+- `media.update.own`
+- `media.delete.any`
+- `media.delete.own`
+
+Media operations must always be tenant-scoped by `siteId`.
+
+See [Media Spine System](./MEDIA_SPINE.md).
+
+Core also ships the default governed admin surface for media selection and management:
+
+- `media.manager`
+
+Consumers should open the canonical media manager surface and persist `mediaId`-first selections rather than embedding ad hoc picker logic.
 
 Scope governance:
 
@@ -304,6 +370,16 @@ Plugin admin menu placement contract:
 
 ## Spine Provider Pattern (MUST)
 
+See also:
+
+- `docs/SPINE_SERVICES.md`
+
+Definition:
+
+- A Spine Service is a governed core subsystem that owns canonical semantics, normalization, routing, and dispatch for a capability class while allowing one or more replaceable providers to implement delivery or persistence through stable plugin contracts.
+- Core may provide first-party default providers for a Spine Service.
+- Spine compliance is determined by replaceability and the absence of bypass paths, not by requiring core to be an empty orchestrator.
+
 All spine systems follow one model:
 
 - plugin-provider registration contract for extension providers
@@ -326,6 +402,8 @@ Comment provider adapter note:
 - For site-scoped comment providers, Core may expose a generic adapter helper through the extension API (`api.core.comments.createTableBackedProvider()`).
 - This is a reusable storage adapter, not an active provider by itself.
 - The plugin must still call `registerCommentProvider()` to make the provider live.
+- External providers (for example Disqus-style or API-backed providers) may register directly through `registerCommentProvider()` and are not required to use Tooty's native comment tables.
+- `tooty-comments` is the first-party plugin that enables Tooty's native comments system by registering the built-in table-backed provider through this same contract.
 
 ### Comment Provider Writing Options UI Contract (MUST)
 

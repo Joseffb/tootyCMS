@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
+import { useMediaPicker } from "@/components/media/use-media-picker";
 
 type MediaOption = {
   id: number;
@@ -33,6 +34,8 @@ type Props = {
   deleteAction: (formData: FormData) => Promise<void>;
 };
 
+const IMAGE_URL_PLACEHOLDER = "Add an image URL";
+
 function humanizeValue(value: string) {
   return String(value || "")
     .replace(/[-_]+/g, " ")
@@ -45,7 +48,26 @@ function displayValue(value: string, fallback: string) {
   return text || fallback;
 }
 
-export default function CollectionSlideEditModal({
+function normalizeImageValue(value: string) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text === IMAGE_URL_PLACEHOLDER) return "";
+  return text;
+}
+
+function isPreviewableImageUrl(value: string) {
+  const text = normalizeImageValue(value);
+  if (!text) return false;
+  return (
+    text.startsWith("/") ||
+    text.startsWith("http://") ||
+    text.startsWith("https://") ||
+    text.startsWith("data:") ||
+    text.startsWith("blob:")
+  );
+}
+
+export default function CollectionChildEditModal({
   siteId,
   setId,
   childLabel,
@@ -56,12 +78,15 @@ export default function CollectionSlideEditModal({
   saveAction,
   deleteAction,
 }: Props) {
-  const [draft, setDraft] = useState<SlideState>(slide);
+  const [draft, setDraft] = useState<SlideState>(() => ({
+    ...slide,
+    image: normalizeImageValue(slide.image),
+  }));
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deleteArmed, setDeleteArmed] = useState(false);
-  const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [status, setStatus] = useState("All changes saved.");
   const [isPending, startTransition] = useTransition();
+  const { openMediaPicker, mediaPickerElement } = useMediaPicker();
 
   function commit(next: SlideState, label: string) {
     setDraft(next);
@@ -123,7 +148,10 @@ export default function CollectionSlideEditModal({
     await deleteAction(formData);
   }
 
-  const previewUrl = draft.image || mediaItems.find((item) => String(item.id) === draft.mediaId)?.url || "";
+  const previewUrl =
+    (isPreviewableImageUrl(draft.image) ? normalizeImageValue(draft.image) : "") ||
+    mediaItems.find((item) => String(item.id) === draft.mediaId)?.url ||
+    "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
@@ -224,20 +252,44 @@ export default function CollectionSlideEditModal({
             </div>
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Image URL</div>
-              <div
-                contentEditable
-                suppressContentEditableWarning
-                onBlur={handleEditableBlur("image", "", "Image URL")}
-                className="min-h-16 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black outline-none focus:border-stone-300 focus:bg-stone-50"
-              >
-                {displayValue(draft.image, "Add an image URL")}
-              </div>
+              <textarea
+                value={draft.image}
+                onChange={(event) => setDraft((current) => ({ ...current, image: event.target.value }))}
+                onBlur={(event) => {
+                  const nextValue = normalizeImageValue(event.target.value);
+                  if (nextValue === draft.image) return;
+                  commit({ ...draft, image: nextValue }, "Image URL");
+                }}
+                placeholder={IMAGE_URL_PLACEHOLDER}
+                className="min-h-16 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black"
+              />
             </div>
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Media Manager</div>
               <button
                 type="button"
-                onClick={() => setMediaModalOpen(true)}
+                onClick={() =>
+                  openMediaPicker({
+                    siteId,
+                    title: "Media Manager",
+                    mode: "pick",
+                    allowUpload: true,
+                    allowedMimePrefixes: ["image/"],
+                    selectedIds: draft.mediaId ? [draft.mediaId] : [],
+                    onSelect: (items) => {
+                      const next = items[0];
+                      if (!next) return;
+                      commit(
+                        {
+                          ...draft,
+                          mediaId: next.mediaId,
+                          image: next.url || "",
+                        },
+                        "Media",
+                      );
+                    },
+                  })
+                }
                 className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-black"
               >
                 Open Media Manager
@@ -336,54 +388,7 @@ export default function CollectionSlideEditModal({
           )}
         </div>
 
-        {mediaModalOpen ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-4xl rounded-2xl border border-stone-300 bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3">
-                <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-black">Media Manager</h3>
-                <button
-                  type="button"
-                  onClick={() => setMediaModalOpen(false)}
-                  className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="max-h-[60vh] overflow-y-auto p-4">
-                {mediaItems.length === 0 ? (
-                  <p className="text-sm text-stone-600">No media files found for this site.</p>
-                ) : (
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {mediaItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          commit(
-                            {
-                              ...draft,
-                              mediaId: String(item.id),
-                              image: draft.image || item.url,
-                            },
-                            "Media",
-                          );
-                          setMediaModalOpen(false);
-                        }}
-                        className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-left"
-                      >
-                        <div className="mb-3 overflow-hidden rounded-lg border border-stone-200 bg-white">
-                          <img src={item.url} alt={item.label || `Media ${item.id}`} className="aspect-[4/3] h-auto w-full object-cover" />
-                        </div>
-                        <div className="truncate text-sm font-semibold text-black">{item.label || item.url}</div>
-                        <div className="mt-1 truncate text-xs text-stone-500">{item.url}</div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {mediaPickerElement}
       </div>
     </div>
   );

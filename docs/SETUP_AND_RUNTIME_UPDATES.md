@@ -140,6 +140,24 @@ Local behavior:
 Result:
 - site cards, settings badges, analytics links, and theme render context use canonical URLs instead of hardcoded localhost fallbacks.
 
+## Media Spine Baseline (2026-03-01)
+
+Media is now documented as a governed core spine service.
+
+Core owns:
+
+- upload transport
+- storage provider selection
+- `tooty_media` index writes
+- tenant-scoped access enforcement
+- cleanup/retention execution
+- canonical URL resolution
+
+Plugins and themes consume media through core-managed references and DTOs only.
+
+Authoritative contract:
+- [Media Spine System](./MEDIA_SPINE.md)
+
 ## Main Site Domain Display
 
 Primary site links now resolve to root domain labels/URLs.

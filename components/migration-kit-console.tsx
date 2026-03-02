@@ -441,7 +441,7 @@ export default function MigrationKitConsole({ siteId, providers }: Props) {
       formData.append("file", importFile);
       formData.append("siteId", siteId);
       formData.append("name", importFile.name || "migration-import");
-      const response = await fetch("/api/media/upload-file", {
+      const response = await fetch("/api/media/upload", {
         method: "POST",
         body: formData,
       });

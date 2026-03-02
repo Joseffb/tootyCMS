@@ -11,20 +11,20 @@ type SlideItem = {
   editHref?: string;
 };
 
-export default function CarouselOrderManager({
+export default function CollectionOrderManager({
   siteId,
-  slides,
+  items: initialItems,
   saveOrderAction,
   extraFormData,
-  title = "Carousel Slides",
+  title = "Items",
 }: {
   siteId: string;
-  slides: SlideItem[];
+  items: SlideItem[];
   saveOrderAction: (formData: FormData) => Promise<void>;
   extraFormData?: Record<string, string>;
   title?: string;
 }) {
-  const [items, setItems] = useState(slides);
+  const [items, setItems] = useState(initialItems);
   const [draggingId, setDraggingId] = useState("");
   const [isPending, startTransition] = useTransition();
 
@@ -62,7 +62,7 @@ export default function CarouselOrderManager({
           <h2 className="font-cal text-xl dark:text-white">{title}</h2>
         </div>
         <div className="text-xs text-stone-500 dark:text-stone-400">
-          {items.length < 2 ? "Add more slides to reorder." : isPending ? "Saving order..." : "Drag to reorder. Saves automatically."}
+          {items.length < 2 ? "Add more items to reorder." : isPending ? "Saving order..." : "Drag to reorder. Saves automatically."}
         </div>
       </div>
 
@@ -89,7 +89,7 @@ export default function CarouselOrderManager({
               onDragEnd={() => setDraggingId("")}
               className="cursor-grab select-none text-lg leading-none text-stone-400"
               title="Drag to reorder"
-              aria-label={`Drag ${item.title || "slide"} to reorder`}
+              aria-label={`Drag ${item.title || "item"} to reorder`}
             >
               ::
             </span>
@@ -133,7 +133,7 @@ export default function CarouselOrderManager({
         ))}
         {items.length === 0 ? (
           <div className="rounded-md border border-dashed border-stone-300 px-3 py-4 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
-            No slides available to reorder.
+            No items available to reorder.
           </div>
         ) : null}
       </div>

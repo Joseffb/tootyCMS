@@ -52,9 +52,13 @@ export async function GET(req: Request) {
       url: media.url,
       objectKey: media.objectKey,
       label: media.label,
+      altText: media.altText,
+      caption: media.caption,
+      description: media.description,
       mimeType: media.mimeType,
       size: media.size,
       provider: media.provider,
+      userId: media.userId,
       createdAt: media.createdAt,
     })
     .from(media)

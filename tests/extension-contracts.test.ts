@@ -195,4 +195,27 @@ describe("extension contracts", () => {
     expect(theme?.queries?.[0]?.key).toBe("featured_showcases");
     expect(theme?.queries?.[0]?.route).toBe("home");
   });
+
+  it("preserves media settings field types for themes", () => {
+    const theme = validateThemeContract(
+      {
+        id: "media-theme",
+        name: "Media Theme",
+        settingsFields: [
+          {
+            key: "hero_image",
+            label: "Hero Image",
+            type: "media",
+          },
+        ],
+      },
+      "media-theme",
+    );
+
+    expect(theme?.settingsFields?.[0]).toMatchObject({
+      key: "hero_image",
+      label: "Hero Image",
+      type: "media",
+    });
+  });
 });

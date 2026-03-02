@@ -58,6 +58,7 @@ const nextConfig = {
   ...(typeof process.env.NEXT_DIST_DIR === "string" && process.env.NEXT_DIST_DIR.trim()
     ? { distDir: process.env.NEXT_DIST_DIR.trim() }
     : {}),
+  allowedDevOrigins: collectAllowedOrigins(),
   turbopack: {
     root: __dirname,
   },

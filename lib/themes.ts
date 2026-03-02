@@ -260,7 +260,15 @@ export async function setSiteTheme(siteId: string, themeId: string) {
 }
 
 export async function getSiteThemeId(siteId: string) {
-  const stored = String((await getSettingByKey(siteThemeKey(siteId))) || "").trim();
+  let stored = "";
+  try {
+    stored = String((await getSettingByKey(siteThemeKey(siteId))) || "").trim();
+  } catch (error) {
+    if (error instanceof Error && error.message === "Invalid site.") {
+      return DEFAULT_SITE_THEME_ID;
+    }
+    throw error;
+  }
   if (!stored) return DEFAULT_SITE_THEME_ID;
   return resolveThemeIdAlias(stored);
 }

@@ -59,7 +59,14 @@ export async function setTextSetting(key: string, rawValue: string) {
 }
 
 export async function getSiteTextSetting(siteId: string, key: string, fallback = "") {
-  return getTextSetting(siteScopedSettingKey(siteId, key), fallback);
+  try {
+    return await getTextSetting(siteScopedSettingKey(siteId, key), fallback);
+  } catch (error) {
+    if (error instanceof Error && error.message === "Invalid site.") {
+      return fallback;
+    }
+    throw error;
+  }
 }
 
 export async function setSiteTextSetting(siteId: string, key: string, rawValue: string) {
@@ -67,7 +74,14 @@ export async function setSiteTextSetting(siteId: string, key: string, rawValue: 
 }
 
 export async function getSiteBooleanSetting(siteId: string, key: string, fallback: boolean) {
-  return getBooleanSetting(siteScopedSettingKey(siteId, key), fallback);
+  try {
+    return await getBooleanSetting(siteScopedSettingKey(siteId, key), fallback);
+  } catch (error) {
+    if (error instanceof Error && error.message === "Invalid site.") {
+      return fallback;
+    }
+    throw error;
+  }
 }
 
 export async function setSiteBooleanSetting(siteId: string, key: string, value: boolean) {

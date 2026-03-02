@@ -251,26 +251,6 @@ export default async function proxy(req: NextRequest) {
         return redirectWithTrace(`${externalAdminBase}/site/${lastSiteId}`);
       }
     }
-    if (isAuthenticated && (appPath === "/sites" || appPath === "/sites/")) {
-      const lastAppPath = readLastAppPath(req);
-      if (lastAppPath) {
-        traceEdge("middleware", "redirect admin-path /sites to last path", {
-          traceId,
-          to: `${externalAdminBase}${lastAppPath}`,
-        });
-        return redirectWithTrace(`${externalAdminBase}${lastAppPath}`);
-      }
-      const lastSiteId = readLastSiteId(req);
-      if (lastSiteId) {
-        traceEdge("middleware", "redirect admin-path /sites to last site", {
-          traceId,
-          to: `${externalAdminBase}/site/${lastSiteId}`,
-        });
-        return redirectWithTrace(`${externalAdminBase}/site/${lastSiteId}`);
-      }
-      traceEdge("middleware", "redirect admin-path /sites to admin root", { traceId, to: externalAdminBase });
-      return redirectWithTrace(externalAdminBase);
-    }
     if (
       isAuthenticated &&
       forcePasswordChange &&

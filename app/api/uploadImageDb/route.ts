@@ -1,28 +1,20 @@
 import { NextResponse } from "next/server";
-import crypto from "crypto";
-
-import db from "@/lib/db";
-import { media, sites } from "@/lib/schema";
 import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
-import { and, eq, inArray } from "drizzle-orm";
-import { userCan } from "@/lib/authorization";
-import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
 import { buildMediaVariants } from "@/lib/media-variants";
+import {
+  createMediaUploadTraceId,
+  findExistingMediaByKeys,
+  requireMediaUploadAccess,
+  resolveMediaUploadTransport,
+  safeMediaSegment,
+  upsertMediaRecord,
+} from "@/lib/media-service";
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
-function safeSegment(value: string) {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return normalized || "file";
-}
-
 export async function POST(req: Request) {
-  const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
+  const traceId = createMediaUploadTraceId(req);
   trace("upload.api.dbblob", "request start", { traceId });
   const formData = await req.formData();
 
@@ -50,93 +42,72 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const site = await db.query.sites.findFirst({
-    where: eq(sites.id, siteId),
-    columns: { id: true },
-  });
-  if (!site) {
-    return NextResponse.json({ error: "Site not found" }, { status: 404 });
-  }
-  const canUpload = await userCan("site.media.create", session.user.id, { siteId: site.id });
-  if (!canUpload) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  const quota = await assertSiteMediaQuotaAvailable(site.id);
-  if (!quota.allowed) {
+  try {
+    await requireMediaUploadAccess(siteId, session.user.id);
+  } catch (error: any) {
     return NextResponse.json(
       {
-        error: "Media library limit reached for this site.",
-        code: "media_quota_exceeded",
-        details: { maxItems: quota.maxItems, currentItems: quota.currentItems },
+        error: error?.message || "Upload access denied.",
+        ...(error?.code ? { code: error.code } : {}),
+        ...(error?.details ? { details: error.details } : {}),
       },
-      { status: 429 },
+      { status: error?.status || 500 },
     );
   }
 
   const { hash, variants, extension, mimeType } = await buildMediaVariants(file);
-  const siteSegment = safeSegment(siteId);
-  const nameLabel = safeSegment(name);
+  const siteSegment = safeMediaSegment(siteId);
+  const nameLabel = safeMediaSegment(name);
   const originalKey = `${siteSegment}/${hash}.${extension}`;
-  const variantKeys = variants
-    .filter((variant) => variant.suffix !== "original")
-    .map((variant) => `${siteSegment}/${hash}-${variant.suffix}.${extension}`);
-  const allKeys = [originalKey, ...variantKeys];
-
-  let existingByKey = new Map<string, string>();
-  try {
-    const existing = await db
-      .select({
-        objectKey: media.objectKey,
-        url: media.url,
-      })
-      .from(media)
-      .where(and(eq(media.siteId, siteId), inArray(media.objectKey, allKeys)));
-    existingByKey = new Map(existing.map((row) => [row.objectKey, row.url]));
-  } catch {
-    existingByKey = new Map<string, string>();
-  }
+  const uploadedByKey = new Map<string, string>();
+  const expectedKeys = variants.map((variant) =>
+    variant.suffix === "original"
+      ? originalKey
+      : `${siteSegment}/${hash}-${variant.suffix}.${extension}`,
+  );
 
   try {
+    try {
+      const existingRows = await findExistingMediaByKeys(expectedKeys);
+      for (const row of existingRows) {
+        if (row?.objectKey && row?.url) {
+          uploadedByKey.set(row.objectKey, row.url);
+        }
+      }
+    } catch (error) {
+      trace("upload.api.dbblob", "existing media lookup failed", {
+        traceId,
+        siteId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     for (const variant of variants) {
       const key =
         variant.suffix === "original"
           ? originalKey
           : `${siteSegment}/${hash}-${variant.suffix}.${extension}`;
-      let url = existingByKey.get(key);
-      if (!url) {
-        const bytes = Buffer.from(variant.buffer);
-        url = `data:${variant.mimeType};base64,${bytes.toString("base64")}`;
-      }
+      if (uploadedByKey.has(key)) continue;
+      const transport = await resolveMediaUploadTransport({
+        key,
+        bytes: Buffer.from(variant.buffer),
+        mimeType: variant.mimeType,
+        mode: "dbblob",
+        traceId,
+        traceNamespace: "upload.api.dbblob",
+      });
       const variantLabel = variant.suffix === "original" ? nameLabel : `${nameLabel}-${variant.suffix}`;
-
-      await db
-        .insert(media)
-        .values({
-          siteId,
-          userId: session.user.id,
-          provider: "dbblob",
-          bucket: "dbblob",
-          objectKey: key,
-          url,
-          label: variantLabel,
-          mimeType,
-          size: variant.buffer.byteLength,
-        })
-        .onConflictDoUpdate({
-          target: media.objectKey,
-          set: {
-            siteId,
-            userId: session.user.id,
-            provider: "dbblob",
-            bucket: "dbblob",
-            url,
-            label: variantLabel,
-            mimeType,
-            size: variant.buffer.byteLength,
-            updatedAt: new Date(),
-          },
-        });
-      existingByKey.set(key, url);
+      await upsertMediaRecord({
+        siteId,
+        userId: session.user.id,
+        provider: transport.provider,
+        bucket: transport.bucket,
+        objectKey: key,
+        url: transport.url,
+        label: variantLabel,
+        mimeType,
+        size: variant.buffer.byteLength,
+      });
+      uploadedByKey.set(key, transport.url);
     }
   } catch (error) {
     trace("upload.api.dbblob", "db write failed", { traceId, error: error instanceof Error ? error.message : String(error) }, "error");
@@ -153,7 +124,7 @@ export async function POST(req: Request) {
   });
 
   return NextResponse.json({
-    url: existingByKey.get(originalKey) ?? "",
+    url: uploadedByKey.get(originalKey) ?? "",
     filename: originalKey,
     hash,
     variants: variants
@@ -164,7 +135,7 @@ export async function POST(req: Request) {
           suffix: variant.suffix,
           width: variant.width,
           key,
-          url: existingByKey.get(key),
+          url: uploadedByKey.get(key),
         };
       }),
   });

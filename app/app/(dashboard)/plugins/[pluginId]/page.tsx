@@ -7,9 +7,10 @@ import { userCan } from "@/lib/authorization";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { sendCommunication } from "@/lib/communications";
 import MigrationKitConsole from "@/components/migration-kit-console";
-import CarouselOrderManager from "@/components/plugins/carousel-order-manager";
+import CollectionOrderManager from "@/components/plugins/collection-order-manager";
 import CollectionSetInlineEditor from "@/components/plugins/collection-set-inline-editor";
-import CollectionSlideEditModal from "@/components/plugins/collection-slide-edit-modal";
+import CollectionChildEditModal from "@/components/plugins/collection-child-edit-modal";
+import MediaPickerField from "@/components/media/media-picker-field";
 import PluginSettingsInlineForm from "@/components/plugins/plugin-settings-inline-form";
 import PluginSiteSelect from "@/components/plugins/plugin-site-select";
 import db from "@/lib/db";
@@ -22,6 +23,15 @@ type Props = {
   params: Promise<{ pluginId: string }>;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+const LEGACY_IMAGE_URL_PLACEHOLDER = "Add an image URL";
+
+function normalizeManagedImageValue(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text === LEGACY_IMAGE_URL_PLACEHOLDER) return "";
+  return text;
+}
 
 function humanizeCollectionLabel(value: string) {
   const normalized = String(value || "")
@@ -39,6 +49,10 @@ function toSlug(value: string, fallback: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return slug || fallback;
+}
+
+function buildRefreshToken() {
+  return Date.now().toString(36);
 }
 
 export default async function PluginSetupPage({ params, searchParams }: Props) {
@@ -569,7 +583,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const slideId = String(formData.get("slideId") || "").trim();
       const title = String(formData.get("title") || "").trim();
       const description = String(formData.get("description") || "").trim();
-      const imageInput = String(formData.get("image") || "").trim();
+      const imageInput = normalizeManagedImageValue(formData.get("image"));
       const mediaId = String(formData.get("media_id") || "").trim();
       const mediaRow =
         mediaId && model.mediaMetaKey
@@ -644,10 +658,10 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           });
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
       redirect(
-        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&savedSlide=1`,
+        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&savedSlide=1&refresh=${encodeURIComponent(buildRefreshToken())}`,
       );
     }
 
@@ -667,10 +681,10 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       await db.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, slideId));
       await db.delete(domainPosts).where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId)));
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
       redirect(
-        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&deletedSlide=1`,
+        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&deletedSlide=1&refresh=${encodeURIComponent(buildRefreshToken())}`,
       );
     }
 
@@ -712,7 +726,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       const title = String(formData.get("title") || "").trim() || "Untitled";
       const description = String(formData.get("description") || "").trim();
-      const imageInput = String(formData.get("image") || "").trim();
+      const imageInput = normalizeManagedImageValue(formData.get("image"));
       const mediaId = String(formData.get("media_id") || "").trim();
       const mediaRow =
         mediaId && model.mediaMetaKey
@@ -767,9 +781,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           });
       }
 
-      revalidatePath(
-        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`,
-      );
+      revalidatePath(`/app/plugins/${pluginData.id}`);
     }
 
     async function reorderCollectionChildren(formData: FormData) {
@@ -817,7 +829,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           });
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`);
+      revalidatePath(`/app/plugins/${pluginData.id}`);
       revalidatePath(`/`);
     }
 
@@ -913,7 +925,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                 className={`rounded-md border px-3 py-2 text-xs font-semibold ${
                   tab === "carousels"
                     ? "border-black bg-black text-white"
-                    : "border-stone-300 text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                    : "border-stone-300 bg-white text-black dark:border-stone-700 dark:bg-white dark:text-black"
                 }`}
               >
                 {parentLabel}s
@@ -923,7 +935,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                 className={`rounded-md border px-3 py-2 text-xs font-semibold ${
                   tab === "settings"
                     ? "border-black bg-black text-white"
-                    : "border-stone-300 text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                    : "border-stone-300 bg-white text-black dark:border-stone-700 dark:bg-white dark:text-black"
                 }`}
               >
                 Settings
@@ -1149,7 +1161,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                             </div>
                             <Link
                               href={buildCollectionHref({ deleteSet: undefined })}
-                              className="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-stone-50 dark:border-stone-700 dark:bg-white dark:text-black"
                             >
                               Cancel
                             </Link>
@@ -1187,7 +1199,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   <div className="flex flex-wrap gap-2">
                     <Link
                       href={buildCollectionHref({ view: "carousels", createSlide: undefined, editSlide: undefined })}
-                      className="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
+                      className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-stone-50 dark:border-stone-700 dark:bg-white dark:text-black"
                     >
                       Back to {parentLabel}s
                     </Link>
@@ -1200,9 +1212,9 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   </div>
                 </div>
 
-                <CarouselOrderManager
+                <CollectionOrderManager
                   siteId={effectiveSiteId}
-                  slides={slides.map((slide) => ({
+                  items={slides.map((slide) => ({
                     id: slide.id,
                     title: slide.title || "Untitled",
                     sortOrder: slide.sortOrder,
@@ -1287,17 +1299,13 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                             <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Image URL</span>
                             <textarea name="image" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
                           </label>
-                          <label className="grid gap-2 text-sm text-black">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Media Manager</span>
-                            <select name="media_id" className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black">
-                              <option value="">Select media</option>
-                              {mediaItems.map((item) => (
-                                <option key={item.id} value={String(item.id)}>
-                                  {item.label || item.url}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
+                          <MediaPickerField
+                            siteId={effectiveSiteId}
+                            name="media_id"
+                            label="Media Manager"
+                            allowUpload
+                            allowedMimePrefixes={["image/"]}
+                          />
                         </div>
 
                         <div className="space-y-4">
@@ -1327,7 +1335,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                       const slide = slides.find((entry) => entry.id === editSlideId);
                       if (!slide) return null;
                       return (
-                        <CollectionSlideEditModal
+                        <CollectionChildEditModal
                           siteId={effectiveSiteId}
                           setId={selectedSet.id}
                           childLabel={childLabel}
@@ -1342,7 +1350,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                             id: slide.id,
                             title: slide.title || "",
                             description: slide.description || "",
-                            image: slide.image || "",
+                            image: normalizeManagedImageValue(slide.image),
                             workflowState: slide.workflowState,
                             mediaId: model.mediaMetaKey ? slide.meta[model.mediaMetaKey] || "" : "",
                             ctaText: model.ctaTextMetaKey ? slide.meta[model.ctaTextMetaKey] || "" : "",
@@ -1704,13 +1712,13 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
           <div className="flex gap-2 border-b border-stone-200 pb-2 dark:border-stone-700">
             <Link
               href={`/plugins/${pluginData.id}?tab=settings`}
-              className={`rounded border px-3 py-1 text-sm ${tab === "settings" ? "border-black bg-black text-white" : "border-stone-300 bg-white text-black dark:border-stone-600 dark:bg-stone-900 dark:text-white"}`}
+              className={`rounded border px-3 py-1 text-sm ${tab === "settings" ? "border-black bg-black text-white" : "border-stone-300 bg-white text-black dark:border-stone-700 dark:bg-white dark:text-black"}`}
             >
               Settings
             </Link>
             <Link
               href={`/plugins/${pluginData.id}?tab=send-message`}
-              className={`rounded border px-3 py-1 text-sm ${tab === "send-message" ? "border-black bg-black text-white" : "border-stone-300 bg-white text-black dark:border-stone-600 dark:bg-stone-900 dark:text-white"}`}
+              className={`rounded border px-3 py-1 text-sm ${tab === "send-message" ? "border-black bg-black text-white" : "border-stone-300 bg-white text-black dark:border-stone-700 dark:bg-white dark:text-black"}`}
             >
               Send Message
             </Link>

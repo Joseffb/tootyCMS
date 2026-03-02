@@ -99,7 +99,20 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
 
     const config: Record<string, unknown> = { ...(theme.config || {}) };
     for (const field of theme.settingsFields || []) {
-      config[field.key] = field.type === "checkbox" ? formData.get(field.key) === "on" : String(formData.get(field.key) || "");
+      if (field.type === "checkbox") {
+        config[field.key] = formData.get(field.key) === "on";
+        continue;
+      }
+      config[field.key] = String(formData.get(field.key) || "");
+      if (field.type === "media") {
+        const mediaIdKey = `${field.key}__mediaId`;
+        const selectedMediaId = String(formData.get(mediaIdKey) || "").trim();
+        if (selectedMediaId) {
+          config[`${field.key}_media_id`] = selectedMediaId;
+        } else {
+          delete config[`${field.key}_media_id`];
+        }
+      }
     }
 
     await saveThemeConfig(themeId, config);
@@ -266,6 +279,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
                     ) : null}
                     {selectedThemeId === theme.id && (theme.settingsFields || []).length > 0 ? (
                       <SiteThemeSettingsModal
+                        siteId={siteData.id}
                         themeId={theme.id}
                         themeName={theme.name}
                         fields={theme.settingsFields || []}

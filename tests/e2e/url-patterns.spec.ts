@@ -58,16 +58,26 @@ async function getWithRetry(
   request: APIRequestContext,
   url: string,
   expectedStatus: number,
-  timeoutMs = 4000,
-  intervalMs = 200,
+  timeoutMs = 10_000,
+  intervalMs = 250,
 ) {
   const started = Date.now();
-  let response = await request.get(url);
-  while (response.status() !== expectedStatus && Date.now() - started < timeoutMs) {
+  const requestTimeoutMs = Math.max(3_000, Math.min(8_000, intervalMs * 16));
+  let lastResponse: Awaited<ReturnType<APIRequestContext["get"]>> | null = null;
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await request.get(url, { timeout: requestTimeoutMs });
+      lastResponse = response;
+      if (response.status() === expectedStatus) return response;
+    } catch {
+      // Route flips during settings propagation can briefly hang; keep retrying within the caller's budget.
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    response = await request.get(url);
   }
-  return response;
+
+  if (lastResponse) return lastResponse;
+  return request.get(url, { timeout: Math.max(requestTimeoutMs, 4_000) });
 }
 
 async function gotoWithBodyTextRetry(

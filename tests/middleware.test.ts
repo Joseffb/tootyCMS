@@ -74,6 +74,21 @@ describe("middleware routing", () => {
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app");
   });
 
+  it("keeps explicit /app/cp/sites on the site index even when a last admin path cookie exists", async () => {
+    mockedToken = { sub: "user-1" };
+    const req = makeRequest(
+      "http://example.com/app/cp/sites",
+      "example.com",
+      "next-auth.session-token=test-session; cms_last_admin_path=%2Fsite%2Fsite-1%2Fsettings",
+    );
+
+    const response = await proxy(req);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/sites");
+  });
+
   it("redirects explicit /app paths on the root host to the canonical /app/cp alias path", async () => {
     const req = makeRequest("http://example.com/app/settings/users", "example.com");
 

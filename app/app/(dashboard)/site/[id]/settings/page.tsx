@@ -132,7 +132,7 @@ export default async function SiteSettingsIndex({ params }: Props) {
               </p>
               <div className="w-fit">
                 <CreateSiteButton label="Add New Site">
-                  <CreateSiteModal successRedirectPath="/" />
+                  <CreateSiteModal successRedirectPath="/app/sites" />
                 </CreateSiteButton>
               </div>
             </div>

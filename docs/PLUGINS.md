@@ -131,6 +131,12 @@ Service-style core namespace (recommended):
 - `api.core.webhooks.subscriptions.list|upsert|delete(...)`
 - `api.core.webhooks.deliveries.retryPending(...)`
 
+Comment provider note:
+- `registerCommentProvider(...)` is the authoritative extension path for comments providers.
+- `api.core.comments.createTableBackedProvider()` is optional and only exists as a reusable adapter for Tooty's native table-backed comments.
+- Third-party comment providers may register their own provider implementation and use external storage/services instead of Tooty's native comment tables.
+- `tooty-comments` is the first-party plugin that enables the native table-backed provider.
+
 Route-like dispatcher for dynamic keys:
 - `api.core.invoke("siteId.<siteId>.taxonomy.list")`
 - `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.edit", "name:New Label")`

@@ -28,81 +28,81 @@ export default function SiteSettingsNav() {
   const navItems = useMemo(() => ([
     {
       name: "General",
-      href: `/site/${id}/settings`,
+      href: `/app/site/${id}/settings`,
       segment: null,
     },
     {
       name: "Categories",
-      href: `/site/${id}/settings/categories`,
+      href: `/app/site/${id}/settings/categories`,
       segment: "categories",
     },
     {
       name: "Post-Types",
-      href: `/site/${id}/settings/domains`,
+      href: `/app/site/${id}/settings/domains`,
       segment: "domains",
     },
     {
       name: "Reading",
-      href: `/site/${id}/settings/reading`,
+      href: `/app/site/${id}/settings/reading`,
       segment: "reading",
     },
     {
       name: "SEO & Social",
-      href: `/site/${id}/settings/seo`,
+      href: `/app/site/${id}/settings/seo`,
       segment: "seo",
     },
     {
       name: "Writing",
-      href: `/site/${id}/settings/writing`,
+      href: `/app/site/${id}/settings/writing`,
       segment: "writing",
     },
     {
       name: "Menus",
-      href: `/site/${id}/settings/menus`,
+      href: `/app/site/${id}/settings/menus`,
       segment: "menus",
     },
     {
       name: "Themes",
-      href: `/site/${id}/settings/themes`,
+      href: `/app/site/${id}/settings/themes`,
       segment: "themes",
     },
     {
       name: "Plugins",
-      href: `/site/${id}/settings/plugins`,
+      href: `/app/site/${id}/settings/plugins`,
       segment: "plugins",
     },
     {
       name: "Comments",
-      href: `/site/${id}/settings/comments`,
+      href: `/app/site/${id}/settings/comments`,
       segment: "comments",
     },
     {
       name: "Users",
-      href: `/site/${id}/settings/users`,
+      href: `/app/site/${id}/settings/users`,
       segment: "users",
     },
     ...(singleSiteMode
       ? [
           {
             name: "Messages",
-            href: `/site/${id}/settings/messages`,
+            href: `/app/site/${id}/settings/messages`,
             segment: "messages",
           },
           {
             name: "User Roles",
-            href: `/site/${id}/settings/rbac`,
+            href: `/app/site/${id}/settings/rbac`,
             segment: "rbac",
           },
           {
             name: "Schedules",
-            href: `/site/${id}/settings/schedules`,
+            href: `/app/site/${id}/settings/schedules`,
             segment: "schedules",
           },
           ...(migrationRequired
             ? [
                 {
                   name: "Database",
-                  href: `/site/${id}/settings/database`,
+                  href: `/app/site/${id}/settings/database`,
                   segment: "database",
                 },
               ]

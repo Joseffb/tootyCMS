@@ -6,13 +6,13 @@ import { useSelectedLayoutSegment } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 const BASE_ITEMS = [
-  { name: "Sites", href: "/settings/sites", segment: "sites" },
-  { name: "Themes", href: "/settings/themes", segment: "themes" },
-  { name: "Plugins", href: "/settings/plugins", segment: "plugins" },
-  { name: "Messages", href: "/settings/messages", segment: "messages" },
-  { name: "Schedules", href: "/settings/schedules", segment: "schedules" },
-  { name: "Users", href: "/settings/users", segment: "users" },
-  { name: "User Roles", href: "/settings/rbac", segment: "rbac" },
+  { name: "Sites", href: "/app/settings/sites", segment: "sites" },
+  { name: "Themes", href: "/app/settings/themes", segment: "themes" },
+  { name: "Plugins", href: "/app/settings/plugins", segment: "plugins" },
+  { name: "Messages", href: "/app/settings/messages", segment: "messages" },
+  { name: "Schedules", href: "/app/settings/schedules", segment: "schedules" },
+  { name: "Users", href: "/app/settings/users", segment: "users" },
+  { name: "User Roles", href: "/app/settings/rbac", segment: "rbac" },
 ];
 
 export default function GlobalSettingsNav() {
@@ -49,7 +49,7 @@ export default function GlobalSettingsNav() {
         return true;
       });
       if (!migrationRequired) return base;
-      return [...base.slice(0, 3), { name: "Database", href: "/settings/database", segment: "database" }, ...base.slice(3)];
+      return [...base.slice(0, 3), { name: "Database", href: "/app/settings/database", segment: "database" }, ...base.slice(3)];
     },
     [migrationRequired, singleSiteMode, canManageNetworkPlugins, canManageNetworkSettings],
   );

@@ -46,6 +46,7 @@ import { getSitePublicUrl } from "@/lib/site-url";
 import { createSaveQueue, type SaveQueueStatus } from "@/lib/editor-save-queue";
 import { uploadSmart } from "@/lib/uploadSmart";
 import { DEFAULT_TOOTY_IMAGE } from "@/lib/tooty-images";
+import { useMediaPicker } from "@/components/media/use-media-picker";
 
 type EditorMode = "html-css-first" | "rich-text";
 type SidebarTab = "document" | "block" | "plugins";
@@ -270,9 +271,8 @@ export default function Editor({
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [postImageUrls, setPostImageUrls] = useState<string[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
-  const [mediaModalOpen, setMediaModalOpen] = useState(false);
-  const [mediaModalMode, setMediaModalMode] = useState<"insert" | "thumbnail">("insert");
   const [, setToolbarTick] = useState(0);
+  const { openMediaPicker, mediaPickerElement } = useMediaPicker();
 
   const editorRef = useRef<EditorInstance | null>(null);
   const htmlDirtyRef = useRef(false);
@@ -1503,8 +1503,26 @@ export default function Editor({
                     type="button"
                     className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[10px] hover:bg-stone-100"
                     onClick={() => {
-                      setMediaModalMode("insert");
-                      setMediaModalOpen(true);
+                      if (!post.siteId) return;
+                      openMediaPicker({
+                        siteId: post.siteId,
+                        title: "Media Library",
+                        mode: "pick",
+                        allowUpload: canEdit,
+                        allowedMimePrefixes: ["image/"],
+                        onSelect: (items) => {
+                          const next = items[0];
+                          const editor = editorRef.current;
+                          if (!next?.url || !editor) return;
+                          editor
+                            .chain()
+                            .focus()
+                            .setImage({ src: next.url, alt: next.label || "Site media image" })
+                            .run();
+                          enqueueSave(true);
+                          toast.success("Inserted media from library.");
+                        },
+                      });
                     }}
                   >
                     Open Media
@@ -1601,8 +1619,38 @@ export default function Editor({
                     isPendingThumbnail ? "cursor-not-allowed opacity-60" : "",
                   )}
                   onClick={() => {
-                    setMediaModalMode("thumbnail");
-                    setMediaModalOpen(true);
+                    if (!post.siteId) return;
+                    openMediaPicker({
+                      siteId: post.siteId,
+                      title: "Media Library",
+                      mode: "pick",
+                      allowUpload: canEdit,
+                      allowedMimePrefixes: ["image/"],
+                      onSelect: (items) => {
+                        const next = items[0];
+                        if (!next?.url) return;
+                        const item = mediaItems.find((entry) => String(entry.id) === next.mediaId);
+                        if (item) {
+                          setThumbnailFromMediaItem(item);
+                          return;
+                        }
+                        startTransitionThumbnail(async () => {
+                          try {
+                            const formData = new FormData();
+                            formData.append("imageUrl", next.url || "");
+                            formData.append("imageFinalName", next.url || "");
+                            const response = await onUpdateMetadata(formData, post.id, "image");
+                            if ((response as any)?.error) {
+                              throw new Error(String((response as any).error));
+                            }
+                            setData((prev) => ({ ...prev, image: next.url || "" }));
+                            toast.success("Thumbnail updated from media manager.");
+                          } catch (error) {
+                            toast.error(error instanceof Error ? error.message : "Failed to set thumbnail.");
+                          }
+                        });
+                      },
+                    });
                   }}
                 >
                   Choose from Media Manager
@@ -1614,71 +1662,7 @@ export default function Editor({
         )}
       </aside>
 
-      {mediaModalOpen && (
-        <div className="fixed inset-0 z-[12000] flex items-center justify-center bg-stone-900/60 p-4">
-          <div className="w-full max-w-5xl rounded-xl border border-stone-300 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3">
-              <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-stone-700">Media Library</h3>
-              <button
-                type="button"
-                className="rounded border border-stone-300 px-2 py-1 text-xs hover:bg-stone-100"
-                onClick={() => setMediaModalOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-            <div className="max-h-[70vh] overflow-auto p-4">
-              {mediaLoading ? (
-                <p className="text-sm text-stone-600">Loading media...</p>
-              ) : mediaItems.length === 0 ? (
-                <p className="text-sm text-stone-600">No media files found for this site.</p>
-              ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                  {mediaItems.map((item) => (
-                    <button
-                      key={`media-modal-${item.id}`}
-                      type="button"
-                      className="group overflow-hidden rounded-lg border border-stone-200 bg-stone-50 text-left hover:border-cyan-300 hover:bg-cyan-50"
-                      onClick={() => {
-                        if (enableThumbnail && mediaModalMode === "thumbnail") {
-                          setThumbnailFromMediaItem(item);
-                          setMediaModalOpen(false);
-                          return;
-                        }
-                        const editor = editorRef.current;
-                        if (!editor) return;
-                        editor
-                          .chain()
-                          .focus()
-                          .setImage({ src: item.url, alt: item.label || "Site media image" })
-                          .run();
-                        enqueueSave(true);
-                        setMediaModalOpen(false);
-                        toast.success("Inserted media from library.");
-                      }}
-                    >
-                      <div className="aspect-square w-full overflow-hidden bg-stone-100">
-                        <img
-                          src={item.url}
-                          alt={item.label || item.objectKey}
-                          className="h-full w-full object-cover transition-transform duration-150 group-hover:scale-[1.02]"
-                          loading="lazy"
-                        />
-                      </div>
-                      <div className="p-2">
-                        <div className="truncate text-[11px] font-semibold text-stone-800">
-                          {item.label || item.objectKey.split("/").pop() || item.objectKey}
-                        </div>
-                        <div className="truncate text-[10px] text-stone-500">{item.provider}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {mediaPickerElement}
     </div>
   );
 }

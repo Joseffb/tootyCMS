@@ -1,25 +1,18 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
-import db from "@/lib/db";
-import { media, sites } from "@/lib/schema";
 import { getSession } from "@/lib/auth";
 import { trace } from "@/lib/debug";
-import { and, eq, inArray } from "drizzle-orm";
 import { buildMediaVariants } from "@/lib/media-variants";
 import { evaluateBotIdRoute } from "@/lib/botid";
-import { userCan } from "@/lib/authorization";
-import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
+import {
+  createMediaUploadTraceId,
+  findExistingMediaByKeys,
+  requireMediaUploadAccess,
+  resolveMediaUploadTransport,
+  safeMediaSegment,
+  upsertMediaRecord,
+} from "@/lib/media-service";
 
 const MAX_IMAGE_SIZE_BYTES = 50 * 1024 * 1024;
-
-function safeSegment(value: string) {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return normalized || "file";
-}
 
 export async function POST(req: Request) {
   try {
@@ -34,7 +27,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
+    const traceId = createMediaUploadTraceId(req);
     trace("upload.api.blob", "request start", { traceId });
     if (process.env.NO_IMAGE_MODE === "true") {
       trace("upload.api.blob", "rejected no image mode", { traceId });
@@ -80,57 +73,48 @@ export async function POST(req: Request) {
       trace("upload.api.blob", "unauthorized", { traceId, siteId });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const site = await db.query.sites.findFirst({
-      where: eq(sites.id, siteId),
-      columns: { id: true },
-    });
-    if (!site) {
-      trace("upload.api.blob", "site not found", { traceId, siteId });
-      return NextResponse.json({ error: "Site not found" }, { status: 404 });
-    }
-    const canUpload = await userCan("site.media.create", session.user.id, { siteId: site.id });
-    if (!canUpload) {
-      trace("upload.api.blob", "forbidden", { traceId, siteId, userId: session.user.id });
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    const quota = await assertSiteMediaQuotaAvailable(site.id);
-    if (!quota.allowed) {
+    try {
+      await requireMediaUploadAccess(siteId, session.user.id);
+    } catch (error: any) {
       trace("upload.api.blob", "media quota exceeded", {
         traceId,
-        siteId: site.id,
-        currentItems: quota.currentItems,
-        maxItems: quota.maxItems,
+        siteId,
+        currentItems: error?.details?.currentItems,
+        maxItems: error?.details?.maxItems,
       });
       return NextResponse.json(
         {
-          error: "Media library limit reached for this site.",
-          code: "media_quota_exceeded",
-          details: { maxItems: quota.maxItems, currentItems: quota.currentItems },
+          error: error?.message || "Upload access denied.",
+          ...(error?.code ? { code: error.code } : {}),
+          ...(error?.details ? { details: error.details } : {}),
         },
-        { status: 429 },
+        { status: error?.status || 500 },
       );
     }
     const { hash, variants, extension, mimeType } = await buildMediaVariants(file);
-    const siteSegment = safeSegment(siteId);
-    const nameLabel = safeSegment(name);
+    const siteSegment = safeMediaSegment(siteId);
+    const nameLabel = safeMediaSegment(name);
     const originalKey = `${siteSegment}/${hash}.${extension}`;
-    const variantKeys = variants
-      .filter((variant) => variant.suffix !== "original")
-      .map((variant) => `${siteSegment}/${hash}-${variant.suffix}.${extension}`);
-    const allKeys = [originalKey, ...variantKeys];
+    const uploadedByKey = new Map<string, string>();
+    const expectedKeys = variants.map((variant) =>
+      variant.suffix === "original"
+        ? originalKey
+        : `${siteSegment}/${hash}-${variant.suffix}.${extension}`,
+    );
 
-    let existingByKey = new Map<string, string>();
     try {
-      const existing = await db
-        .select({
-          objectKey: media.objectKey,
-          url: media.url,
-        })
-        .from(media)
-        .where(and(eq(media.siteId, siteId), inArray(media.objectKey, allKeys)));
-      existingByKey = new Map(existing.map((row) => [row.objectKey, row.url]));
-    } catch {
-      existingByKey = new Map<string, string>();
+      const existingRows = await findExistingMediaByKeys(expectedKeys);
+      for (const row of existingRows) {
+        if (row?.objectKey && row?.url) {
+          uploadedByKey.set(row.objectKey, row.url);
+        }
+      }
+    } catch (error) {
+      trace("upload.api.blob", "existing media lookup failed", {
+        traceId,
+        siteId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     for (const variant of variants) {
@@ -138,57 +122,31 @@ export async function POST(req: Request) {
         variant.suffix === "original"
           ? originalKey
           : `${siteSegment}/${hash}-${variant.suffix}.${extension}`;
-
-      let url = existingByKey.get(key);
-      if (!url) {
-        const body = variant.buffer.buffer.slice(
-          variant.buffer.byteOffset,
-          variant.buffer.byteOffset + variant.buffer.byteLength
-        ) as ArrayBuffer;
-        const uploaded = await put(key, body, {
-          access: "public",
-          contentType: variant.mimeType,
-          addRandomSuffix: false,
-        });
-        url = uploaded.url;
-      }
-
+      if (uploadedByKey.has(key)) continue;
+      const transport = await resolveMediaUploadTransport({
+        key,
+        bytes: Buffer.from(variant.buffer),
+        mimeType: variant.mimeType,
+        mode: "blob",
+        traceId,
+        traceNamespace: "upload.api.blob",
+      });
       const variantLabel = variant.suffix === "original" ? nameLabel : `${nameLabel}-${variant.suffix}`;
-      try {
-        await db
-          .insert(media)
-          .values({
-            siteId,
-            userId: session?.user?.id ?? null,
-            provider: "blob",
-            bucket: "vercel_blob",
-            objectKey: key,
-            url,
-            label: variantLabel,
-            mimeType,
-            size: variant.buffer.byteLength,
-          })
-          .onConflictDoUpdate({
-            target: media.objectKey,
-            set: {
-              siteId,
-              userId: session?.user?.id ?? null,
-              provider: "blob",
-              bucket: "vercel_blob",
-              url,
-              label: variantLabel,
-              mimeType,
-              size: variant.buffer.byteLength,
-              updatedAt: new Date(),
-            },
-          });
-      } catch {
-        // allow upload flow to succeed even when DB is unavailable
-      }
-      existingByKey.set(key, url);
+      await upsertMediaRecord({
+        siteId,
+        userId: session?.user?.id ?? "",
+        provider: transport.provider,
+        bucket: transport.bucket,
+        objectKey: key,
+        url: transport.url,
+        label: variantLabel,
+        mimeType,
+        size: variant.buffer.byteLength,
+      });
+      uploadedByKey.set(key, transport.url);
     }
 
-    const originalUrl = existingByKey.get(originalKey) ?? "";
+    const originalUrl = uploadedByKey.get(originalKey) ?? "";
     trace("upload.api.blob", "upload success", {
       traceId,
       siteId,
@@ -211,7 +169,7 @@ export async function POST(req: Request) {
             suffix: variant.suffix,
             width: variant.width,
             key,
-            url: existingByKey.get(key),
+            url: uploadedByKey.get(key),
           };
         }),
     });

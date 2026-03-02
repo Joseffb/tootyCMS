@@ -93,14 +93,14 @@ function parseDataDomainTabs(items: any[]): Array<{ name: string; singular: stri
 }
 
 const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }> = [
-  { name: "Sites", href: "/settings/sites", match: "/settings/sites" },
-  { name: "Themes", href: "/settings/themes", match: "/settings/themes" },
-  { name: "Plugins", href: "/settings/plugins", match: "/settings/plugins" },
-  { name: "Messages", href: "/settings/messages", match: "/settings/messages" },
-  { name: "Migrations", href: "/settings/database", match: "/settings/database" },
-  { name: "Schedules", href: "/settings/schedules", match: "/settings/schedules" },
-  { name: "Users", href: "/settings/users", match: "/settings/users" },
-  { name: "User Roles", href: "/settings/rbac", match: "/settings/rbac" },
+  { name: "Sites", href: "/app/sites", match: "/sites" },
+  { name: "Themes", href: "/app/settings/themes", match: "/settings/themes" },
+  { name: "Plugins", href: "/app/settings/plugins", match: "/settings/plugins" },
+  { name: "Messages", href: "/app/settings/messages", match: "/settings/messages" },
+  { name: "Migrations", href: "/app/settings/database", match: "/settings/database" },
+  { name: "Schedules", href: "/app/settings/schedules", match: "/settings/schedules" },
+  { name: "Users", href: "/app/settings/users", match: "/settings/users" },
+  { name: "User Roles", href: "/app/settings/rbac", match: "/settings/rbac" },
 ];
 
 export default function Nav({ children }: { children: ReactNode }) {
@@ -388,7 +388,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const globalSettingsWithChildren = useMemo<NavTab[]>(() => {
     const parent: NavTab = {
       name: "Settings",
-      href: "/settings",
+      href: "/app/settings",
       isActive: segments[0] === "settings",
       icon: <Globe width={18} />,
     };
@@ -558,8 +558,8 @@ export default function Nav({ children }: { children: ReactNode }) {
       const siteTabs: NavTab[] = [
         {
           name: "Profile",
-          href: "/profile",
-          isActive: pathname?.startsWith("/profile"),
+          href: "/app/profile",
+          isActive: pathname?.startsWith("/app/profile"),
           icon: <User width={18} />,
         },
         ...(navContext.canCreateSiteContent ? buildContentTabs(id) : []),
@@ -582,7 +582,7 @@ export default function Nav({ children }: { children: ReactNode }) {
         ...(navContext.canManageSiteSettings
           ? [
               {
-                name: "Settings",
+                name: singleSiteMode ? "System" : "Settings",
                 href: `/app/site/${id}/settings`,
                 isActive: segments.includes("settings"),
                 icon: <Monitor width={18} />,
@@ -590,6 +590,7 @@ export default function Nav({ children }: { children: ReactNode }) {
               ...siteSettingsChildren,
             ]
           : []),
+        ...(singleSiteMode && navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
       ];
 
       return singleSiteMode
@@ -601,8 +602,8 @@ export default function Nav({ children }: { children: ReactNode }) {
       const singleSiteTabs: NavTab[] = [
         {
           name: "Profile",
-          href: "/profile",
-          isActive: pathname?.startsWith("/profile"),
+          href: "/app/profile",
+          isActive: pathname?.startsWith("/app/profile"),
           icon: <User width={18} />,
         },
         ...(navContext.canCreateSiteContent ? buildContentTabs(navContext.mainSiteId) : []),
@@ -676,14 +677,14 @@ export default function Nav({ children }: { children: ReactNode }) {
     return [
       {
         name: "Profile",
-        href: "/profile",
-        isActive: pathname?.startsWith("/profile"),
+        href: "/app/profile",
+        isActive: pathname?.startsWith("/app/profile"),
         icon: <User width={18} />,
       },
       {
         name: "Overview",
-        href: "/",
-        isActive: segments.length === 0,
+        href: "/app",
+        isActive: pathname === "/app" || pathname === "/app/cp",
         icon: <LayoutDashboard width={18} />,
       },
       {
@@ -787,7 +788,7 @@ export default function Nav({ children }: { children: ReactNode }) {
               </a>
               <div className="h-6 rotate-[30deg] border-l border-stone-400 dark:border-stone-500" />
               <Link
-                href="/"
+                href="/app"
                 className="rounded-lg p-2 hover:bg-stone-200 dark:hover:bg-stone-700"
                 title={
                   process.env.NODE_ENV === "development"
