@@ -625,6 +625,98 @@ export const media = pgTable(
   }),
 );
 
+export const siteMenus = pgTable(
+  tableName("site_menus"),
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    siteId: text("siteId")
+      .notNull()
+      .references(() => sites.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    description: text("description").default("").notNull(),
+    location: text("location"),
+    sortOrder: integer("sortOrder").notNull().default(10),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    siteKeyUnique: uniqueIndex().on(table.siteId, table.key),
+    siteLocationIdx: index().on(table.siteId, table.location),
+    siteOrderIdx: index().on(table.siteId, table.sortOrder),
+  }),
+);
+
+export const siteMenuItems = pgTable(
+  tableName("site_menu_items"),
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    menuId: text("menuId")
+      .notNull()
+      .references(() => siteMenus.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    parentId: text("parentId"),
+    title: text("title").notNull(),
+    href: text("href").notNull(),
+    description: text("description").default("").notNull(),
+    mediaId: integer("mediaId").references(() => media.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    target: text("target"),
+    rel: text("rel"),
+    external: boolean("external").notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    sortOrder: integer("sortOrder").notNull().default(10),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    menuIdx: index().on(table.menuId),
+    parentIdx: index().on(table.parentId),
+    menuOrderIdx: index().on(table.menuId, table.sortOrder),
+  }),
+);
+
+export const siteMenuItemMeta = pgTable(
+  tableName("site_menu_item_meta"),
+  {
+    id: serial("id").primaryKey(),
+    menuItemId: text("menuItemId")
+      .notNull()
+      .references(() => siteMenuItems.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    key: text("key").notNull(),
+    value: text("value").notNull().default(""),
+    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { mode: "date" })
+      .notNull()
+      .$onUpdate(() => new Date())
+      .defaultNow(),
+  },
+  (table) => ({
+    menuItemIdx: index().on(table.menuItemId),
+    menuItemKeyUnique: uniqueIndex().on(table.menuItemId, table.key),
+  }),
+);
+
 export const postCategories = pgTable(tableName("post_categories"), {
   postId: text("post_id").references(() => posts.id).notNull(),
   categoryId: integer("category_id").references(() => categories.id).notNull(),
@@ -811,7 +903,23 @@ export const sitesRelations = relations(sites, ({ one, many }) => ({
   user: one(users, { references: [users.id], fields: [sites.userId] }),
   dataDomains: many(siteDataDomains),
   media: many(media),
+  menus: many(siteMenus),
   comments: many(comments),
+}));
+
+export const siteMenusRelations = relations(siteMenus, ({ one, many }) => ({
+  site: one(sites, { references: [sites.id], fields: [siteMenus.siteId] }),
+  items: many(siteMenuItems),
+}));
+
+export const siteMenuItemsRelations = relations(siteMenuItems, ({ one, many }) => ({
+  menu: one(siteMenus, { references: [siteMenus.id], fields: [siteMenuItems.menuId] }),
+  media: one(media, { references: [media.id], fields: [siteMenuItems.mediaId] }),
+  meta: many(siteMenuItemMeta),
+}));
+
+export const siteMenuItemMetaRelations = relations(siteMenuItemMeta, ({ one }) => ({
+  menuItem: one(siteMenuItems, { references: [siteMenuItems.id], fields: [siteMenuItemMeta.menuItemId] }),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({

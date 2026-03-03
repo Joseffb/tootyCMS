@@ -47,15 +47,9 @@ const edgeProjects = edgeExecutablePath
         name: "edge",
         use: {
           browserName: "chromium" as const,
-          ...(process.env.PLAYWRIGHT_EDGE_EXECUTABLE_PATH
-            ? {
-                launchOptions: {
-                  executablePath: edgeExecutablePath,
-                },
-              }
-            : {
-                channel: "msedge" as const,
-              }),
+          launchOptions: {
+            executablePath: edgeExecutablePath,
+          },
         },
       },
     ]

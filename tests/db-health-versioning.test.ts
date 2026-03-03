@@ -32,9 +32,13 @@ const FULL_COLUMNS = [
   { table_name: "tooty_domain_posts", column_name: "imageBlurhash" },
   { table_name: "tooty_domain_posts", column_name: "password" },
   { table_name: "tooty_domain_posts", column_name: "usePassword" },
+  { table_name: "tooty_media", column_name: "altText" },
+  { table_name: "tooty_media", column_name: "caption" },
+  { table_name: "tooty_media", column_name: "description" },
 ];
 
 const REQUIRED_TABLES = [
+  { table_name: "tooty_media" },
   { table_name: "tooty_communication_messages" },
   { table_name: "tooty_communication_attempts" },
   { table_name: "tooty_webcallback_events" },
@@ -88,7 +92,31 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.02.26.3-version")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.02.1-version")).toBe(true);
+  });
+
+  it("requires migration when media metadata columns are missing even if the tracked version matches", async () => {
+    mocks.execute
+      .mockResolvedValueOnce({
+        rows: FULL_COLUMNS.filter((entry) => entry.table_name !== "tooty_media"),
+      })
+      .mockResolvedValueOnce({ rows: REQUIRED_TABLES });
+    mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
+      if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      if (key === DB_SCHEMA_TARGET_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      return fallback;
+    });
+
+    const report = await getDatabaseHealthReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.migrationRequired).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.02.1-media-metadata")).toBe(true);
+    expect(report.missing).toEqual([
+      { table: "tooty_media", column: "altText" },
+      { table: "tooty_media", column: "caption" },
+      { table: "tooty_media", column: "description" },
+    ]);
   });
 
   it("applyPendingDatabaseMigrations updates tracked schema version", async () => {

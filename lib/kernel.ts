@@ -45,8 +45,17 @@ export type KernelFilterName =
 export type MenuLocation = "header" | "footer" | "dashboard";
 
 export type MenuItem = {
+  id?: string;
   label: string;
   href: string;
+  description?: string;
+  image?: string;
+  mediaId?: string;
+  target?: string;
+  rel?: string;
+  enabled?: boolean;
+  meta?: Record<string, string>;
+  children?: MenuItem[];
   external?: boolean;
   order?: number;
 };

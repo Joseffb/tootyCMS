@@ -4,8 +4,15 @@ import { trace } from "@/lib/debug";
 import { getTextSetting, setTextSetting } from "@/lib/cms-config";
 
 type RequiredColumn = {
-  tableSuffix: "posts" | "domain_posts";
-  column: "image" | "imageBlurhash" | "password" | "usePassword";
+  tableSuffix: "posts" | "domain_posts" | "media";
+  column:
+    | "image"
+    | "imageBlurhash"
+    | "password"
+    | "usePassword"
+    | "altText"
+    | "caption"
+    | "description";
 };
 
 export type MissingDbColumn = {
@@ -16,7 +23,7 @@ export type MissingDbColumn = {
 export const DB_SCHEMA_VERSION_KEY = "db_schema_version";
 export const DB_SCHEMA_TARGET_VERSION_KEY = "db_schema_target_version";
 export const DB_SCHEMA_UPDATED_AT_KEY = "db_schema_updated_at";
-export const TARGET_DB_SCHEMA_VERSION = "2026.02.26.3";
+export const TARGET_DB_SCHEMA_VERSION = "2026.03.02.1";
 
 async function safeGetSetting(key: string, fallback: string) {
   try {
@@ -33,9 +40,13 @@ const REQUIRED_COLUMNS: RequiredColumn[] = [
   { tableSuffix: "domain_posts", column: "imageBlurhash" },
   { tableSuffix: "domain_posts", column: "password" },
   { tableSuffix: "domain_posts", column: "usePassword" },
+  { tableSuffix: "media", column: "altText" },
+  { tableSuffix: "media", column: "caption" },
+  { tableSuffix: "media", column: "description" },
 ];
 
 const REQUIRED_TABLE_SUFFIXES = [
+  "media",
   "communication_messages",
   "communication_attempts",
   "webcallback_events",
@@ -52,6 +63,15 @@ function getPrefix() {
 
 function toTableName(suffix: RequiredColumn["tableSuffix"]) {
   return `${getPrefix()}${suffix}`;
+}
+
+function hasMissingColumnsForTable(missing: MissingDbColumn[], tableSuffix: RequiredColumn["tableSuffix"]) {
+  const table = toTableName(tableSuffix);
+  return missing.some((entry) => entry.table === table);
+}
+
+function hasMissingContentColumns(missing: MissingDbColumn[]) {
+  return hasMissingColumnsForTable(missing, "posts") || hasMissingColumnsForTable(missing, "domain_posts");
 }
 
 export async function getDatabaseHealthReport() {
@@ -108,7 +128,7 @@ export async function getDatabaseHealthReport() {
           },
         ]
       : []),
-    ...(missing.length > 0
+    ...(hasMissingContentColumns(missing)
       ? [
           {
             id: "2026.02.24.1-columns",
@@ -117,10 +137,19 @@ export async function getDatabaseHealthReport() {
           },
         ]
       : []),
+    ...(hasMissingColumnsForTable(missing, "media")
+      ? [
+          {
+            id: "2026.03.02.1-media-metadata",
+            title: "Add required media metadata columns",
+            reason: "Missing required altText/caption/description columns on the media table.",
+          },
+        ]
+      : []),
     ...(versionBehind
       ? [
           {
-            id: "2026.02.26.3-version",
+            id: "2026.03.02.1-version",
             title: "Record schema version",
             reason: "Installed schema version is not at current target.",
           },
@@ -156,6 +185,69 @@ export async function applyDatabaseCompatibilityFixes() {
   const termTaxonomyMetaTable = `${prefix}term_taxonomy_meta`;
   const mediaTable = `${prefix}media`;
 
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(mediaTable)} (
+        "id" serial PRIMARY KEY,
+        "siteId" text NULL,
+        "userId" text NULL,
+        "provider" text NOT NULL DEFAULT 'blob',
+        "bucket" text NULL,
+        "objectKey" text NOT NULL,
+        "url" text NOT NULL,
+        "label" text NULL,
+        "altText" text NULL,
+        "caption" text NULL,
+        "description" text NULL,
+        "mimeType" text NULL,
+        "size" integer NULL,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(mediaTable)}
+          ADD CONSTRAINT "${mediaTable}_siteId_fkey"
+          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
+          ON UPDATE CASCADE ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(mediaTable)}
+          ADD CONSTRAINT "${mediaTable}_userId_fkey"
+          FOREIGN KEY ("userId") REFERENCES ${quoteIdentifier(`${prefix}users`)}("id")
+          ON UPDATE CASCADE ON DELETE SET NULL;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${mediaTable}_objectKey_idx" ON ${quoteIdentifier(mediaTable)} ("objectKey")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "altText" text`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "caption" text`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "description" text`,
+    ),
+  );
   await db.execute(
     sql.raw(
       `ALTER TABLE ${quoteIdentifier(postsTable)} ADD COLUMN IF NOT EXISTS "image" text DEFAULT ''`,

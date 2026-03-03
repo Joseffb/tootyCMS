@@ -124,6 +124,12 @@ Database update flow now tracks schema version in CMS settings:
 - `db_schema_target_version`
 - `db_schema_updated_at`
 
+Database compatibility is a first-class operational concern:
+- version tracking is not advisory metadata
+- the tracked target must move when the required schema contract changes
+- health checks must verify the real required table/column surface for the current release
+- the admin status page must not report "up to date" if required compatibility columns are missing
+
 Admin "Database Updates" page provides:
 - current vs target version display
 - pending migration reasons

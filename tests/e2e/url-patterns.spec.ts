@@ -58,26 +58,30 @@ async function getWithRetry(
   request: APIRequestContext,
   url: string,
   expectedStatus: number,
-  timeoutMs = 10_000,
-  intervalMs = 250,
+  timeoutMs = 20_000,
+  intervalMs = 300,
 ) {
   const started = Date.now();
-  const requestTimeoutMs = Math.max(3_000, Math.min(8_000, intervalMs * 16));
+  const requestTimeoutMs = Math.max(6_000, Math.min(12_000, Math.ceil(timeoutMs * 0.5)));
   let lastResponse: Awaited<ReturnType<APIRequestContext["get"]>> | null = null;
+  let lastError: unknown = null;
 
   while (Date.now() - started < timeoutMs) {
     try {
       const response = await request.get(url, { timeout: requestTimeoutMs });
       lastResponse = response;
       if (response.status() === expectedStatus) return response;
-    } catch {
+      lastError = null;
+    } catch (error) {
       // Route flips during settings propagation can briefly hang; keep retrying within the caller's budget.
+      lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
   if (lastResponse) return lastResponse;
-  return request.get(url, { timeout: Math.max(requestTimeoutMs, 4_000) });
+  if (lastError) throw lastError;
+  return request.get(url, { timeout: requestTimeoutMs });
 }
 
 async function gotoWithBodyTextRetry(
@@ -137,31 +141,27 @@ test.beforeAll(async () => {
     .from(dataDomains)
     .where(eq(dataDomains.key, "post"))
     .limit(1);
+
   if (!postDomainRows[0]) {
     await db
       .insert(dataDomains)
       .values({
         key: "post",
-        label: "Post",
+        label: "Posts",
         contentTable: "domain_posts",
         metaTable: "domain_post_meta",
         description: "Default core post type",
+        settings: { builtin: true },
       })
-      .onConflictDoUpdate({
-        target: dataDomains.key,
-        set: {
-          label: "Post",
-          contentTable: "domain_posts",
-          metaTable: "domain_post_meta",
-          description: "Default core post type",
-        },
-      });
+      .onConflictDoNothing();
+
     postDomainRows = await db
       .select({ id: dataDomains.id })
       .from(dataDomains)
       .where(eq(dataDomains.key, "post"))
       .limit(1);
   }
+
   if (!postDomainRows[0]) throw new Error("Data domain `post` not found.");
   postDomainId = postDomainRows[0].id;
 

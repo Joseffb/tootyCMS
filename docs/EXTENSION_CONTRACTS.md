@@ -11,6 +11,7 @@ Core is the only authority for:
 - Render pipeline and extension loading
 - Side effects (must flow through Core APIs)
 - Infrastructure spine services (for example media)
+- Database compatibility/version tracking
 
 Core must remain platform-generic:
 
@@ -94,6 +95,12 @@ Infrastructure note:
 - Media is a core spine service, not a normal plugin feature surface.
 - Media provider/storage selection may be abstracted behind Core contracts, but media transport, indexing, access enforcement, and cleanup remain Core-owned.
 - See [Media Spine System](./MEDIA_SPINE.md).
+
+Database compatibility note:
+
+- Database compatibility/version tracking is a first-class platform concern.
+- If the required schema contract changes, the tracked target version and compatibility checks must move with it.
+- Compatibility status must reflect the real required schema surface, not a stale subset of legacy checks.
 
 Hard boundary:
 

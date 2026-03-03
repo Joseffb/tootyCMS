@@ -42,7 +42,7 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
       <header className="space-y-1">
         <h2 className="font-cal text-2xl">Database Updates</h2>
         <p className="text-sm text-stone-600 dark:text-stone-300">
-          Schema checks for required CMS columns.
+          Schema checks for required CMS tables, columns, and tracked compatibility version.
         </p>
       </header>
 

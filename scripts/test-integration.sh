@@ -2,13 +2,13 @@
 set -euo pipefail
 
 TEST_PORT="${TEST_PORT:-3123}"
-TEST_PORT="$(node ./scripts/resolve-test-port.mjs "${TEST_PORT}")"
+TEST_PORT="$(node "./scripts/resolve-test-port.mjs" "${TEST_PORT}")"
 export TEST_PORT
 
 set -a
-source .env
-if [[ -f .env.test ]]; then
-  source .env.test
+source ".env"
+if [[ -f ".env.test" ]]; then
+  source ".env.test"
 fi
 set +a
 
@@ -41,27 +41,59 @@ function sanitizeIdentifier(input) {
   return String(input).replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function dropPrefixedTables(url, normalizedPrefix) {
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  try {
+    await client.query(`SET lock_timeout = '3000ms'`);
+    const tables = await client.query(
+      `select tablename from pg_tables where schemaname='public' and tablename like $1 order by tablename`,
+      [`${normalizedPrefix}%`],
+    );
+    if (tables.rows.length === 0) {
+      return;
+    }
+
+    const tableList = tables.rows
+      .map((row) => `"public"."${sanitizeIdentifier(String(row.tablename))}"`)
+      .join(", ");
+    await client.query(`DROP TABLE IF EXISTS ${tableList} CASCADE`);
+  } finally {
+    await client.end();
+  }
+}
+
 async function main() {
   const url = process.env.POSTGRES_URL;
   if (!url) throw new Error("POSTGRES_URL is required for integration tests.");
   const rawPrefix = (process.env.CMS_DB_PREFIX || "tooty_").trim();
   const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-  const client = new Client({ connectionString: url });
-  await client.connect();
-  try {
-    const tables = await client.query(
-      `select tablename from pg_tables where schemaname='public' and tablename like $1 order by tablename`,
-      [`${normalizedPrefix}%`],
-    );
-    if (tables.rows.length > 0) {
-      const tableList = tables.rows
-        .map((row) => `"public"."${sanitizeIdentifier(String(row.tablename))}"`)
-        .join(", ");
-      await client.query(`DROP TABLE IF EXISTS ${tableList} CASCADE`);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await dropPrefixedTables(url, normalizedPrefix);
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable = error && (error.code === "40P01" || error.code === "55P03");
+      if (!retryable || attempt === 5) {
+        throw error;
+      }
+
+      const delayMs = 250 * attempt;
+      console.warn(
+        `Integration DB reset retry ${attempt}/5 after ${error.code}; waiting ${delayMs}ms before retrying.`,
+      );
+      await sleep(delayMs);
     }
-  } finally {
-    await client.end();
   }
+
+  throw lastError;
 }
 
 main().catch((error) => {
@@ -71,25 +103,38 @@ main().catch((error) => {
 NODE
 
 # Recreate latest schema from current contracts after full drop reset.
-npx drizzle-kit push --config drizzle.config.ts
+npx drizzle-kit push --config "drizzle.config.ts"
 
 TEST_DIST_DIR=".next-test-${TEST_PORT}"
-NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next build
+NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" build
 
-EXISTING_PIDS="$(lsof -ti tcp:${TEST_PORT} 2>/dev/null || true)"
+EXISTING_PIDS="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
 if [[ -n "${EXISTING_PIDS}" ]]; then
   echo "Killing stale process(es) on test port ${TEST_PORT}: ${EXISTING_PIDS}"
   echo "${EXISTING_PIDS}" | xargs kill >/dev/null 2>&1 || true
   sleep 1
 fi
 
-NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node ./node_modules/next/dist/bin/next start --port "${TEST_PORT}" &
+NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" &
 SERVER_PID=$!
 
 cleanup() {
-  if kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
+  local pids=""
+
+  if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
     kill "${SERVER_PID}" >/dev/null 2>&1 || true
     wait "${SERVER_PID}" >/dev/null 2>&1 || true
+  fi
+
+  pids="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
+  if [[ -n "${pids}" ]]; then
+    echo "${pids}" | tr ' ' '\n' | sort -u | xargs kill >/dev/null 2>&1 || true
+    sleep 1
+
+    pids="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
+    if [[ -n "${pids}" ]]; then
+      echo "${pids}" | tr ' ' '\n' | sort -u | xargs kill -9 >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -140,9 +185,88 @@ function check() {
 });
 NODE
 
+PLAYWRIGHT_REPORTER="${PLAYWRIGHT_REPORTER:-line}"
+
+run_playwright() {
+  CI=1 NO_COLOR=1 pnpm exec playwright test --reporter="${PLAYWRIGHT_REPORTER}" "$@"
+}
+
+has_explicit_project_arg() {
+  local arg
+
+  for arg in "$@"; do
+    if [[ "${arg}" == "--project" || "${arg}" == --project=* ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+has_explicit_workers_arg() {
+  local arg
+
+  for arg in "$@"; do
+    if [[ "${arg}" == "--workers" || "${arg}" == --workers=* ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+targets_edge_project() {
+  local expect_value="0"
+  local arg
+
+  for arg in "$@"; do
+    if [[ "${expect_value}" == "1" ]]; then
+      [[ "${arg}" == "edge" ]] && return 0
+      expect_value="0"
+      continue
+    fi
+
+    if [[ "${arg}" == "--project" ]]; then
+      expect_value="1"
+      continue
+    fi
+
+    if [[ "${arg}" == "--project=edge" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 set +e
-pnpm exec playwright test --reporter=line "$@"
-PLAYWRIGHT_STATUS=$?
+if has_explicit_project_arg "$@"; then
+  if targets_edge_project "$@" && ! has_explicit_workers_arg "$@"; then
+    run_playwright --workers=1 "$@"
+  else
+    run_playwright "$@"
+  fi
+  PLAYWRIGHT_STATUS=$?
+else
+  PLAYWRIGHT_STATUS=0
+  PROJECTS=(chromium firefox webkit)
+
+  if [[ -n "${PLAYWRIGHT_EDGE_EXECUTABLE_PATH:-}" || -x "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" ]]; then
+    PROJECTS+=(edge)
+  fi
+
+  for project in "${PROJECTS[@]}"; do
+    if [[ "${project}" == "edge" ]] && ! has_explicit_workers_arg "$@"; then
+      run_playwright --project="${project}" --workers=1 "$@"
+    else
+      run_playwright --project="${project}" "$@"
+    fi
+    PLAYWRIGHT_STATUS=$?
+    if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
+      break
+    fi
+  done
+fi
 set -e
 
 cleanup
