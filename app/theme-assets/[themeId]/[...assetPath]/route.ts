@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { readFile } from "fs/promises";
+import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import path from "path";
+import { Readable } from "stream";
 import { getThemesDirs } from "@/lib/extension-paths";
 import { getAvailableThemes } from "@/lib/themes";
 import { getThemeAssetCacheControlHeader } from "@/lib/theme-dev-mode";
@@ -16,21 +18,109 @@ const mimeByExt: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".gif": "image/gif",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
 };
 
 function safeSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, "");
 }
 
-async function serveFile(filePath: string) {
-  const content = await readFile(filePath);
+function parseRangeHeader(rangeHeader: string, size: number) {
+  const trimmed = rangeHeader.trim();
+  if (!trimmed.startsWith("bytes=")) {
+    return null;
+  }
+
+  const [startRaw, endRaw] = trimmed.slice("bytes=".length).split("-", 2);
+  if (startRaw === undefined || endRaw === undefined) {
+    return null;
+  }
+
+  const startText = startRaw.trim();
+  const endText = endRaw.trim();
+
+  if (!startText && !endText) {
+    return null;
+  }
+
+  let start = 0;
+  let end = size - 1;
+
+  if (!startText) {
+    const suffixLength = Number.parseInt(endText, 10);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(size - suffixLength, 0);
+  } else {
+    const parsedStart = Number.parseInt(startText, 10);
+    if (!Number.isFinite(parsedStart) || parsedStart < 0) {
+      return null;
+    }
+    start = parsedStart;
+    if (endText) {
+      const parsedEnd = Number.parseInt(endText, 10);
+      if (!Number.isFinite(parsedEnd) || parsedEnd < start) {
+        return null;
+      }
+      end = parsedEnd;
+    }
+  }
+
+  if (start >= size) {
+    return null;
+  }
+
+  end = Math.min(end, size - 1);
+
+  return { start, end };
+}
+
+async function serveFile(filePath: string, rangeHeader: string | null) {
+  const info = await stat(filePath);
+  if (!info.isFile()) {
+    throw new Error("not-a-file");
+  }
+
+  const size = info.size;
   const ext = path.extname(filePath).toLowerCase();
   const contentType = mimeByExt[ext] || "application/octet-stream";
+  const cacheControl = getThemeAssetCacheControlHeader();
+  const streamHeaders: Record<string, string> = {
+    "Content-Type": contentType,
+    "Cache-Control": cacheControl,
+    "Accept-Ranges": "bytes",
+  };
 
-  return new NextResponse(content, {
+  if (!rangeHeader) {
+    streamHeaders["Content-Length"] = String(size);
+    const stream = createReadStream(filePath);
+    return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+      headers: streamHeaders,
+    });
+  }
+
+  const range = parseRangeHeader(rangeHeader, size);
+  if (!range) {
+    return new NextResponse("Requested Range Not Satisfiable", {
+      status: 416,
+      headers: {
+        ...streamHeaders,
+        "Content-Range": `bytes */${size}`,
+      },
+    });
+  }
+
+  const contentLength = range.end - range.start + 1;
+  const stream = createReadStream(filePath, { start: range.start, end: range.end });
+  return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+    status: 206,
     headers: {
-      "Content-Type": contentType,
-      "Cache-Control": getThemeAssetCacheControlHeader(),
+      ...streamHeaders,
+      "Content-Length": String(contentLength),
+      "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
     },
   });
 }
@@ -46,7 +136,7 @@ async function resolveThemeRoot(themeId: string) {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ themeId: string; assetPath: string[] }> },
 ) {
   const { themeId, assetPath } = await params;
@@ -63,7 +153,7 @@ export async function GET(
     const filePath = path.join(themeRoot, "thumbnail.png");
     if (filePath.startsWith(themeRoot)) {
       try {
-        return await serveFile(filePath);
+        return await serveFile(filePath, req.headers.get("range"));
       } catch {
         return new NextResponse("Not Found", { status: 404 });
       }
@@ -77,7 +167,7 @@ export async function GET(
     if (!filePath.startsWith(rootDir)) continue;
 
     try {
-      return await serveFile(filePath);
+      return await serveFile(filePath, req.headers.get("range"));
     } catch {
       continue;
     }

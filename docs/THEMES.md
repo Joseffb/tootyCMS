@@ -173,6 +173,50 @@ This keeps pages renderable even if theme files are incomplete.
 Themes provide token class strings, not standalone CSS pipelines.
 This avoids runtime Tailwind config mutation and keeps deploys stable on Vercel.
 
+## Theme asset streaming
+
+Theme assets are served through:
+
+- `/theme-assets/<themeId>/<assetPath>`
+
+Core now supports byte-range responses for theme files, including video (`.mp4`, `.webm`, `.mov`), so browsers can stream and seek without downloading the entire file first.
+
+Behavior:
+
+- normal request: `200` with full stream
+- range request (`Range: bytes=...`): `206 Partial Content`
+- invalid range: `416 Requested Range Not Satisfiable`
+
+When to use this:
+
+- hero/intro/background videos stored in a theme `public/` or `assets/` folder
+- any large media asset where progressive playback or seek support is expected
+- branded site experiences that need local theme-owned media files
+
+When not needed:
+
+- small static images/icons/fonts where full-file transfer is already cheap
+- data/content media that should live in the media spine rather than theme-owned files
+
+Examples:
+
+```html
+<video controls preload="metadata" playsinline>
+  <source src="/theme-assets/robert-betan/rb_website_intro.mp4" type="video/mp4" />
+</video>
+```
+
+```html
+<video autoplay muted loop playsinline>
+  <source src="/theme-assets/robert-betan/hero.webm" type="video/webm" />
+</video>
+```
+
+Notes:
+
+- Always reference theme media via `/theme-assets/...` URLs, not filesystem paths.
+- Keep theme-specific media behavior in theme templates/assets; core only provides transport.
+
 ## Recommended theme authoring
 
 Theme templates receive a `tooty` context object (internal JS-backed data, no REST) with:
