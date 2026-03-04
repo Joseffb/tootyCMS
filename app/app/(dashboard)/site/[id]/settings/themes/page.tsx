@@ -13,6 +13,7 @@ import {
 } from "@/lib/repo-catalog";
 import { getAuthorizedSiteForUser } from "@/lib/authorization";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -20,6 +21,7 @@ type Props = {
 };
 
 export default async function SiteThemeSettingsPage({ params, searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session) redirect("/login");
   const paramsQuery = (await searchParams) || {};
@@ -32,6 +34,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
   if (!site) notFound();
   const siteData = site;
+  const siteThemesPath = `${adminBasePath}/site/${siteData.id}/settings/themes`;
   const siteIds = await listSiteIdsForUser(session.user.id);
   const singleSiteMode = siteIds.length === 1;
   const activeTab = singleSiteMode ? requestedTab : "installed";
@@ -83,12 +86,12 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
       revalidateTag(`${domain}-posts`, "max");
     }
 
-    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
+    revalidatePath(siteThemesPath);
     revalidatePath("/", "layout");
     revalidatePath("/[domain]", "layout");
     revalidatePath("/[domain]/[slug]", "page");
     revalidatePath("/[domain]/c/[slug]", "page");
-    redirect(`/app/site/${siteData.id}/settings/themes`);
+    redirect(siteThemesPath);
   }
 
   async function saveThemeSettings(formData: FormData) {
@@ -116,13 +119,13 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
     }
 
     await saveSiteThemeConfig(siteData.id, themeId, config);
-    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
+    revalidatePath(siteThemesPath);
     revalidatePath("/", "layout");
     revalidatePath("/[domain]", "layout");
     revalidatePath("/[domain]/[slug]", "page");
     revalidatePath("/[domain]/c/[slug]", "page");
     revalidatePath("/[domain]/t/[slug]", "page");
-    redirect(`/app/site/${siteData.id}/settings/themes`);
+    redirect(siteThemesPath);
   }
 
   async function installTheme(formData: FormData) {
@@ -132,10 +135,10 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
     try {
       await installFromRepo("theme", directory);
     } catch {
-      redirect(`/app/site/${siteData.id}/settings/themes?tab=discover&error=rate_limit`);
+      redirect(`${siteThemesPath}?tab=discover&error=rate_limit`);
     }
     revalidatePath(`/site/${siteData.id}/settings/themes`);
-    revalidatePath(`/app/site/${siteData.id}/settings/themes`);
+    revalidatePath(siteThemesPath);
     revalidatePath("/settings/themes");
     revalidatePath("/app/settings/themes");
   }
@@ -152,7 +155,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
         </p>
         <div className="mt-4">
           <CatalogTabs
-            basePath={`/site/${siteData.id}/settings/themes`}
+            basePath={siteThemesPath}
             activeTab={activeTab}
             enabled={singleSiteMode}
           />
@@ -215,7 +218,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
         {activeTab === "installed" ? (
         <div className="mt-4 flex items-center gap-2">
           <a
-            href={`/site/${siteData.id}/settings/themes?tab=installed&view=all`}
+            href={`${siteThemesPath}?tab=installed&view=all`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "all"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -225,7 +228,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
             View All
           </a>
           <a
-            href={`/site/${siteData.id}/settings/themes?tab=installed&view=active`}
+            href={`${siteThemesPath}?tab=installed&view=active`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "active"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -235,7 +238,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
             View Active
           </a>
           <a
-            href={`/site/${siteData.id}/settings/themes?tab=installed&view=inactive`}
+            href={`${siteThemesPath}?tab=installed&view=inactive`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "inactive"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"

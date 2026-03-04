@@ -123,7 +123,8 @@ cleanup() {
 
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
     kill "${SERVER_PID}" >/dev/null 2>&1 || true
-    wait "${SERVER_PID}" >/dev/null 2>&1 || true
+    # Do not wait indefinitely on shutdown; force-kill lingering server later.
+    sleep 1
   fi
 
   pids="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"

@@ -11,16 +11,19 @@ import {
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
 import { userCan } from "@/lib/authorization";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
 };
 
 export default async function ThemeSettingsPage({ searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
+  const settingsThemesPath = `${adminBasePath}/settings/themes`;
   const session = await getSession();
   if (!session) redirect("/login");
   const canManageNetworkThemes = await userCan("network.themes.manage", session.user.id);
-  if (!canManageNetworkThemes) redirect("/app");
+  if (!canManageNetworkThemes) redirect(adminBasePath);
   const params = (await searchParams) || {};
   const activeTab = params.tab === "discover" ? "discover" : "installed";
   const query = String(params.q || "");
@@ -54,8 +57,8 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
     const themeId = String(formData.get("themeId") || "");
     const enabled = formData.get("enabled") === "on";
     await setThemeEnabled(themeId, enabled);
-    revalidatePath("/settings/themes");
     revalidatePath("/app/settings/themes");
+    revalidatePath(settingsThemesPath);
   }
 
   async function saveConfig(formData: FormData) {
@@ -74,8 +77,8 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
     }
 
     await saveThemeConfig(themeId, config);
-    revalidatePath("/settings/themes");
     revalidatePath("/app/settings/themes");
+    revalidatePath(settingsThemesPath);
   }
 
   async function installTheme(formData: FormData) {
@@ -89,10 +92,10 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
     try {
       await installFromRepo("theme", directory);
     } catch {
-      redirect("/app/settings/themes?tab=discover&error=rate_limit");
+      redirect(`${settingsThemesPath}?tab=discover&error=rate_limit`);
     }
-    revalidatePath("/settings/themes");
     revalidatePath("/app/settings/themes");
+    revalidatePath(settingsThemesPath);
   }
 
   return (
@@ -100,7 +103,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
       <p className="text-sm text-stone-600 dark:text-stone-300">
         Themes are discovered from configured paths (comma-separated in `THEMES_PATH`) and managed here.
       </p>
-      <CatalogTabs basePath="/settings/themes" activeTab={activeTab} />
+      <CatalogTabs basePath={settingsThemesPath} activeTab={activeTab} />
 
       {activeTab === "discover" ? (
         <div className="space-y-4 rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
@@ -163,7 +166,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
       {activeTab === "installed" ? (
       <div className="flex items-center gap-2">
         <Link
-          href="/settings/themes?tab=installed&view=all"
+          href={`${settingsThemesPath}?tab=installed&view=all`}
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "all"
               ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -173,7 +176,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
           View All
         </Link>
         <Link
-          href="/settings/themes?tab=installed&view=enabled"
+          href={`${settingsThemesPath}?tab=installed&view=enabled`}
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "enabled"
               ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -183,7 +186,7 @@ export default async function ThemeSettingsPage({ searchParams }: Props) {
           View Enabled
         </Link>
         <Link
-          href="/settings/themes?tab=installed&view=disabled"
+          href={`${settingsThemesPath}?tab=installed&view=disabled`}
           className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
             view === "disabled"
               ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"

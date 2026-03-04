@@ -7,6 +7,7 @@ import { getInstallState } from "@/lib/install-state";
 import { redirect } from "next/navigation";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { getThemeCacheBustToken, withCacheBust } from "@/lib/theme-cache-bust";
 
 export const metadata: Metadata = {
   title: "Tooty CMS",
@@ -31,14 +32,17 @@ export default async function RootPage() {
     normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
   const mainDomain = rootDomain;
   const mainSite = await getSiteData(mainDomain);
-  const themeAssets = mainSite?.id
-    ? await getThemeAssetsForSite(mainSite.id as string)
-    : { styles: [], scripts: [] };
+  const [themeAssets, cacheBustToken] = mainSite?.id
+    ? await Promise.all([
+        getThemeAssetsForSite(mainSite.id as string),
+        getThemeCacheBustToken(mainSite.id as string),
+      ])
+    : [{ styles: [], scripts: [] }, "0"];
 
   return (
     <>
       {themeAssets.styles.map((href: string) => (
-        <link key={href} rel="stylesheet" href={href} />
+        <link key={href} rel="stylesheet" href={withCacheBust(href, cacheBustToken)} />
       ))}
       <FrontendAuthBridge
         adminPathAlias={getAdminPathAlias()}
@@ -46,7 +50,7 @@ export default async function RootPage() {
       />
       <SiteHomePage params={Promise.resolve({ domain: mainDomain })} />
       {themeAssets.scripts.map((src: string) => (
-        <Script key={src} src={src} strategy="afterInteractive" />
+        <Script key={src} src={withCacheBust(src, cacheBustToken)} strategy="afterInteractive" />
       ))}
     </>
   );

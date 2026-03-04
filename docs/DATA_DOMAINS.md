@@ -14,12 +14,12 @@ Core default:
 
 1. Support multiple content types per site.
 2. Keep domain content separated and activation-controlled.
-3. Allow per-site activation without cloning schema per site.
+3. Keep storage site-scoped with shared core content tables, not per-domain physical tables.
 
 ## Core tables
 
 - `tooty_data_domains`
-  - domain registry (`key`, `label`, content/meta table names, settings)
+  - domain registry contract (canonical id + defaults; no extension-owned physical table authority)
 - `tooty_site_data_domains`
   - site/domain assignment + `isActive`
 - `tooty_domain_posts`
@@ -29,20 +29,21 @@ Core default:
 - `tooty_term_taxonomy_domains`
   - taxonomy/domain linkage
 
-## Dynamic tables
+## Storage contract (MUST)
 
-On domain creation, Tooty also creates physical tables:
+Data Domains must use shared normalized storage:
 
-- `<prefix>domain_<slug>`
-- `<prefix>domain_<slug>_meta`
+- `<prefix>domain_posts`
+- `<prefix>domain_post_meta`
 
-This supports future schema isolation for domain-specific workloads while keeping the normalized core tables.
+Per-domain physical tables are forbidden for Data Domains.
+Plugins and setup routines must not create `<prefix>domain_<slug>` or `<prefix>domain_<slug>_meta` tables.
 
 ## Activation model
 
 Domain existence and site activation are separate:
 
-1. Create domain globally
+1. Register domain contract entry
 2. Assign/activate per site
 
 `Post-Types` settings page supports:

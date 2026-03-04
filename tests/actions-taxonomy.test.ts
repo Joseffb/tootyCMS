@@ -113,7 +113,7 @@ describe("taxonomy actions", () => {
       { id: 11, name: "Guides" },
     ]);
 
-    const rows = await getAllCategories();
+    const rows = await getAllCategories("site-1");
     expect(rows).toEqual([
       { id: 10, name: "News" },
       { id: 11, name: "Guides" },
@@ -125,7 +125,7 @@ describe("taxonomy actions", () => {
     dbMock.__pushInsertResult([{ id: 42, name: "tooty", slug: "tooty" }]);
     dbMock.__pushInsertResult([{ id: 99, termId: 42, taxonomy: "tag" }]);
 
-    const created = await createTagByName("Tooty");
+    const created = await createTagByName("site-1", "Tooty");
 
     expect(created).toEqual({ id: 99, name: "tooty" });
     expect(dbMock.insert).toHaveBeenCalledTimes(2);
@@ -134,7 +134,7 @@ describe("taxonomy actions", () => {
   it("uses existing category without creating duplicates", async () => {
     dbMock.__pushSelectResult([{ id: 7, name: "Docs" }]);
 
-    const existing = await createCategoryByName("Docs");
+    const existing = await createCategoryByName("site-1", "Docs");
 
     expect(existing).toEqual({ id: 7, name: "Docs" });
     expect(dbMock.insert).not.toHaveBeenCalled();
@@ -143,7 +143,7 @@ describe("taxonomy actions", () => {
   it("returns tag taxonomy list", async () => {
     dbMock.__pushSelectResult([{ id: 30, name: "alpha" }]);
 
-    const rows = await getAllTags();
+    const rows = await getAllTags("site-1");
     expect(rows).toEqual([{ id: 30, name: "alpha" }]);
   });
 
@@ -172,7 +172,7 @@ describe("taxonomy actions", () => {
     expect(dbMock.insert).toHaveBeenCalledTimes(1);
   });
 
-  it("creates per-domain content and meta table names with dynamic prefix", async () => {
+  it("creates data domains using shared site-domain storage tables", async () => {
     const previous = process.env.CMS_DB_PREFIX;
     process.env.CMS_DB_PREFIX = "tooty_";
 
@@ -181,27 +181,31 @@ describe("taxonomy actions", () => {
     dbMock.__pushInsertResult([
       {
         id: 1,
-        key: "used-cars",
+        key: "used-car",
         label: "used cars",
-        contentTable: "tooty_domain_used-cars",
-        metaTable: "tooty_domain_used-cars_meta",
+        contentTable: "tooty_site_domain_posts",
+        metaTable: "tooty_site_domain_post_meta",
       },
     ]);
 
-    const created = await createDataDomain({ label: "used cars" });
+    const created = await createDataDomain({ label: "used cars", siteId: "site-1" });
 
-    expect(dbMock.transaction).toHaveBeenCalledTimes(1);
-    expect(dbMock.insert).toHaveBeenCalledWith(expect.anything());
-    const insertBuilder = dbMock.insert.mock.results[0]?.value;
-    expect(insertBuilder?.values).toHaveBeenCalledWith(expect.objectContaining({
-      settings: expect.objectContaining({
-        showInMenu: true,
-      }),
-    }));
+    expect(dbMock.transaction).not.toHaveBeenCalled();
+    expect(dbMock.insert).toHaveBeenCalled();
+    const hasSharedStorageInsert = dbMock.insert.mock.results.some((result: any) =>
+      result?.value?.values?.mock?.calls?.some?.(([payload]: any[]) =>
+        payload &&
+        payload.contentTable === "tooty_site_domain_posts" &&
+        payload.metaTable === "tooty_site_domain_post_meta" &&
+        payload.settings?.storageModel === "shared_site_domain_posts" &&
+        payload.settings?.showInMenu === true
+      )
+    );
+    expect(hasSharedStorageInsert).toBe(true);
     expect(created).toMatchObject({
-      key: "used-cars",
-      contentTable: "tooty_domain_used-cars",
-      metaTable: "tooty_domain_used-cars_meta",
+      key: "used-car",
+      contentTable: "tooty_site_domain_posts",
+      metaTable: "tooty_site_domain_post_meta",
     });
 
     process.env.CMS_DB_PREFIX = previous;

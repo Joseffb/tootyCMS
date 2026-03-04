@@ -12,6 +12,7 @@ import { getUserMetaValue } from "@/lib/user-meta";
 import { cookies } from "next/headers";
 import { getSettingByKey, getSettingsByKeys } from "@/lib/settings-store";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { getAdminPathAlias } from "@/lib/admin-path";
 import {
   DefaultPostgresAccountsTable,
   DefaultPostgresSessionsTable,
@@ -227,6 +228,7 @@ function buildProviders(
 }
 
 export async function getAuthOptions(): Promise<NextAuthOptions> {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const externalProviders = await getRegisteredExternalAuthProviders();
   const providerRegistry = new Map(externalProviders.map((entry) => [entry.id, entry] as const));
 
@@ -267,7 +269,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         if (account?.provider === "native" && user?.id) {
           const mustRotate = await getUserMetaValue(String(user.id), "force_password_change");
           if (mustRotate === "true") {
-            return "/settings/profile?forcePasswordChange=1";
+            return `${adminBasePath}/settings/profile?forcePasswordChange=1`;
           }
           return true;
         }

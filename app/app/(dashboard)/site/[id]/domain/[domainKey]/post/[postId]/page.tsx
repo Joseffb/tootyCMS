@@ -9,7 +9,7 @@ import {
 } from "@/lib/actions";
 import db from "@/lib/db";
 import { domainPostMeta, domainPosts, termRelationships, termTaxonomies, terms } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { canUserMutateDomainPost, userCan } from "@/lib/authorization";
 import { getSiteWritingSettings } from "@/lib/cms-config";
@@ -77,7 +77,7 @@ export default async function DomainPostPage({ params }: Props) {
     .from(termRelationships)
     .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
     .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(eq(termRelationships.objectId, data.id));
+    .where(and(eq(termRelationships.objectId, data.id), eq(termTaxonomies.siteId, siteId)));
 
   const categoryRows = taxonomyRows
     .filter((row) => row.taxonomy === "category")

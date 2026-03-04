@@ -25,30 +25,35 @@ import {
   getDatabaseHealthReport,
 } from "@/lib/db-health";
 
+const PREFIX_RAW = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
+const PREFIX = PREFIX_RAW.endsWith("_") ? PREFIX_RAW : `${PREFIX_RAW}_`;
+
 const FULL_COLUMNS = [
-  { table_name: "tooty_posts", column_name: "image" },
-  { table_name: "tooty_posts", column_name: "imageBlurhash" },
-  { table_name: "tooty_domain_posts", column_name: "image" },
-  { table_name: "tooty_domain_posts", column_name: "imageBlurhash" },
-  { table_name: "tooty_domain_posts", column_name: "password" },
-  { table_name: "tooty_domain_posts", column_name: "usePassword" },
-  { table_name: "tooty_media", column_name: "altText" },
-  { table_name: "tooty_media", column_name: "caption" },
-  { table_name: "tooty_media", column_name: "description" },
+  { table_name: `${PREFIX}site_posts`, column_name: "image" },
+  { table_name: `${PREFIX}site_posts`, column_name: "imageBlurhash" },
+  { table_name: `${PREFIX}site_domain_posts`, column_name: "image" },
+  { table_name: `${PREFIX}site_domain_posts`, column_name: "imageBlurhash" },
+  { table_name: `${PREFIX}site_domain_posts`, column_name: "password" },
+  { table_name: `${PREFIX}site_domain_posts`, column_name: "usePassword" },
+  { table_name: `${PREFIX}site_media`, column_name: "altText" },
+  { table_name: `${PREFIX}site_media`, column_name: "caption" },
+  { table_name: `${PREFIX}site_media`, column_name: "description" },
+  { table_name: `${PREFIX}site_data_domains`, column_name: "description" },
+  { table_name: `${PREFIX}site_term_taxonomies`, column_name: "siteId" },
 ];
 
 const REQUIRED_TABLES = [
-  { table_name: "tooty_media" },
-  { table_name: "tooty_site_menus" },
-  { table_name: "tooty_site_menu_items" },
-  { table_name: "tooty_site_menu_item_meta" },
-  { table_name: "tooty_communication_messages" },
-  { table_name: "tooty_communication_attempts" },
-  { table_name: "tooty_webcallback_events" },
-  { table_name: "tooty_webhook_subscriptions" },
-  { table_name: "tooty_webhook_deliveries" },
-  { table_name: "tooty_domain_events_queue" },
-  { table_name: "tooty_term_taxonomy_meta" },
+  { table_name: `${PREFIX}site_media` },
+  { table_name: `${PREFIX}site_menus` },
+  { table_name: `${PREFIX}site_menu_items` },
+  { table_name: `${PREFIX}site_menu_item_meta` },
+  { table_name: `${PREFIX}site_communication_messages` },
+  { table_name: `${PREFIX}site_communication_attempts` },
+  { table_name: `${PREFIX}site_webcallback_events` },
+  { table_name: `${PREFIX}site_webhook_subscriptions` },
+  { table_name: `${PREFIX}site_webhook_deliveries` },
+  { table_name: `${PREFIX}domain_events_queue` },
+  { table_name: `${PREFIX}site_term_taxonomy_meta` },
 ];
 
 describe("db health version tracking", () => {
@@ -117,7 +122,7 @@ describe("db health version tracking", () => {
   it("requires migration when media metadata columns are missing even if the tracked version matches", async () => {
     mocks.execute
       .mockResolvedValueOnce({
-        rows: FULL_COLUMNS.filter((entry) => entry.table_name !== "tooty_media"),
+        rows: FULL_COLUMNS.filter((entry) => entry.table_name !== `${PREFIX}site_media`),
       })
       .mockResolvedValueOnce({ rows: REQUIRED_TABLES });
     mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
@@ -132,17 +137,61 @@ describe("db health version tracking", () => {
     expect(report.migrationRequired).toBe(true);
     expect(report.pending.some((entry) => entry.id === "2026.03.02.1-media-metadata")).toBe(true);
     expect(report.missing).toEqual([
-      { table: "tooty_media", column: "altText" },
-      { table: "tooty_media", column: "caption" },
-      { table: "tooty_media", column: "description" },
+      { table: `${PREFIX}site_media`, column: "altText" },
+      { table: `${PREFIX}site_media`, column: "caption" },
+      { table: `${PREFIX}site_media`, column: "description" },
     ]);
+  });
+
+  it("requires migration when site data domain description column is missing", async () => {
+    mocks.execute
+      .mockResolvedValueOnce({
+        rows: FULL_COLUMNS.filter(
+          (entry) => !(entry.table_name === `${PREFIX}site_data_domains` && entry.column_name === "description"),
+        ),
+      })
+      .mockResolvedValueOnce({ rows: REQUIRED_TABLES });
+    mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
+      if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      if (key === DB_SCHEMA_TARGET_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      return fallback;
+    });
+
+    const report = await getDatabaseHealthReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.migrationRequired).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.04.1-site-domain-descriptions")).toBe(true);
+    expect(report.missing).toContainEqual({ table: `${PREFIX}site_data_domains`, column: "description" });
+  });
+
+  it("requires migration when taxonomy site ownership column is missing", async () => {
+    mocks.execute
+      .mockResolvedValueOnce({
+        rows: FULL_COLUMNS.filter(
+          (entry) => !(entry.table_name === `${PREFIX}site_term_taxonomies` && entry.column_name === "siteId"),
+        ),
+      })
+      .mockResolvedValueOnce({ rows: REQUIRED_TABLES });
+    mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
+      if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      if (key === DB_SCHEMA_TARGET_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      return fallback;
+    });
+
+    const report = await getDatabaseHealthReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.migrationRequired).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.04.2-site-taxonomies")).toBe(true);
+    expect(report.missing).toContainEqual({ table: `${PREFIX}site_term_taxonomies`, column: "siteId" });
   });
 
   it("requires migration when native menu tables are missing even if the tracked version matches", async () => {
     mocks.execute
       .mockResolvedValueOnce({ rows: FULL_COLUMNS })
       .mockResolvedValueOnce({
-        rows: REQUIRED_TABLES.filter((entry) => !entry.table_name.startsWith("tooty_site_menu")),
+        rows: REQUIRED_TABLES.filter((entry) => !entry.table_name.startsWith(`${PREFIX}site_menu`)),
       });
     mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
       if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
@@ -156,9 +205,9 @@ describe("db health version tracking", () => {
     expect(report.migrationRequired).toBe(true);
     expect(report.pending.some((entry) => entry.id === "2026.03.02.1-native-menus")).toBe(true);
     expect(report.missingTables).toEqual([
-      "tooty_site_menus",
-      "tooty_site_menu_items",
-      "tooty_site_menu_item_meta",
+      `${PREFIX}site_menus`,
+      `${PREFIX}site_menu_items`,
+      `${PREFIX}site_menu_item_meta`,
     ]);
   });
 

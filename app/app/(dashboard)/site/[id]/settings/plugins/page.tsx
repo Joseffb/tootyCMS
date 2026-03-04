@@ -20,6 +20,7 @@ import {
 import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
 import ConfirmSubmitButton from "@/components/confirm-submit-button";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -27,6 +28,7 @@ type Props = {
 };
 
 export default async function SitePluginSettingsPage({ params, searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session) redirect("/login");
   const canManageNetworkPlugins = await userCan("network.plugins.manage", session.user.id);
@@ -40,6 +42,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
   const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
   if (!site) notFound();
   const siteId = site.id;
+  const sitePluginsPath = `${adminBasePath}/site/${siteId}/settings/plugins`;
   const siteIds = await listSiteIdsForUser(session.user.id);
   const singleSiteMode = siteIds.length === 1;
   const activeTab = singleSiteMode ? requestedTab : "installed";
@@ -96,7 +99,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       await setSitePluginEnabled(siteId, pluginId, enabled || effectiveNetworkRequired);
     }
     revalidatePath(`/site/${siteId}/settings/plugins`);
-    revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    revalidatePath(sitePluginsPath);
     if (singleSiteMode) {
       revalidatePath("/settings/plugins");
       revalidatePath("/app/settings/plugins");
@@ -125,7 +128,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       await saveSitePluginConfig(siteId, pluginId, nextConfig);
     }
     revalidatePath(`/site/${siteId}/settings/plugins`);
-    revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    revalidatePath(sitePluginsPath);
     if (singleSiteMode) {
       revalidatePath("/settings/plugins");
       revalidatePath("/app/settings/plugins");
@@ -139,10 +142,10 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     try {
       await installFromRepo("plugin", directory);
     } catch {
-      redirect(`/app/site/${siteId}/settings/plugins?tab=discover&error=rate_limit`);
+      redirect(`${sitePluginsPath}?tab=discover&error=rate_limit`);
     }
     revalidatePath(`/site/${siteId}/settings/plugins`);
-    revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    revalidatePath(sitePluginsPath);
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
   }
@@ -166,7 +169,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       await setSitePluginEnabled(siteId, plugin.id, nextEnabled);
     }
     revalidatePath(`/site/${siteId}/settings/plugins`);
-    revalidatePath(`/app/site/${siteId}/settings/plugins`);
+    revalidatePath(sitePluginsPath);
     if (singleSiteMode) {
       revalidatePath("/settings/plugins");
       revalidatePath("/app/settings/plugins");
@@ -192,7 +195,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       </div>
 
       <CatalogTabs
-        basePath={`/site/${siteId}/settings/plugins`}
+        basePath={sitePluginsPath}
         activeTab={activeTab}
         enabled={singleSiteMode}
         installedLabel="Active"
@@ -245,7 +248,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <a
-            href={`/site/${siteId}/settings/plugins?tab=installed&view=all`}
+            href={`${sitePluginsPath}?tab=installed&view=all`}
             className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "all"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -255,7 +258,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
             View All
           </a>
           <a
-            href={`/site/${siteId}/settings/plugins?tab=installed&view=installed`}
+            href={`${sitePluginsPath}?tab=installed&view=installed`}
             className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "installed"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -265,7 +268,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
             View Active
           </a>
           <a
-            href={`/site/${siteId}/settings/plugins?tab=installed&view=uninstalled`}
+            href={`${sitePluginsPath}?tab=installed&view=uninstalled`}
             className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "uninstalled"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"

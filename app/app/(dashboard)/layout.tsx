@@ -9,12 +9,15 @@ import { getSession } from "@/lib/auth";
 import { stopUserMimic } from "@/lib/actions";
 import DashboardSessionProvider from "@/components/dashboard-session-provider";
 import ThemeBridgePublisher from "@/components/theme-bridge-publisher";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
+  const adminAlias = getAdminPathAlias();
+  const adminBasePath = `/app/${adminAlias}`;
   const installState = await getInstallState();
   if (installState.setupRequired) {
     redirect("/setup");
@@ -39,7 +42,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
                 action={async () => {
                   "use server";
                   await stopUserMimic();
-                  redirect("/app/settings/users");
+                  redirect(`${adminBasePath}/settings/users`);
                 }}
                 className="inline"
               >
@@ -51,7 +54,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
             <div className="border-b border-amber-300 bg-amber-100 px-4 py-3 text-sm text-amber-900">
               A schema update for for this CMS is required.
               {" "}
-              <Link href="/settings/database" className="font-semibold">
+              <Link href={`${adminBasePath}/settings/database`} className="font-semibold">
                 Open Database Updates
               </Link>
             </div>

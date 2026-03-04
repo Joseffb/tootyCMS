@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { applyPendingDatabaseMigrations, getDatabaseHealthReport } from "@/lib/db-health";
 import { userCan } from "@/lib/authorization";
+import { getAdminPathAlias } from "@/lib/admin-path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -9,6 +10,7 @@ type Props = {
 };
 
 export default async function DatabaseSettingsPage({ searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session?.user?.id) redirect("/login");
 
@@ -32,9 +34,10 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
     const allowed = await userCan("network.settings.write", current.user.id);
     if (!allowed) return;
     await applyPendingDatabaseMigrations();
-    revalidatePath("/settings/database");
+    revalidatePath("/app/settings/database");
+    revalidatePath(`${adminBasePath}/settings/database`);
     revalidatePath("/app");
-    redirect("/app/settings/database?updated=1");
+    redirect(`${adminBasePath}/settings/database?updated=1`);
   }
 
   return (
@@ -42,7 +45,7 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
       <header className="space-y-1">
         <h2 className="font-cal text-2xl">Database Updates</h2>
         <p className="text-sm text-stone-600 dark:text-stone-300">
-          Schema checks for required CMS tables, columns, and tracked compatibility version.
+          Schema checks for required CMS tables, columns, and tracked migration version.
         </p>
       </header>
 
@@ -61,7 +64,15 @@ export default async function DatabaseSettingsPage({ searchParams }: Props) {
           <p>
             Target Version: <code>{report.targetVersion}</code>
           </p>
+          <p>
+            Compatibility Mode: <code>{report.compatMode ? "on" : "off (no-compat)"}</code>
+          </p>
         </div>
+        {!report.compatMode ? (
+          <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">
+            No-compat mode is active. Forward schema migrations are still supported.
+          </p>
+        ) : null}
         {report.ok ? (
           <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">
             Database schema is up to date and version-tracked.

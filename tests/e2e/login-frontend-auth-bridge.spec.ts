@@ -46,7 +46,7 @@ async function ensureSite() {
 async function ensurePostDomain() {
   const rows = await sql`
     SELECT "id"
-    FROM tooty_data_domains
+    FROM tooty_site_data_domains
     WHERE "key" = ${domainKey}
     LIMIT 1
   `;
@@ -56,8 +56,8 @@ async function ensurePostDomain() {
   }
   const fallback = await sql`
     SELECT "id"
-    FROM tooty_data_domains
-    WHERE "contentTable" = 'domain_posts'
+    FROM tooty_site_data_domains
+    WHERE "contentTable" = 'tooty_site_domain_posts'
     LIMIT 1
   `;
   if (fallback.rows[0]?.id) {
@@ -66,8 +66,8 @@ async function ensurePostDomain() {
   }
   try {
     const inserted = await sql`
-      INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
-      VALUES ('post', 'Posts', 'domain_posts', 'domain_post_meta', NOW(), NOW())
+      INSERT INTO tooty_site_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
+      VALUES ('post', 'Posts', 'tooty_site_domain_posts', 'tooty_site_domain_post_meta', NOW(), NOW())
       ON CONFLICT ("key") DO UPDATE
       SET "label" = EXCLUDED."label",
           "contentTable" = EXCLUDED."contentTable",
@@ -79,8 +79,8 @@ async function ensurePostDomain() {
   } catch {
     const retry = await sql`
       SELECT "id"
-      FROM tooty_data_domains
-      WHERE "key" = ${domainKey} OR "contentTable" = 'domain_posts'
+      FROM tooty_site_data_domains
+      WHERE "key" = ${domainKey} OR "contentTable" = 'tooty_site_domain_posts'
       LIMIT 1
     `;
     dataDomainId = Number(retry.rows[0]?.id || 0);
@@ -116,7 +116,7 @@ async function ensurePost() {
     content: [{ type: "paragraph", content: [{ type: "text", text: "Bridge auth post." }] }],
   });
   const inserted = await sql`
-    INSERT INTO tooty_domain_posts
+    INSERT INTO tooty_site_domain_posts
       ("id", "dataDomainId", "title", "description", "content", "slug", "published", "siteId", "userId", "createdAt", "updatedAt")
     VALUES
       (${seededPostId}, ${dataDomainId}, ${"Bridge Auth Post"}, ${"Bridge auth test"}, ${content}, ${postSlug}, true, ${siteId}, ${userId}, NOW(), NOW())
@@ -125,11 +125,11 @@ async function ensurePost() {
   postId = String(inserted.rows[0]?.id || "");
   if (!postId) throw new Error("Failed to create bridge auth post.");
   await sql`
-    DELETE FROM tooty_domain_post_meta
+    DELETE FROM tooty_site_domain_post_meta
     WHERE "domainPostId" = ${postId} AND "key" = 'use_comments'
   `;
   await sql`
-    INSERT INTO tooty_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES (${postId}, 'use_comments', 'true', NOW(), NOW())
   `;
 }

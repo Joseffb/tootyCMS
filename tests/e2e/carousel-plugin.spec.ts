@@ -86,7 +86,7 @@ async function authenticateAs(page: Page, userId: string) {
 
 async function ensureCarouselDomain() {
   await sql`
-    INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "description", "settings", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_data_domains ("key", "label", "contentTable", "metaTable", "description", "settings", "createdAt", "updatedAt")
     VALUES (
       'carousel-slide',
       'Carousel Slide',
@@ -105,7 +105,7 @@ async function ensureCarouselDomain() {
   `;
 
   await sql`
-    INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "description", "settings", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_data_domains ("key", "label", "contentTable", "metaTable", "description", "settings", "createdAt", "updatedAt")
     VALUES (
       'carousel',
       'Carousel',
@@ -125,7 +125,7 @@ async function ensureCarouselDomain() {
 
   const domainRows = await sql<{ id: number; key: string }>`
     SELECT "id", "key"
-    FROM tooty_data_domains
+    FROM tooty_site_data_domains
     WHERE "key" IN ('carousel', 'carousel-slide')
   `;
   const carouselDomainId = domainRows.rows.find((row) => row.key === "carousel")?.id;
@@ -143,7 +143,7 @@ async function ensureCarouselDomain() {
   `;
 
   await sql`
-    INSERT INTO tooty_domain_posts ("id", "dataDomainId", "title", "description", "content", "slug", "image", "published", "siteId", "userId", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_domain_posts ("id", "dataDomainId", "title", "description", "content", "slug", "image", "published", "siteId", "userId", "createdAt", "updatedAt")
     VALUES
       (${carouselSetId}, ${carouselDomainId}, 'Homepage Carousel', 'Primary hero carousel', '', 'homepage', '', true, ${siteId}, ${adminUserId}, NOW(), NOW())
     ON CONFLICT ("id") DO UPDATE
@@ -155,7 +155,7 @@ async function ensureCarouselDomain() {
   `;
 
   await sql`
-    INSERT INTO tooty_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES
       (${carouselSetId}, 'embed_key', 'homepage', NOW(), NOW()),
       (${carouselSetId}, 'workflow_state', 'published', NOW(), NOW())
@@ -165,7 +165,7 @@ async function ensureCarouselDomain() {
   `;
 
   await sql`
-    INSERT INTO tooty_domain_posts ("id", "dataDomainId", "title", "description", "content", "slug", "image", "published", "siteId", "userId", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_domain_posts ("id", "dataDomainId", "title", "description", "content", "slug", "image", "published", "siteId", "userId", "createdAt", "updatedAt")
     VALUES
       (${slideOneId}, ${carouselSlideDomainId}, 'Slide One', 'First slide', '', ${`${runId}-slide-one`}, '', true, ${siteId}, ${adminUserId}, NOW(), NOW()),
       (${slideTwoId}, ${carouselSlideDomainId}, 'Slide Two', 'Second slide', '', ${`${runId}-slide-two`}, '', true, ${siteId}, ${adminUserId}, NOW() + INTERVAL '1 minute', NOW())
@@ -177,7 +177,7 @@ async function ensureCarouselDomain() {
   `;
 
   await sql`
-    INSERT INTO tooty_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
+    INSERT INTO tooty_site_domain_post_meta ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES
       (${slideOneId}, 'carousel_id', ${carouselSetId}, NOW(), NOW()),
       (${slideOneId}, 'carousel_key', 'homepage', NOW(), NOW()),
@@ -196,7 +196,7 @@ async function ensureCarouselDomain() {
 async function readSortOrder(domainPostId: string) {
   const result = await sql<{ value: string }>`
     SELECT "value"
-    FROM tooty_domain_post_meta
+    FROM tooty_site_domain_post_meta
     WHERE "domainPostId" = ${domainPostId} AND "key" = 'sort_order'
     LIMIT 1
   `;
@@ -259,11 +259,11 @@ test("carousel plugin drag-and-drop reorders slides and persists sort_order", as
 
 test.afterAll(async () => {
   await sql`
-    DELETE FROM tooty_domain_post_meta
+    DELETE FROM tooty_site_domain_post_meta
     WHERE "domainPostId" IN (${slideOneId}, ${slideTwoId}, ${carouselSetId})
   `;
   await sql`
-    DELETE FROM tooty_domain_posts
+    DELETE FROM tooty_site_domain_posts
     WHERE "id" IN (${slideOneId}, ${slideTwoId}, ${carouselSetId})
   `;
   await sql`

@@ -4,12 +4,15 @@ import Link from "next/link";
 import { createGlobalRbacRole, deleteGlobalRbacRole, getGlobalRbacSettingsAdmin, listUsersAdmin, updateGlobalRbacCapability, updateUserAdmin } from "@/lib/actions";
 import RbacAssignmentsTable from "@/components/settings/rbac-assignments-table";
 import RbacRoleControls from "@/components/settings/rbac-role-controls";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function RbacSettingsPage({ searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
+  const rbacPath = `${adminBasePath}/settings/rbac`;
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -36,14 +39,14 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
     "use server";
     await createGlobalRbacRole(formData);
     const role = String(formData.get("role") || "").trim().toLowerCase();
-    if (!role) redirect("/app/settings/rbac?tab=matrix");
-    redirect(`/app/settings/rbac?tab=matrix&role=${encodeURIComponent(role)}`);
+    if (!role) redirect(`${rbacPath}?tab=matrix`);
+    redirect(`${rbacPath}?tab=matrix&role=${encodeURIComponent(role)}`);
   }
 
   async function deleteRoleAction(formData: FormData) {
     "use server";
     await deleteGlobalRbacRole(formData);
-    redirect("/app/settings/rbac?tab=matrix");
+    redirect(`${rbacPath}?tab=matrix`);
   }
 
   return (
@@ -55,7 +58,7 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
 
       <div className="mt-5 flex items-center gap-2 border-b border-stone-200 pb-3 dark:border-stone-700">
         <Link
-          href="/app/settings/rbac?tab=roles"
+          href={`${rbacPath}?tab=roles`}
           className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
             tab === "roles"
               ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -65,7 +68,7 @@ export default async function RbacSettingsPage({ searchParams }: Props) {
           Assignments
         </Link>
         <Link
-          href={`/app/settings/rbac?tab=matrix&role=${encodeURIComponent(selectedRole)}`}
+          href={`${rbacPath}?tab=matrix&role=${encodeURIComponent(selectedRole)}`}
           className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
             tab === "matrix"
               ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"

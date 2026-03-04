@@ -86,44 +86,10 @@ async function ensurePluginContentType(
 
   if (!existing) {
     const prefix = normalizePrefix();
-    const contentTable = `${prefix}domain_${key}`;
-    const metaTable = `${contentTable}_meta`;
+    const contentTable = `${prefix}site_domain_posts`;
+    const metaTable = `${prefix}site_domain_post_meta`;
 
     await db.transaction(async (tx) => {
-      await tx.execute(sql.raw(`
-        CREATE TABLE IF NOT EXISTS "${contentTable}" (
-          "id" TEXT PRIMARY KEY,
-          "title" TEXT,
-          "description" TEXT,
-          "content" TEXT,
-          "layout" TEXT,
-          "slug" TEXT NOT NULL,
-          "image" TEXT DEFAULT '',
-          "imageBlurhash" TEXT,
-          "published" BOOLEAN NOT NULL DEFAULT FALSE,
-          "siteId" TEXT,
-          "userId" TEXT,
-          "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
-          "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-      `));
-      await tx.execute(
-        sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS "${contentTable}_slug_site_idx" ON "${contentTable}" ("slug", "siteId")`),
-      );
-      await tx.execute(sql.raw(`
-        CREATE TABLE IF NOT EXISTS "${metaTable}" (
-          "id" SERIAL PRIMARY KEY,
-          "domainPostId" TEXT NOT NULL,
-          "key" TEXT NOT NULL,
-          "value" TEXT NOT NULL,
-          "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
-          "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-      `));
-      await tx.execute(
-        sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS "${metaTable}_post_key_idx" ON "${metaTable}" ("domainPostId", "key")`),
-      );
-
       const createdRows = await tx
         .insert(dataDomains)
         .values({
@@ -135,6 +101,7 @@ async function ensurePluginContentType(
           settings: {
             pluginOwner: pluginId,
             pluginManaged: true,
+            storageModel: "shared_site_domain_posts",
             showInMenu,
             ...(parentKey ? { parentKey } : {}),
             ...(parentMetaKey ? { parentMetaKey } : {}),
@@ -177,10 +144,13 @@ async function ensurePluginContentType(
       await db
         .update(dataDomains)
         .set({
+          contentTable: `${normalizePrefix()}site_domain_posts`,
+          metaTable: `${normalizePrefix()}site_domain_post_meta`,
           settings: {
             ...currentSettings,
             pluginOwner: pluginId,
             pluginManaged: true,
+            storageModel: "shared_site_domain_posts",
             showInMenu,
             ...(parentKey ? { parentKey } : {}),
             ...(parentMetaKey ? { parentMetaKey } : {}),

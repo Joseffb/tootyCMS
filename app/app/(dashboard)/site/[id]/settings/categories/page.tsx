@@ -35,13 +35,13 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
     notFound();
   }
 
-  const taxonomies = await getTaxonomyOverview();
+  const taxonomies = await getTaxonomyOverview(site.id);
   const query = (await searchParams) ?? {};
   const selectedTaxonomy =
     query.taxonomy && taxonomies.some((taxonomy) => taxonomy.taxonomy === query.taxonomy)
       ? query.taxonomy
       : null;
-  const selectedTerms = selectedTaxonomy ? await getTaxonomyTerms(selectedTaxonomy) : [];
+  const selectedTerms = selectedTaxonomy ? await getTaxonomyTerms(site.id, selectedTaxonomy) : [];
   const termNameById = new Map(selectedTerms.map((term) => [term.id, term.name]));
 
   return (
@@ -61,7 +61,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
             const taxonomy = String(formData.get("taxonomy") ?? "");
             const label = String(formData.get("label") ?? "");
             if (!taxonomy.trim()) return;
-            await createTaxonomy({ taxonomy, label });
+            await createTaxonomy({ siteId: site.id, taxonomy, label });
           }}
           className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]"
         >
@@ -106,7 +106,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                         "use server";
                         const next = String(formData.get("next") ?? "").trim();
                         if (!next) return;
-                        await renameTaxonomy({ current: taxonomy.taxonomy, next });
+                        await renameTaxonomy({ siteId: site.id, current: taxonomy.taxonomy, next });
                       }}
                     >
                     <input
@@ -128,7 +128,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                         "use server";
                         const label = String(formData.get("label") ?? "").trim();
                         if (!label) return;
-                        await setTaxonomyLabel({ taxonomy: taxonomy.taxonomy, label });
+                        await setTaxonomyLabel({ taxonomy: taxonomy.taxonomy, label, siteId: site.id });
                       }}
                     >
                     <input
@@ -161,7 +161,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                       <form
                         action={async () => {
                           "use server";
-                          await deleteTaxonomy(taxonomy.taxonomy);
+                          await deleteTaxonomy(site.id, taxonomy.taxonomy);
                         }}
                       >
                         <button type="submit" className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50">
@@ -188,6 +188,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                             const parentId = parentRaw ? Number(parentRaw) : null;
                             if (!label.trim()) return;
                             await createTaxonomyTerm({
+                              siteId: site.id,
                               taxonomy: taxonomy.taxonomy,
                               label,
                               parentId: Number.isFinite(parentId) ? parentId : null,
@@ -230,7 +231,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                                         const label = String(formData.get("label") ?? "").trim();
                                         const slug = String(formData.get("slug") ?? "").trim();
                                         if (!label) return;
-                                        await updateTaxonomyTerm({ termTaxonomyId: term.id, label, slug });
+                                        await updateTaxonomyTerm({ siteId: site.id, termTaxonomyId: term.id, label, slug });
                                       }}
                                     >
                                       <input
@@ -251,7 +252,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                                         const label = String(formData.get("label") ?? "").trim();
                                         const slug = String(formData.get("slug") ?? "").trim();
                                         if (!label) return;
-                                        await updateTaxonomyTerm({ termTaxonomyId: term.id, label, slug });
+                                        await updateTaxonomyTerm({ siteId: site.id, termTaxonomyId: term.id, label, slug });
                                       }}
                                     >
                                       <input
@@ -272,6 +273,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                                         const parentRaw = String(formData.get("parentId") ?? "");
                                         const parentId = parentRaw ? Number(parentRaw) : null;
                                         await updateTaxonomyTerm({
+                                          siteId: site.id,
                                           termTaxonomyId: term.id,
                                           parentId: Number.isFinite(parentId) ? parentId : null,
                                         });
@@ -308,7 +310,7 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
                                     <form
                                       action={async () => {
                                         "use server";
-                                        await deleteTaxonomyTerm(term.id);
+                                        await deleteTaxonomyTerm(site.id, term.id);
                                       }}
                                     >
                                       <button type="submit" className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50">

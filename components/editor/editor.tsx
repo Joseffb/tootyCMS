@@ -344,14 +344,14 @@ export default function Editor({
 
   useEffect(() => {
     let mounted = true;
-    getTaxonomyOverview()
+    getTaxonomyOverview(post.siteId || "")
       .then(async (rows) => {
         if (!mounted) return;
         const sorted = [...rows].sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
         setTaxonomyOverviewRows(sorted);
         await Promise.all(
           sorted.map(async (row) => {
-            const preview = await getTaxonomyTermsPreview(row.taxonomy, 20);
+            const preview = await getTaxonomyTermsPreview(post.siteId || "", row.taxonomy, 20);
             if (!mounted) return;
             setTaxonomyTermsByKey((prev) => ({
               ...prev,
@@ -375,7 +375,7 @@ export default function Editor({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [post.siteId]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -682,7 +682,7 @@ export default function Editor({
     if (taxonomyExpanded[taxonomy]) return;
     setTaxonomyLoadingMore((prev) => ({ ...prev, [taxonomy]: true }));
     try {
-      const rows = await getTaxonomyTerms(taxonomy);
+      const rows = await getTaxonomyTerms(post.siteId || "", taxonomy);
       const normalized = rows.map((term) => ({ id: term.id, name: term.name }));
       setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: normalized }));
       setTermNameById((prev) => {
@@ -698,6 +698,7 @@ export default function Editor({
 
   const addOrSelectTaxonomyTerm = async (taxonomy: string, rawName: string) => {
     if (!canEdit) return;
+    if (!post.siteId) return;
     const trimmed = rawName.trim();
     if (!trimmed) return;
     const existing = getTermsForTaxonomy(taxonomy).find(
@@ -705,7 +706,7 @@ export default function Editor({
     );
     let termId: number | null = existing?.id ?? null;
     if (termId === null) {
-      const created = await createTaxonomyTerm({ taxonomy, label: trimmed });
+      const created = await createTaxonomyTerm({ siteId: post.siteId, taxonomy, label: trimmed });
       if ((created as any)?.error) {
         toast.error(String((created as any)?.error));
         return;

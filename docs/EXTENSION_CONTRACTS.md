@@ -366,6 +366,13 @@ Plugins may not:
 - Write raw DB tables directly as an extension contract
 - Mutate routing/auth/schema outside Core
 - Require one-off core changes for plugin-specific behavior outside published contracts
+- Create extension-owned physical content tables for Data Domains or Taxonomy models
+- Introduce new global feature tables when a site-scoped spine table already exists
+
+Network/global schema rule (MUST):
+
+- Global tables must remain sparse and limited to network administration concerns.
+- Feature content storage (data domains, taxonomy term ownership, plugin content records, menus, comments, media usage) must be site-scoped by contract.
 
 Plugin admin menu placement contract:
 

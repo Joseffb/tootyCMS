@@ -13,6 +13,7 @@ import { resolveThemeQueryRequests } from "@/lib/theme-query-contract";
 import { getPluginById } from "@/lib/plugins";
 import { getPluginOwnerForDataDomain } from "@/lib/plugin-content-types";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
+import { enableThemeDynamicRenderingInDev } from "@/lib/theme-dev-mode";
 
 function isExternal(url: string) {
   return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/");
@@ -167,6 +168,7 @@ export async function getActiveThemeForSite(siteId: string): Promise<ThemeWithSt
 }
 
 export async function getThemeAssetsForSite(siteId: string) {
+  enableThemeDynamicRenderingInDev();
   const active = await getActiveThemeForSite(siteId);
   if (!active) return { styles: [], scripts: [] };
   const themesDir = getThemeBaseDir(active);
@@ -194,6 +196,7 @@ export async function getThemeAssetsForSite(siteId: string) {
 }
 
 export async function getThemeTemplateForSite(siteId: string) {
+  enableThemeDynamicRenderingInDev();
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
   const themesDir = getThemeBaseDir(active);
@@ -228,6 +231,7 @@ export async function getThemeTemplateFromCandidates(
   candidates: string[],
   opts?: { pluginDataDomain?: string; pluginCandidates?: string[] },
 ) {
+  enableThemeDynamicRenderingInDev();
   const active = await getActiveThemeForSite(siteId);
   if (!active) return null;
   const themesDir = getThemeBaseDir(active);

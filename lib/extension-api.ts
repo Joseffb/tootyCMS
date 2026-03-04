@@ -13,6 +13,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
 import { getSettingByKey, getSettingsByKeys, setSettingByKey } from "@/lib/settings-store";
+import { setSiteTextSetting } from "@/lib/cms-config";
 import type {
   PluginCommentProviderRegistration,
   ContentStateRegistration,
@@ -621,36 +622,51 @@ export function createPluginExtensionApi(
       });
     };
 
-  const listTaxonomies = async () => {
+  const resolveTaxonomySiteId = (siteId?: string) => {
+    const resolved = String(siteId || options?.siteId || "").trim();
+    if (!resolved) {
+      throw new Error(`[plugin-guard] Plugin "${pluginName}" taxonomy API requires a bound site or explicit siteId.`);
+    }
+    return resolved;
+  };
+
+  const listTaxonomies = async (siteId?: string) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const rows = await db
       .select({
         key: termTaxonomies.taxonomy,
         termCount: sql<number>`count(${termTaxonomies.id})::int`,
       })
       .from(termTaxonomies)
+      .where(eq(termTaxonomies.siteId, resolvedSiteId))
       .groupBy(termTaxonomies.taxonomy)
       .orderBy(asc(termTaxonomies.taxonomy));
     return rows;
   };
 
-  const editTaxonomy = async (taxonomy: string, input?: CoreApiInvokeInput) => {
+  const editTaxonomy = async (siteId: string, taxonomy: string, input?: CoreApiInvokeInput) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const key = normalizeTaxonomyKey(taxonomy);
     if (!key) throw new Error("taxonomy key is required");
     const command = parseCommandInput(input);
     const renameTo = normalizeTaxonomyKey(command.rename || command.key || "");
     const name = String(command.name || command.label || "").trim();
     if (renameTo && renameTo !== key) {
-      await db.update(termTaxonomies).set({ taxonomy: renameTo }).where(eq(termTaxonomies.taxonomy, key));
+      await db
+        .update(termTaxonomies)
+        .set({ taxonomy: renameTo })
+        .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.taxonomy, key)));
       return { ok: true, taxonomy: renameTo, action: "rename" as const };
     }
     if (name) {
-      await setSetting(`taxonomy_label_${key}`, name);
+      await setSiteTextSetting(resolvedSiteId, `taxonomy_label_${key}`, name);
       return { ok: true, taxonomy: key, action: "label" as const };
     }
     return { ok: true, taxonomy: key, action: "noop" as const };
   };
 
-  const listTaxonomyTerms = async (taxonomy: string) => {
+  const listTaxonomyTerms = async (siteId: string, taxonomy: string) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const key = normalizeTaxonomyKey(taxonomy);
     return db
       .select({
@@ -662,7 +678,7 @@ export function createPluginExtensionApi(
       })
       .from(termTaxonomies)
       .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-      .where(eq(termTaxonomies.taxonomy, key))
+      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.taxonomy, key)))
       .orderBy(asc(terms.name));
   };
 
@@ -689,13 +705,15 @@ export function createPluginExtensionApi(
         and(
           eq(domainPosts.id, normalizedPostId),
           eq(dataDomains.key, domainKey),
+          ...(normalizedSiteId ? [eq(termTaxonomies.siteId, normalizedSiteId)] : []),
           ...(normalizedSiteId ? [eq(domainPosts.siteId, normalizedSiteId)] : []),
         ),
       )
       .orderBy(asc(termTaxonomies.taxonomy), asc(terms.name));
   };
 
-  const editTaxonomyTerm = async (taxonomy: string, termTaxonomyId: number, input?: CoreApiInvokeInput) => {
+  const editTaxonomyTerm = async (siteId: string, taxonomy: string, termTaxonomyId: number, input?: CoreApiInvokeInput) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const key = normalizeTaxonomyKey(taxonomy);
     const command = parseCommandInput(input);
     const [row] = await db
@@ -704,7 +722,7 @@ export function createPluginExtensionApi(
         termId: termTaxonomies.termId,
       })
       .from(termTaxonomies)
-      .where(eq(termTaxonomies.id, termTaxonomyId))
+      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, termTaxonomyId)))
       .limit(1);
     if (!row || row.taxonomy !== key) throw new Error("Term taxonomy not found.");
 
@@ -730,8 +748,15 @@ export function createPluginExtensionApi(
     return { ok: true, taxonomy: key, termTaxonomyId };
   };
 
-  const getTaxonomyTermMeta = async (termTaxonomyId: number) =>
-    db
+  const getTaxonomyTermMeta = async (siteId: string, termTaxonomyId: number) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
+    const [taxonomyRow] = await db
+      .select({ id: termTaxonomies.id })
+      .from(termTaxonomies)
+      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, Math.trunc(termTaxonomyId))))
+      .limit(1);
+    if (!taxonomyRow) return [];
+    return db
       .select({
         key: termTaxonomyMeta.key,
         value: termTaxonomyMeta.value,
@@ -739,8 +764,16 @@ export function createPluginExtensionApi(
       .from(termTaxonomyMeta)
       .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
       .orderBy(asc(termTaxonomyMeta.key));
+  };
 
-  const setTaxonomyTermMeta = async (termTaxonomyId: number, key: string, value: string) => {
+  const setTaxonomyTermMeta = async (siteId: string, termTaxonomyId: number, key: string, value: string) => {
+    const resolvedSiteId = resolveTaxonomySiteId(siteId);
+    const [taxonomyRow] = await db
+      .select({ id: termTaxonomies.id })
+      .from(termTaxonomies)
+      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, Math.trunc(termTaxonomyId))))
+      .limit(1);
+    if (!taxonomyRow) throw new Error("Term taxonomy not found.");
     const metaKey = normalizeMetaKey(key);
     if (!metaKey) throw new Error("meta key is required");
     await db
@@ -824,23 +857,23 @@ export function createPluginExtensionApi(
 
       const service = (segments.shift() || "").toLowerCase();
       if (service === "taxonomy") {
-        if ((segments[0] || "").toLowerCase() === "list") return listTaxonomies();
+        if ((segments[0] || "").toLowerCase() === "list") return listTaxonomies(boundSiteId);
         const taxonomy = segments.shift() || "";
         const next = (segments.shift() || "").toLowerCase();
-        if (next === "edit") return editTaxonomy(taxonomy, input);
+        if (next === "edit") return editTaxonomy(boundSiteId, taxonomy, input);
         if (next === "terms" && (segments[0] || "").toLowerCase() === "list") {
-          return listTaxonomyTerms(taxonomy);
+          return listTaxonomyTerms(boundSiteId, taxonomy);
         }
         if (next === "term") {
           const termTaxonomyId = Math.trunc(Number(segments.shift() || "0"));
           const action = (segments.shift() || "").toLowerCase();
-          if (action === "edit") return editTaxonomyTerm(taxonomy, termTaxonomyId, input);
+          if (action === "edit") return editTaxonomyTerm(boundSiteId, taxonomy, termTaxonomyId, input);
           if (action === "meta") {
             const op = (segments.shift() || "").toLowerCase();
-            if (op === "get") return getTaxonomyTermMeta(termTaxonomyId);
+            if (op === "get") return getTaxonomyTermMeta(boundSiteId, termTaxonomyId);
             if (op === "set") {
               const command = parseCommandInput(input);
-              return setTaxonomyTermMeta(termTaxonomyId, command.key || "value", command.value || "");
+              return setTaxonomyTermMeta(boundSiteId, termTaxonomyId, command.key || "value", command.value || "");
             }
           }
         }
@@ -953,13 +986,14 @@ export function createPluginExtensionApi(
     },
     menus: menuApi,
     taxonomy: {
-      list: () => listTaxonomies(),
-      edit: (taxonomy: string, input?: CoreApiInvokeInput) => editTaxonomy(taxonomy, input),
+      list: () => listTaxonomies(options?.siteId),
+      edit: (taxonomy: string, input?: CoreApiInvokeInput) => editTaxonomy(options?.siteId || "", taxonomy, input),
       terms: {
-        list: (taxonomy: string) => listTaxonomyTerms(taxonomy),
+        list: (taxonomy: string) => listTaxonomyTerms(options?.siteId || "", taxonomy),
         meta: {
-          get: (termTaxonomyId: number) => getTaxonomyTermMeta(termTaxonomyId),
-          set: (termTaxonomyId: number, key: string, value: string) => setTaxonomyTermMeta(termTaxonomyId, key, value),
+          get: (termTaxonomyId: number) => getTaxonomyTermMeta(options?.siteId || "", termTaxonomyId),
+          set: (termTaxonomyId: number, key: string, value: string) =>
+            setTaxonomyTermMeta(options?.siteId || "", termTaxonomyId, key, value),
         },
       },
     },

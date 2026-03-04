@@ -52,7 +52,7 @@ import { cookies } from "next/headers";
 import { withSiteAuth } from "./auth";
 import db from "./db";
 import { SelectSite, accounts, sites, users } from "./schema";
-import { categories, dataDomains, domainPostMeta, domainPosts, siteDataDomains, tags, termRelationships, termTaxonomies, termTaxonomyDomains, termTaxonomyMeta, terms } from "./schema";
+import { dataDomains, domainPostMeta, domainPosts, siteDataDomains, termRelationships, termTaxonomies, termTaxonomyDomains, termTaxonomyMeta, terms } from "./schema";
 import { singularizeLabel } from "./data-domain-labels";
 import {
   USER_ROLES,
@@ -79,6 +79,15 @@ import { createKernelForRequest, listPluginsWithState } from "@/lib/plugin-runti
 import type { ProfileSection, ProfileSectionRow } from "@/lib/profile-contracts";
 import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
 import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import {
+  dataDomainDescriptionSettingKey,
+  dataDomainKeySettingKey,
+  dataDomainLabelSettingKey,
+  dataDomainPermalinkSettingKey,
+  dataDomainShowInMenuSettingKey,
+  resolveDataDomainDescription,
+} from "@/lib/data-domain-descriptions";
+import { domainPluralSegment } from "@/lib/permalink";
 import {
   userCan,
   canUserMutateDomainPost,
@@ -107,23 +116,25 @@ function emitCmsLifecycleEvent(input: {
     },
   }).catch(() => undefined);
 }
-export const getAllCategories = async () => {
-  try {
-    const response = await db
-      .select({
-        id: termTaxonomies.id,
-        name: terms.name,
-      })
-      .from(termTaxonomies)
-      .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-      .where(eq(termTaxonomies.taxonomy, "category"))
-      .orderBy(asc(terms.name));
-    return response;
-  } catch {
-    return db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.name));
-  }
+
+const normalizeSiteScope = (siteId: string) => String(siteId || "").trim();
+
+export const getAllCategories = async (siteId: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return [];
+  return db
+    .select({
+      id: termTaxonomies.id,
+      name: terms.name,
+    })
+    .from(termTaxonomies)
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "category")))
+    .orderBy(asc(terms.name));
 };
-export const createCategoryByName = async (name: string, parentId?: number | null) => {
+export const createCategoryByName = async (siteId: string, name: string, parentId?: number | null) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return { error: "Site id is required" };
   const trimmed = name.trim();
   if (!trimmed) return { error: "Category name is required" };
   const slug = trimmed
@@ -131,58 +142,61 @@ export const createCategoryByName = async (name: string, parentId?: number | nul
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  try {
-    const existing = await db
-      .select({
-        id: termTaxonomies.id,
-        name: terms.name,
-      })
-      .from(termTaxonomies)
-      .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-      .where(and(eq(termTaxonomies.taxonomy, "category"), eq(terms.slug, slug)))
-      .limit(1);
-    if (existing[0]) return existing[0];
+  const existing = await db
+    .select({
+      id: termTaxonomies.id,
+      name: terms.name,
+    })
+    .from(termTaxonomies)
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+    .where(
+      and(
+        eq(termTaxonomies.siteId, normalizedSiteId),
+        eq(termTaxonomies.taxonomy, "category"),
+        eq(terms.slug, slug),
+      ),
+    )
+    .limit(1);
+  if (existing[0]) return existing[0];
 
-    const [createdTerm] = await db
-      .insert(terms)
-      .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-      .returning();
+  const [reusedTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
+  const [createdTerm] = await db
+    .insert(terms)
+    .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+    .returning()
+    .catch(async () => db.select().from(terms).where(eq(terms.slug, slug)).limit(1));
+  const term = reusedTerm || createdTerm;
+  if (!term) return { error: "Failed to create category term" };
 
-    const [createdTaxonomy] = await db
-      .insert(termTaxonomies)
-      .values({
-        termId: createdTerm.id,
-        taxonomy: "category",
-        parentId: parentId ?? null,
-      })
-      .returning();
+  const [createdTaxonomy] = await db
+    .insert(termTaxonomies)
+    .values({
+      siteId: normalizedSiteId,
+      termId: term.id,
+      taxonomy: "category",
+      parentId: parentId ?? null,
+    })
+    .returning();
 
-    revalidateDomainAndTaxonomyCaches();
-    return { id: createdTaxonomy.id, name: createdTerm.name };
-  } catch {
-    const existingLegacy = await db.select().from(categories).where(eq(categories.name, trimmed)).limit(1);
-    if (existingLegacy[0]) return existingLegacy[0];
-    const [created] = await db.insert(categories).values({ name: trimmed }).returning();
-    revalidateDomainAndTaxonomyCaches();
-    return created;
-  }
+  revalidateDomainAndTaxonomyCaches();
+  return { id: createdTaxonomy.id, name: term.name };
 };
-export const getAllTags = async () => {
-  try {
-    return db
-      .select({
-        id: termTaxonomies.id,
-        name: terms.name,
-      })
-      .from(termTaxonomies)
-      .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-      .where(eq(termTaxonomies.taxonomy, "tag"))
-      .orderBy(asc(terms.name));
-  } catch {
-    return db.select({ id: tags.id, name: tags.name }).from(tags).orderBy(asc(tags.name));
-  }
+export const getAllTags = async (siteId: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return [];
+  return db
+    .select({
+      id: termTaxonomies.id,
+      name: terms.name,
+    })
+    .from(termTaxonomies)
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "tag")))
+    .orderBy(asc(terms.name));
 };
-export const createTagByName = async (name: string) => {
+export const createTagByName = async (siteId: string, name: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return { error: "Site id is required" };
   const trimmed = name.trim();
   if (!trimmed) return { error: "Tag name is required" };
   const slug = trimmed
@@ -190,40 +204,37 @@ export const createTagByName = async (name: string) => {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  try {
-    const existing = await db
-      .select({
-        id: termTaxonomies.id,
-        name: terms.name,
-      })
-      .from(termTaxonomies)
-      .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-      .where(and(eq(termTaxonomies.taxonomy, "tag"), eq(terms.slug, slug)))
-      .limit(1);
-    if (existing[0]) return existing[0];
+  const existing = await db
+    .select({
+      id: termTaxonomies.id,
+      name: terms.name,
+    })
+    .from(termTaxonomies)
+    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "tag"), eq(terms.slug, slug)))
+    .limit(1);
+  if (existing[0]) return existing[0];
 
-    const [createdTerm] = await db
-      .insert(terms)
-      .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-      .returning();
+  const [reusedTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
+  const [createdTerm] = await db
+    .insert(terms)
+    .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+    .returning()
+    .catch(async () => db.select().from(terms).where(eq(terms.slug, slug)).limit(1));
+  const term = reusedTerm || createdTerm;
+  if (!term) return { error: "Failed to create tag term" };
 
-    const [createdTaxonomy] = await db
-      .insert(termTaxonomies)
-      .values({
-        termId: createdTerm.id,
-        taxonomy: "tag",
-      })
-      .returning();
+  const [createdTaxonomy] = await db
+    .insert(termTaxonomies)
+    .values({
+      siteId: normalizedSiteId,
+      termId: term.id,
+      taxonomy: "tag",
+    })
+    .returning();
 
-    revalidateDomainAndTaxonomyCaches();
-    return { id: createdTaxonomy.id, name: createdTerm.name };
-  } catch {
-    const existingLegacy = await db.select().from(tags).where(eq(tags.name, trimmed)).limit(1);
-    if (existingLegacy[0]) return existingLegacy[0];
-    const [created] = await db.insert(tags).values({ name: trimmed }).returning();
-    revalidateDomainAndTaxonomyCaches();
-    return created;
-  }
+  revalidateDomainAndTaxonomyCaches();
+  return { id: createdTaxonomy.id, name: term.name };
 };
 export const getAllMetaKeys = async () => {
   try {
@@ -235,25 +246,29 @@ export const getAllMetaKeys = async () => {
   }
 };
 const toDomainKey = (label: string) =>
-  label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || `domain_${nanoid().toLowerCase()}`;
+  singularizeLabel(
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60),
+  ) || `domain_${nanoid().toLowerCase()}`;
 
 export const getAllDataDomains = async (siteId?: string) => {
   await ensureDefaultCoreDataDomains();
   const rows = await db.select().from(dataDomains).orderBy(asc(dataDomains.label));
   let usageRows: Array<{ dataDomainId: number; usageCount: number }> = [];
   try {
-    usageRows = await db
+    const usageBase = db
       .select({
         dataDomainId: domainPosts.dataDomainId,
         usageCount: sql<number>`count(*)::int`,
       })
-      .from(domainPosts)
-      .groupBy(domainPosts.dataDomainId);
+      .from(domainPosts);
+    usageRows = siteId
+      ? await usageBase.where(eq(domainPosts.siteId, siteId)).groupBy(domainPosts.dataDomainId)
+      : await usageBase.groupBy(domainPosts.dataDomainId);
   } catch {
     usageRows = [];
   }
@@ -265,12 +280,13 @@ export const getAllDataDomains = async (siteId?: string) => {
     }));
   }
 
-  let assignments: Array<{ dataDomainId: number; isActive: boolean }> = [];
+  let assignments: Array<{ dataDomainId: number; isActive: boolean; description: string }> = [];
   try {
     assignments = await db
       .select({
         dataDomainId: siteDataDomains.dataDomainId,
         isActive: siteDataDomains.isActive,
+        description: siteDataDomains.description,
       })
       .from(siteDataDomains)
       .where(eq(siteDataDomains.siteId, siteId));
@@ -278,12 +294,82 @@ export const getAllDataDomains = async (siteId?: string) => {
     assignments = [];
   }
 
-  const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row.isActive]));
+  const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row]));
   const defaultCoreKeys = new Set<string>(DEFAULT_CORE_DOMAIN_KEYS);
-  return rows.map((row) => ({
+  const visibleRows = rows.filter((row) => defaultCoreKeys.has(row.key) || assignmentMap.has(row.id));
+  const siteDescriptionRows =
+    siteId
+      ? await Promise.all(
+          visibleRows.map(async (row) => {
+            const value = await getSiteTextSetting(siteId, dataDomainDescriptionSettingKey(row.id), "");
+            return [row.id, value] as const;
+          }),
+        )
+      : [];
+  const sitePermalinkRows =
+    siteId
+      ? await Promise.all(
+          visibleRows.map(async (row) => {
+            const value = await getSiteTextSetting(siteId, dataDomainPermalinkSettingKey(row.id), "");
+            return [row.id, value] as const;
+          }),
+        )
+      : [];
+  const siteLabelRows =
+    siteId
+      ? await Promise.all(
+          visibleRows.map(async (row) => {
+            const value = await getSiteTextSetting(siteId, dataDomainLabelSettingKey(row.id), "");
+            return [row.id, value] as const;
+          }),
+        )
+      : [];
+  const siteKeyRows =
+    siteId
+      ? await Promise.all(
+          visibleRows.map(async (row) => {
+            const value = await getSiteTextSetting(siteId, dataDomainKeySettingKey(row.id), "");
+            return [row.id, value] as const;
+          }),
+        )
+      : [];
+  const siteShowInMenuRows =
+    siteId
+      ? await Promise.all(
+          visibleRows.map(async (row) => {
+            const value = await getSiteTextSetting(siteId, dataDomainShowInMenuSettingKey(row.id), "");
+            return [row.id, value] as const;
+          }),
+        )
+      : [];
+  const siteDescriptionMap = new Map(siteDescriptionRows);
+  const sitePermalinkMap = new Map(sitePermalinkRows);
+  const siteLabelMap = new Map(siteLabelRows);
+  const siteKeyMap = new Map(siteKeyRows);
+  const siteShowInMenuMap = new Map(siteShowInMenuRows);
+  return visibleRows.map((row) => ({
       ...row,
+      key: String(siteKeyMap.get(row.id) || "").trim() || row.key,
+      label: String(siteLabelMap.get(row.id) || "").trim() || row.label,
+      settings: {
+        ...((row.settings as any) || {}),
+        showInMenu: (() => {
+          const raw = String(siteShowInMenuMap.get(row.id) || "").trim().toLowerCase();
+          if (!raw) return (row.settings as any)?.showInMenu ?? true;
+          return !(raw === "0" || raw === "false" || raw === "off");
+        })(),
+      },
       assigned: defaultCoreKeys.has(row.key) ? true : assignmentMap.has(row.id),
-      isActive: defaultCoreKeys.has(row.key) ? true : assignmentMap.get(row.id) ?? false,
+      isActive: defaultCoreKeys.has(row.key) ? true : assignmentMap.get(row.id)?.isActive ?? false,
+      description: resolveDataDomainDescription({
+        domainKey: String(siteKeyMap.get(row.id) || "").trim() || row.key,
+        siteDescription: siteDescriptionMap.get(row.id) || assignmentMap.get(row.id)?.description || "",
+        globalDescription: row.description || "",
+      }),
+      permalink:
+        String(sitePermalinkMap.get(row.id) || "").trim() ||
+        String((row.settings as any)?.permalink || "").trim() ||
+        domainPluralSegment(String(siteKeyMap.get(row.id) || "").trim() || row.key),
       usageCount: usageMap.get(row.id) ?? 0,
   }));
 };
@@ -357,16 +443,15 @@ export const createDataDomain = async (input: {
   activateForSite?: boolean;
   showInMenu?: boolean;
 }) => {
+  if (!input.siteId) return { error: "Site-scoped Data Domains are required. Provide siteId." };
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" };
-  const allowed = input.siteId
-    ? await userCan("site.datadomain.manage", session.user.id, { siteId: input.siteId })
-    : await userCan("network.settings.write", session.user.id);
+  const allowed = await userCan("site.settings.write", session.user.id, { siteId: input.siteId });
   if (!allowed) return { error: "Not authorized" };
 
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
-  const canonicalLabel = singularizeLabel(trimmed);
+  const canonicalLabel = trimmed;
   const existingByLabel = await db.select().from(dataDomains).where(eq(dataDomains.label, canonicalLabel)).limit(1);
   if (existingByLabel[0]) return existingByLabel[0];
 
@@ -377,48 +462,10 @@ export const createDataDomain = async (input: {
   const safeKey = key.replace(/[^a-z0-9-]/g, "").replace(/^-+/, "");
   const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
   const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-  const contentTable = `${normalizedPrefix}domain_${safeKey}`;
-  const metaTable = `${contentTable}_meta`;
+  const contentTable = `${normalizedPrefix}site_domain_posts`;
+  const metaTable = `${normalizedPrefix}site_domain_post_meta`;
   const extraFields = Array.isArray(input.fields) ? input.fields : [];
   if (!safeKey) return { error: "Invalid Data Domain key" };
-
-  const extraColumnsSql = extraFields
-    .map(extraFieldToSql)
-    .filter((column): column is string => Boolean(column))
-    .join(",\n        ");
-
-  await db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`
-      CREATE TABLE IF NOT EXISTS "${contentTable}" (
-        "id" TEXT PRIMARY KEY,
-        "title" TEXT,
-        "description" TEXT,
-        "content" TEXT,
-        "layout" TEXT,
-        "slug" TEXT NOT NULL,
-        "image" TEXT DEFAULT '',
-        "imageBlurhash" TEXT,
-        "published" BOOLEAN NOT NULL DEFAULT FALSE,
-        "siteId" TEXT,
-        "userId" TEXT,
-        "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
-        "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
-        ${extraColumnsSql ? `,\n        ${extraColumnsSql}` : ""}
-      )
-    `));
-    await tx.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS "${contentTable}_slug_site_idx" ON "${contentTable}" ("slug", "siteId")`));
-    await tx.execute(sql.raw(`
-      CREATE TABLE IF NOT EXISTS "${metaTable}" (
-        "id" SERIAL PRIMARY KEY,
-        "itemId" TEXT NOT NULL,
-        "key" TEXT NOT NULL,
-        "value" TEXT NOT NULL,
-        "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
-        "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
-      )
-    `));
-    await tx.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS "${metaTable}_item_key_idx" ON "${metaTable}" ("itemId", "key")`));
-  });
 
   const [created] = await db.insert(dataDomains).values({
     key,
@@ -428,6 +475,7 @@ export const createDataDomain = async (input: {
     description: "",
     settings: {
       fields: extraFields,
+      storageModel: "shared_site_domain_posts",
       showInMenu: input.showInMenu !== false,
     },
   }).returning();
@@ -454,28 +502,32 @@ export const createDataDomainByLabel = async (label: string) => createDataDomain
 export const updateDataDomain = async (input: {
   id: number;
   label: string;
+  key?: string;
+  permalink?: string;
   description?: string;
   showInMenu?: boolean;
+  siteId?: string;
 }) => {
+  if (!input.siteId) return { error: "Site-scoped Data Domains are required. Provide siteId." };
+  const normalizePermalinkSegment = (value: string) =>
+    String(value || "")
+      .trim()
+      .replace(/^\/+/, "")
+      .replace(/\/+$/, "")
+      .replace(/\s+/g, "-");
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" };
-  const allowed = await userCan("network.settings.write", session.user.id);
+  const allowed = await userCan("site.settings.write", session.user.id, { siteId: input.siteId });
   if (!allowed) return { error: "Not authorized" };
 
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
-  const canonicalLabel = singularizeLabel(trimmed);
-  const existingByLabel = await db
-    .select({ id: dataDomains.id })
-    .from(dataDomains)
-    .where(and(eq(dataDomains.label, canonicalLabel), sql`${dataDomains.id} <> ${input.id}`))
-    .limit(1);
-  if (existingByLabel[0]) {
-    return { error: "A Post Type with this label already exists" };
-  }
+  const canonicalLabel = trimmed;
 
   const [existing] = await db
     .select({
+      key: dataDomains.key,
+      label: dataDomains.label,
       description: dataDomains.description,
       settings: dataDomains.settings,
     })
@@ -486,59 +538,154 @@ export const updateDataDomain = async (input: {
     return { error: "Data Domain not found" };
   }
 
-  const currentSettings =
-    existing.settings && typeof existing.settings === "object"
-      ? (existing.settings as Record<string, unknown>)
-      : {};
-
-  const [updated] = await db
-    .update(dataDomains)
-    .set({
-      label: canonicalLabel,
-      description: input.description ?? existing.description ?? "",
-      settings: {
-        ...currentSettings,
-        showInMenu: input.showInMenu !== false,
-      },
+  const nextSiteDescription = String(input.description ?? "").trim();
+  const nextSitePermalink = normalizePermalinkSegment(String(input.permalink ?? ""));
+  const currentSiteKey = String(
+    await getSiteTextSetting(input.siteId, dataDomainKeySettingKey(input.id), existing.key),
+  ).trim() || existing.key;
+  const submittedKey = String(input.key ?? "").trim();
+  const keyChanged = submittedKey.length > 0 && submittedKey !== currentSiteKey;
+  const normalizedChangedKey = keyChanged ? toDomainKey(submittedKey) : undefined;
+  if (keyChanged && !normalizedChangedKey) {
+    return { error: "Data Domain key is required" };
+  }
+  const nextSiteKey = normalizedChangedKey || currentSiteKey;
+  const nextSiteLabel = canonicalLabel || existing.label;
+  await setSiteTextSetting(input.siteId, dataDomainDescriptionSettingKey(input.id), nextSiteDescription);
+  await setSiteTextSetting(input.siteId, dataDomainPermalinkSettingKey(input.id), nextSitePermalink);
+  await setSiteTextSetting(input.siteId, dataDomainKeySettingKey(input.id), nextSiteKey);
+  await setSiteTextSetting(input.siteId, dataDomainLabelSettingKey(input.id), nextSiteLabel);
+  await setSiteTextSetting(
+    input.siteId,
+    dataDomainShowInMenuSettingKey(input.id),
+    input.showInMenu === false ? "0" : "1",
+  );
+  await db
+    .insert(siteDataDomains)
+    .values({
+      siteId: input.siteId,
+      dataDomainId: input.id,
+      isActive: true,
+      description: nextSiteDescription,
     })
-    .where(eq(dataDomains.id, input.id))
-    .returning();
+    .onConflictDoUpdate({
+      target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
+      set: {
+        description: nextSiteDescription,
+      },
+    });
   revalidateDomainAndTaxonomyCaches();
-  return updated;
+  return {
+    id: input.id,
+    key: nextSiteKey,
+    label: nextSiteLabel,
+    description: nextSiteDescription,
+  };
 };
 
 const sanitizeDbIdentifier = (value: string) => value.replace(/[^a-zA-Z0-9_]/g, "_");
 
-export const deleteDataDomain = async (id: number) => {
+export const deleteDataDomain = async (input: number | { id: number; siteId?: string; confirmText?: string }) => {
+  const targetId = typeof input === "number" ? input : input.id;
+  const siteId = typeof input === "number" ? undefined : String(input.siteId || "").trim() || undefined;
+  const confirmText = typeof input === "number" ? "delete" : String(input.confirmText || "").trim().toLowerCase();
+  const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
+  const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
+  if (!siteId) return { error: "Site-scoped Data Domains are required. Provide siteId." };
+  if (confirmText !== "delete") {
+    return { error: "Delete confirmation required" };
+  }
+
   const session = await getSession();
   if (!session?.user?.id) return { error: "Not authenticated" };
-  const allowed = await userCan("network.settings.write", session.user.id);
+  const allowed = await userCan("site.settings.write", session.user.id, { siteId });
   if (!allowed) return { error: "Not authorized" };
 
-  const [domain] = await db.select().from(dataDomains).where(eq(dataDomains.id, id)).limit(1);
+  const [domain] = await db.select().from(dataDomains).where(eq(dataDomains.id, targetId)).limit(1);
   if (!domain) return { error: "Data Domain not found" };
+  if (DEFAULT_CORE_DOMAIN_KEYS.includes(domain.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number])) {
+    return { error: "Core Post Types cannot be deleted" };
+  }
+
+  if (siteId) {
+    const [siteAssignment] = await db
+      .select({ isActive: siteDataDomains.isActive })
+      .from(siteDataDomains)
+      .where(and(eq(siteDataDomains.siteId, siteId), eq(siteDataDomains.dataDomainId, targetId)))
+      .limit(1);
+    if (siteAssignment?.isActive) {
+      return { error: "Deactivate this Post Type before deleting it." };
+    }
+
+    await db.transaction(async (tx) => {
+      const scopedPostIds = await tx
+        .select({ id: domainPosts.id })
+        .from(domainPosts)
+        .where(and(eq(domainPosts.dataDomainId, targetId), eq(domainPosts.siteId, siteId)));
+      if (scopedPostIds.length > 0) {
+        await tx
+          .delete(domainPostMeta)
+          .where(inArray(domainPostMeta.domainPostId, scopedPostIds.map((row) => row.id)));
+      }
+
+      await tx
+        .delete(domainPosts)
+        .where(and(eq(domainPosts.dataDomainId, targetId), eq(domainPosts.siteId, siteId)));
+      await tx
+        .delete(siteDataDomains)
+        .where(and(eq(siteDataDomains.dataDomainId, targetId), eq(siteDataDomains.siteId, siteId)));
+    });
+
+    await setSiteTextSetting(siteId, dataDomainDescriptionSettingKey(targetId), "");
+
+    const [remainingAssignment] = await db
+      .select({ dataDomainId: siteDataDomains.dataDomainId })
+      .from(siteDataDomains)
+      .where(eq(siteDataDomains.dataDomainId, targetId))
+      .limit(1);
+    const [remainingPost] = await db
+      .select({ id: domainPosts.id })
+      .from(domainPosts)
+      .where(eq(domainPosts.dataDomainId, targetId))
+      .limit(1);
+
+    if (remainingAssignment || remainingPost) {
+      const adminBasePath = `/app/${getAdminPathAlias()}`;
+      revalidatePath(`${adminBasePath}/site/${encodeURIComponent(siteId)}/settings/domains`);
+      revalidateDomainAndTaxonomyCaches({ siteId });
+      return { ok: true };
+    }
+  }
 
   await db.transaction(async (tx) => {
     const domainPostIds = await tx
       .select({ id: domainPosts.id })
       .from(domainPosts)
-      .where(eq(domainPosts.dataDomainId, id));
+      .where(eq(domainPosts.dataDomainId, targetId));
     if (domainPostIds.length > 0) {
       await tx
         .delete(domainPostMeta)
         .where(inArray(domainPostMeta.domainPostId, domainPostIds.map((row) => row.id)));
     }
-    await tx.delete(domainPosts).where(eq(domainPosts.dataDomainId, id));
-    await tx.delete(siteDataDomains).where(eq(siteDataDomains.dataDomainId, id));
-    await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.dataDomainId, id));
-    await tx.delete(dataDomains).where(eq(dataDomains.id, id));
+    await tx.delete(domainPosts).where(eq(domainPosts.dataDomainId, targetId));
+    await tx.delete(siteDataDomains).where(eq(siteDataDomains.dataDomainId, targetId));
+    await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.dataDomainId, targetId));
+    await tx.delete(dataDomains).where(eq(dataDomains.id, targetId));
 
+    const sharedContentTable = `${normalizedPrefix}site_domain_posts`;
+    const sharedMetaTable = `${normalizedPrefix}site_domain_post_meta`;
     const safeContentTable = sanitizeDbIdentifier(domain.contentTable);
     const safeMetaTable = sanitizeDbIdentifier(domain.metaTable);
-    await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeMetaTable}"`));
-    await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeContentTable}"`));
+    if (safeMetaTable !== sharedMetaTable && safeContentTable !== sharedContentTable) {
+      await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeMetaTable}"`));
+      await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeContentTable}"`));
+    }
   });
-  revalidateDomainAndTaxonomyCaches();
+  if (siteId) {
+    const adminBasePath = `/app/${getAdminPathAlias()}`;
+    revalidatePath(`${adminBasePath}/site/${encodeURIComponent(siteId)}/settings/domains`);
+  }
+  revalidateDomainAndTaxonomyCaches({ siteId: siteId || null });
   return { ok: true };
 };
 
@@ -551,7 +698,7 @@ export const setDataDomainActivation = async (input: {
   if (!session?.user?.id) {
     return { error: "Not authenticated" };
   }
-  const allowed = await userCan("site.datadomain.manage", session.user.id, { siteId: input.siteId });
+  const allowed = await userCan("site.settings.write", session.user.id, { siteId: input.siteId });
   if (!allowed) {
     return { error: "Admin role required" };
   }
@@ -576,11 +723,14 @@ export const setDataDomainActivation = async (input: {
 };
 
 export const registerCustomTaxonomyForDataDomain = async (input: {
+  siteId: string;
   dataDomainId: number;
   taxonomy: string;
   label: string;
   description?: string;
 }) => {
+  const siteId = normalizeSiteScope(input.siteId);
+  if (!siteId) return { error: "siteId is required" };
   const taxonomy = input.taxonomy.trim().toLowerCase().replace(/[^a-z0-9_:-]/g, "");
   const label = input.label.trim();
   if (!taxonomy || !label) {
@@ -609,6 +759,7 @@ export const registerCustomTaxonomyForDataDomain = async (input: {
     const [taxonomyRow] = await db
       .insert(termTaxonomies)
       .values({
+        siteId,
         termId: term.id,
         taxonomy,
         description: input.description ?? "",
@@ -622,7 +773,9 @@ export const registerCustomTaxonomyForDataDomain = async (input: {
         await db
           .select({ id: termTaxonomies.id })
           .from(termTaxonomies)
-          .where(and(eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)))
+          .where(
+            and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)),
+          )
           .limit(1)
       )[0]?.id;
 
@@ -655,11 +808,12 @@ const normalizeOptionalParentId = (value: number | null | undefined) => {
 };
 
 const validateParentAssignment = async (input: {
+  siteId: string;
   taxonomy: string;
   termTaxonomyId: number;
   parentId: number | null;
 }) => {
-  const { taxonomy, termTaxonomyId, parentId } = input;
+  const { siteId, taxonomy, termTaxonomyId, parentId } = input;
   if (parentId === null) return { ok: true as const };
   if (parentId === termTaxonomyId) return { error: "A term cannot be its own parent." };
 
@@ -669,7 +823,7 @@ const validateParentAssignment = async (input: {
       parentId: termTaxonomies.parentId,
     })
     .from(termTaxonomies)
-    .where(eq(termTaxonomies.taxonomy, taxonomy));
+    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.taxonomy, taxonomy)));
 
   const byId = new Map(taxonomyRows.map((row) => [row.id, row]));
   if (!byId.has(parentId)) {
@@ -690,11 +844,13 @@ const validateParentAssignment = async (input: {
   return { ok: true as const };
 };
 
-async function ensureDefaultCategoryTaxonomy() {
+async function ensureDefaultCategoryTaxonomy(siteId: string) {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return;
   const existingCategory = await db
     .select({ id: termTaxonomies.id })
     .from(termTaxonomies)
-    .where(eq(termTaxonomies.taxonomy, "category"))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "category")))
     .limit(1);
   if (existingCategory[0]) return;
 
@@ -721,6 +877,7 @@ async function ensureDefaultCategoryTaxonomy() {
   await db
     .insert(termTaxonomies)
     .values({
+      siteId: normalizedSiteId,
       termId,
       taxonomy: "category",
       description: "Default category taxonomy",
@@ -729,8 +886,10 @@ async function ensureDefaultCategoryTaxonomy() {
     .onConflictDoNothing();
 }
 
-export const getTaxonomyOverview = async () => {
-  await ensureDefaultCategoryTaxonomy();
+export const getTaxonomyOverview = async (siteId: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return [];
+  await ensureDefaultCategoryTaxonomy(normalizedSiteId);
 
   const rows = await db
     .select({
@@ -739,6 +898,7 @@ export const getTaxonomyOverview = async () => {
       usageCount: sql<number>`coalesce(sum(${termTaxonomies.count}), 0)::int`,
     })
     .from(termTaxonomies)
+    .where(eq(termTaxonomies.siteId, normalizedSiteId))
     .groupBy(termTaxonomies.taxonomy)
     .orderBy(termTaxonomies.taxonomy);
 
@@ -749,39 +909,48 @@ export const getTaxonomyOverview = async () => {
   }
 
   const labelRows = await listSettingsByLikePatterns(["taxonomy_label_%"]);
-  const labelMap = new Map(
+  const labelMap = new Map<string, string>(
     labelRows.map((row) => [row.key.replace(/^taxonomy_label_/, ""), row.value]),
   );
 
-  return Array.from(merged.values())
-    .sort((a, b) => a.taxonomy.localeCompare(b.taxonomy))
-    .map((row) => ({
-    ...row,
-    label:
-      labelMap.get(row.taxonomy) ??
-      (row.taxonomy === "category"
-        ? "Category"
-        : row.taxonomy
-            .split(/[_:-]/g)
-            .filter(Boolean)
-            .map((piece) => piece[0].toUpperCase() + piece.slice(1))
-            .join(" ")),
-    }));
+  const taxonomyRows = Array.from(merged.values()).sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
+  const siteLabels = new Map<string, string>(
+    await Promise.all(
+      taxonomyRows.map(async (row) => [
+        row.taxonomy,
+        await getSiteTextSetting(normalizedSiteId, `taxonomy_label_${row.taxonomy}`, ""),
+      ] as const),
+    ),
+  );
+
+  return taxonomyRows.map((row) => ({
+      ...row,
+      label: siteLabels.get(row.taxonomy) ||
+        labelMap.get(row.taxonomy) ||
+        (row.taxonomy === "category"
+          ? "Category"
+          : row.taxonomy
+              .split(/[_:-]/g)
+              .filter(Boolean)
+              .map((piece) => piece[0].toUpperCase() + piece.slice(1))
+              .join(" ")),
+  }));
 };
 
-export const setTaxonomyLabel = async (input: { taxonomy: string; label: string }) => {
+export const setTaxonomyLabel = async (input: { taxonomy: string; label: string; siteId?: string }) => {
   const taxonomy = normalizeTaxonomyKey(input.taxonomy);
   const label = input.label.trim();
   if (!taxonomy || !label) return { error: "taxonomy and label are required" };
-  await db
-  await setSettingByKey(`taxonomy_label_${taxonomy}`, label);
+  if (!input.siteId) return { error: "Taxonomy labels are site-scoped. Provide siteId." };
+  await setSiteTextSetting(input.siteId, `taxonomy_label_${taxonomy}`, label);
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
-export const getTaxonomyTerms = async (taxonomy: string) => {
+export const getTaxonomyTerms = async (siteId: string, taxonomy: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
   const key = normalizeTaxonomyKey(taxonomy);
-  if (!key) return [];
+  if (!normalizedSiteId || !key) return [];
   return db
     .select({
       id: termTaxonomies.id,
@@ -794,13 +963,14 @@ export const getTaxonomyTerms = async (taxonomy: string) => {
     })
     .from(termTaxonomies)
     .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(eq(termTaxonomies.taxonomy, key))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)))
     .orderBy(asc(terms.name));
 };
 
-export const getTaxonomyTermsPreview = async (taxonomy: string, limit = 20) => {
+export const getTaxonomyTermsPreview = async (siteId: string, taxonomy: string, limit = 20) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
   const key = normalizeTaxonomyKey(taxonomy);
-  if (!key) return [];
+  if (!normalizedSiteId || !key) return [];
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 20;
   return db
     .select({
@@ -814,7 +984,7 @@ export const getTaxonomyTermsPreview = async (taxonomy: string, limit = 20) => {
     })
     .from(termTaxonomies)
     .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(eq(termTaxonomies.taxonomy, key))
+    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)))
     .orderBy(asc(terms.name))
     .limit(safeLimit);
 };
@@ -865,27 +1035,37 @@ export const setTaxonomyTermMeta = async (input: {
   return { ok: true };
 };
 
-export const createTaxonomy = async (input: { taxonomy: string; label?: string; description?: string }) => {
+export const createTaxonomy = async (input: { siteId: string; taxonomy: string; label?: string; description?: string }) => {
+  const siteId = normalizeSiteScope(input.siteId);
+  if (!siteId) return { error: "Site id is required" };
   const key = normalizeTaxonomyKey(input.taxonomy);
   if (!key) return { error: "Taxonomy key is required" };
   const label = (input.label?.trim() || key).slice(0, 120);
   return createTaxonomyTerm({
+    siteId,
     taxonomy: key,
     label,
     description: input.description,
   });
 };
 
-export const renameTaxonomy = async (input: { current: string; next: string }) => {
+export const renameTaxonomy = async (input: { siteId: string; current: string; next: string }) => {
+  const siteId = normalizeSiteScope(input.siteId);
+  if (!siteId) return { error: "Site id is required" };
   const current = normalizeTaxonomyKey(input.current);
   const next = normalizeTaxonomyKey(input.next);
   if (!current || !next) return { error: "Current and next taxonomy keys are required" };
-  await db.update(termTaxonomies).set({ taxonomy: next }).where(eq(termTaxonomies.taxonomy, current));
+  await db
+    .update(termTaxonomies)
+    .set({ taxonomy: next })
+    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.taxonomy, current)));
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
-export const deleteTaxonomy = async (taxonomy: string) => {
+export const deleteTaxonomy = async (siteId: string, taxonomy: string) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return { error: "Site id is required" };
   const key = normalizeTaxonomyKey(taxonomy);
   if (!key) return { error: "Taxonomy key is required" };
 
@@ -893,7 +1073,7 @@ export const deleteTaxonomy = async (taxonomy: string) => {
     const rows = await tx
       .select({ id: termTaxonomies.id, termId: termTaxonomies.termId })
       .from(termTaxonomies)
-      .where(eq(termTaxonomies.taxonomy, key));
+      .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)));
     if (rows.length === 0) return;
     const taxonomyIds = rows.map((row) => row.id);
     await tx.delete(termRelationships).where(inArray(termRelationships.termTaxonomyId, taxonomyIds));
@@ -917,11 +1097,14 @@ export const deleteTaxonomy = async (taxonomy: string) => {
 };
 
 export const createTaxonomyTerm = async (input: {
+  siteId: string;
   taxonomy: string;
   label: string;
   description?: string;
   parentId?: number | null;
 }) => {
+  const siteId = normalizeSiteScope(input.siteId);
+  if (!siteId) return { error: "Site id is required" };
   const taxonomy = normalizeTaxonomyKey(input.taxonomy);
   const label = input.label.trim();
   const parentId = normalizeOptionalParentId(input.parentId);
@@ -929,8 +1112,8 @@ export const createTaxonomyTerm = async (input: {
     return { error: "taxonomy and label are required" };
   }
 
-  if (taxonomy === "category") return createCategoryByName(label, parentId);
-  if (taxonomy === "tag") return createTagByName(label);
+  if (taxonomy === "category") return createCategoryByName(siteId, label, parentId);
+  if (taxonomy === "tag") return createTagByName(siteId, label);
 
   const slug = label
     .toLowerCase()
@@ -954,7 +1137,7 @@ export const createTaxonomyTerm = async (input: {
     const [parent] = await db
       .select({ id: termTaxonomies.id })
       .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.id, parentId), eq(termTaxonomies.taxonomy, taxonomy)))
+      .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, parentId), eq(termTaxonomies.taxonomy, taxonomy)))
       .limit(1);
     if (!parent) {
       return { error: "Parent term does not exist in this taxonomy." };
@@ -964,6 +1147,7 @@ export const createTaxonomyTerm = async (input: {
   const [created] = await db
     .insert(termTaxonomies)
     .values({
+      siteId,
       termId: term.id,
       taxonomy,
       description: input.description ?? "",
@@ -978,18 +1162,21 @@ export const createTaxonomyTerm = async (input: {
   const [existing] = await db
     .select()
     .from(termTaxonomies)
-    .where(and(eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)))
+    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)))
     .limit(1);
   if (existing) revalidateDomainAndTaxonomyCaches();
   return existing ?? { error: "Failed to create term taxonomy" };
 };
 
 export const updateTaxonomyTerm = async (input: {
+  siteId: string;
   termTaxonomyId: number;
   label?: string;
   slug?: string;
   parentId?: number | null;
 }) => {
+  const siteId = normalizeSiteScope(input.siteId);
+  if (!siteId) return { error: "Site id is required" };
   const hasLabel = typeof input.label === "string";
   const hasSlug = typeof input.slug === "string";
   const hasParent = Object.prototype.hasOwnProperty.call(input, "parentId");
@@ -1000,7 +1187,7 @@ export const updateTaxonomyTerm = async (input: {
   const [current] = await db
     .select({ termId: termTaxonomies.termId, taxonomy: termTaxonomies.taxonomy })
     .from(termTaxonomies)
-    .where(eq(termTaxonomies.id, input.termTaxonomyId))
+    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, input.termTaxonomyId)))
     .limit(1);
   if (!current) return { error: "Term taxonomy not found" };
 
@@ -1030,6 +1217,7 @@ export const updateTaxonomyTerm = async (input: {
     const nextParentId = normalizeOptionalParentId(input.parentId);
     const validation = await validateParentAssignment({
       taxonomy: current.taxonomy,
+      siteId,
       termTaxonomyId: input.termTaxonomyId,
       parentId: nextParentId,
     });
@@ -1038,30 +1226,38 @@ export const updateTaxonomyTerm = async (input: {
     await db
       .update(termTaxonomies)
       .set({ parentId: nextParentId })
-      .where(eq(termTaxonomies.id, input.termTaxonomyId));
+      .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, input.termTaxonomyId)));
   }
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
 
-export const deleteTaxonomyTerm = async (termTaxonomyId: number) => {
+export const deleteTaxonomyTerm = async (siteId: string, termTaxonomyId: number) => {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) return { error: "Site id is required" };
   await db.transaction(async (tx) => {
     const [current] = await tx
       .select({ id: termTaxonomies.id, termId: termTaxonomies.termId, taxonomy: termTaxonomies.taxonomy })
       .from(termTaxonomies)
-      .where(eq(termTaxonomies.id, termTaxonomyId))
+      .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.id, termTaxonomyId)))
       .limit(1);
     if (!current) return;
 
     await tx
       .update(termTaxonomies)
       .set({ parentId: null })
-      .where(and(eq(termTaxonomies.taxonomy, current.taxonomy), eq(termTaxonomies.parentId, termTaxonomyId)));
+      .where(
+        and(
+          eq(termTaxonomies.siteId, normalizedSiteId),
+          eq(termTaxonomies.taxonomy, current.taxonomy),
+          eq(termTaxonomies.parentId, termTaxonomyId),
+        ),
+      );
 
     await tx.delete(termRelationships).where(eq(termRelationships.termTaxonomyId, termTaxonomyId));
     await tx.delete(termTaxonomyMeta).where(eq(termTaxonomyMeta.termTaxonomyId, termTaxonomyId));
     await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.termTaxonomyId, termTaxonomyId));
-    await tx.delete(termTaxonomies).where(eq(termTaxonomies.id, termTaxonomyId));
+    await tx.delete(termTaxonomies).where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.id, termTaxonomyId)));
 
     const [stillUsed] = await tx
       .select({ id: termTaxonomies.id })
@@ -1421,8 +1617,17 @@ export const updateDomainPost = async (
         ),
       );
       if (taxonomyIds.length > 0) {
+        const validTaxonomyIds = (
+          await tx
+            .select({ id: termTaxonomies.id })
+            .from(termTaxonomies)
+            .where(and(eq(termTaxonomies.siteId, existing.siteId), inArray(termTaxonomies.id, taxonomyIds)))
+        ).map((row) => row.id);
+        if (validTaxonomyIds.length !== taxonomyIds.length) {
+          throw new Error("One or more taxonomy terms are invalid for this site.");
+        }
         await tx.insert(termRelationships).values(
-          taxonomyIds.map((termTaxonomyId) => ({
+          validTaxonomyIds.map((termTaxonomyId) => ({
             objectId: data.id,
             termTaxonomyId,
           })),
@@ -1459,7 +1664,7 @@ export const updateDomainPost = async (
       })
       .from(termRelationships)
       .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
-      .where(eq(termRelationships.objectId, data.id));
+      .where(and(eq(termRelationships.objectId, data.id), eq(termTaxonomies.siteId, existing.siteId)));
 
     const cats = taxonomyRows
       .filter((row) => row.taxonomy === "category")

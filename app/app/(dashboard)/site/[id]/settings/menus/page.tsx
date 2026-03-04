@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { getAdminPathAlias } from "@/lib/admin-path";
 import {
   type SiteMenuDefinition,
   createSiteMenu,
@@ -67,14 +68,15 @@ function stringParam(value: string | string[] | undefined) {
   return value || "";
 }
 
-function menuSettingsHref(siteId: string, menuId?: string, itemId?: string) {
-  const url = new URL(`http://tooty.local/app/site/${siteId}/settings/menus`);
+function menuSettingsHref(adminBasePath: string, siteId: string, menuId?: string, itemId?: string) {
+  const url = new URL(`http://tooty.local${adminBasePath}/site/${siteId}/settings/menus`);
   if (menuId) url.searchParams.set("menu", menuId);
   if (itemId) url.searchParams.set("item", itemId);
   return `${url.pathname}${url.search}`;
 }
 
 function buildMenuSettingsHref(
+  adminBasePath: string,
   siteId: string,
   options: {
     menu?: string;
@@ -85,7 +87,7 @@ function buildMenuSettingsHref(
     editItem?: string;
   } = {},
 ) {
-  const url = new URL(`http://tooty.local/app/site/${siteId}/settings/menus`);
+  const url = new URL(`http://tooty.local${adminBasePath}/site/${siteId}/settings/menus`);
   if (options.menu) url.searchParams.set("menu", options.menu);
   if (options.item) url.searchParams.set("item", options.item);
   if (options.createMenu) url.searchParams.set("createMenu", "1");
@@ -114,6 +116,7 @@ function nativeMenuTablesMissing(report: Awaited<ReturnType<typeof getDatabaseHe
 }
 
 export default async function SiteMenuSettingsPage({ params, searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -150,7 +153,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     const activeSession = await getSession();
     if (!activeSession?.user?.id) redirect("/login");
     const allowed = await userCan("site.menus.manage", activeSession.user.id, { siteId: siteData.id });
-    if (!allowed) redirect("/app");
+    if (!allowed) redirect(adminBasePath);
   }
 
   async function ensureNativeMenuTablesAvailable() {
@@ -159,7 +162,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     if (!nativeMenuTablesMissing(report)) return;
     await applyPendingDatabaseMigrations();
     report = await getDatabaseHealthReport();
-    if (nativeMenuTablesMissing(report)) redirect("/app/settings/database");
+    if (nativeMenuTablesMissing(report)) redirect(`${adminBasePath}/settings/database`);
   }
 
   async function saveMenuAction(formData: FormData) {
@@ -186,7 +189,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
       : await createSiteMenu(siteData.id, payload);
 
     revalidateMenuPaths(siteData.id);
-    redirect(menuSettingsHref(siteData.id, record.id));
+    redirect(menuSettingsHref(adminBasePath, siteData.id, record.id));
   }
 
   async function deleteMenuAction(formData: FormData) {
@@ -196,11 +199,11 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     const menuId = String(formData.get("menu_id") || "").trim();
     const expected = String(formData.get("confirm_expected") || "").trim();
     const received = String(formData.get("confirm_value") || "").trim();
-    if (!menuId) redirect(menuSettingsHref(siteData.id));
+    if (!menuId) redirect(menuSettingsHref(adminBasePath, siteData.id));
     if (!expected || received !== expected) throw new Error("Delete confirmation did not match.");
     await deleteSiteMenu(siteData.id, menuId);
     revalidateMenuPaths(siteData.id);
-    redirect(menuSettingsHref(siteData.id));
+    redirect(menuSettingsHref(adminBasePath, siteData.id));
   }
 
   async function saveItemAction(formData: FormData) {
@@ -208,7 +211,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     await ensureAllowed();
     await ensureNativeMenuTablesAvailable();
     const menuId = String(formData.get("menu_id") || "").trim();
-    if (!menuId) redirect(menuSettingsHref(siteData.id));
+    if (!menuId) redirect(menuSettingsHref(adminBasePath, siteData.id));
     const itemId = String(formData.get("item_id") || "").trim();
     const payload = {
       title: String(formData.get("title") || "").trim(),
@@ -229,7 +232,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
       : await createSiteMenuItem(siteData.id, menuId, payload);
 
     revalidateMenuPaths(siteData.id);
-    redirect(menuSettingsHref(siteData.id, menuId, record.id));
+    redirect(menuSettingsHref(adminBasePath, siteData.id, menuId, record.id));
   }
 
   async function deleteItemAction(formData: FormData) {
@@ -240,14 +243,16 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     const itemId = String(formData.get("item_id") || "").trim();
     const expected = String(formData.get("confirm_expected") || "").trim();
     const received = String(formData.get("confirm_value") || "").trim();
-    if (!menuId || !itemId) redirect(menuSettingsHref(siteData.id, menuId));
+    if (!menuId || !itemId) redirect(menuSettingsHref(adminBasePath, siteData.id, menuId));
     if (!expected || received !== expected) throw new Error("Delete confirmation did not match.");
     await deleteSiteMenuItem(siteData.id, menuId, itemId);
     revalidateMenuPaths(siteData.id);
-    redirect(menuSettingsHref(siteData.id, menuId));
+    redirect(menuSettingsHref(adminBasePath, siteData.id, menuId));
   }
 
-  const selectedMenuSettingsHref = selectedMenu ? menuSettingsHref(siteData.id, selectedMenu.id) : menuSettingsHref(siteData.id);
+  const selectedMenuSettingsHref = selectedMenu
+    ? menuSettingsHref(adminBasePath, siteData.id, selectedMenu.id)
+    : menuSettingsHref(adminBasePath, siteData.id);
   const showDetailView = Boolean(selectedMenu);
   const showListWorkspace = menusReady && !showDetailView;
   const showDetailMissingNotice = Boolean(selectedMenuId) && !selectedMenu;
@@ -261,7 +266,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
           </p>
         </div>
         <Link
-          href={menuSettingsHref(siteData.id, selectedMenu?.id)}
+          href={menuSettingsHref(adminBasePath, siteData.id, selectedMenu?.id)}
           className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
         >
           Close
@@ -369,7 +374,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
             </div>
             <div className="flex flex-wrap gap-3 md:justify-end">
               <Link
-                href={menuSettingsHref(siteData.id)}
+                href={menuSettingsHref(adminBasePath, siteData.id)}
                 className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
               >
                 Back to Menus
@@ -377,7 +382,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
               {menusReady ? (
                 <>
                   <Link
-                    href={buildMenuSettingsHref(siteData.id, { menu: selectedMenu?.id, editMenu: selectedMenu?.id })}
+                    href={buildMenuSettingsHref(adminBasePath, siteData.id, { menu: selectedMenu?.id, editMenu: selectedMenu?.id })}
                     className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
                   >
                     Edit Menu
@@ -385,7 +390,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 </>
               ) : (
                 <Link
-                  href="/app/settings/database"
+                  href={`${adminBasePath}/settings/database`}
                   className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"
                 >
                   Open Database Updates
@@ -415,7 +420,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
               </p>
             </div>
             <Link
-              href="/app/settings/database"
+              href={`${adminBasePath}/settings/database`}
               className="rounded-md border border-amber-900 bg-amber-900 px-3 py-2 text-xs font-semibold text-white"
             >
               Open Database Updates
@@ -434,7 +439,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
               </p>
             </div>
             <Link
-              href={menuSettingsHref(siteData.id)}
+              href={menuSettingsHref(adminBasePath, siteData.id)}
               className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
             >
               Back to Menus
@@ -459,7 +464,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 <div className="text-xs text-stone-500 dark:text-stone-400">{menus.length} total</div>
                 {menusReady ? (
                   <Link
-                    href={buildMenuSettingsHref(siteData.id, { createMenu: true })}
+                    href={buildMenuSettingsHref(adminBasePath, siteData.id, { createMenu: true })}
                     className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-white hover:text-black"
                   >
                     Add Menu
@@ -480,7 +485,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 <tbody className="divide-y divide-stone-200 dark:divide-stone-700">
                   {menus.map((menu) => {
                     const isActive = selectedMenu?.id === menu.id;
-                    const menuHref = menuSettingsHref(siteData.id, menu.id);
+                    const menuHref = menuSettingsHref(adminBasePath, siteData.id, menu.id);
                     return (
                       <tr key={menu.id} className={isActive ? "bg-amber-50/40 dark:bg-amber-950/10" : ""}>
                         <td className="px-3 py-2">
@@ -501,7 +506,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                         <td className="px-3 py-2">
                           <div className="flex items-center justify-end gap-2">
                             <Link
-                              href={buildMenuSettingsHref(siteData.id, { menu: menu.id, editMenu: menu.id })}
+                              href={buildMenuSettingsHref(adminBasePath, siteData.id, { menu: menu.id, editMenu: menu.id })}
                               aria-label={`Edit menu ${menu.title}`}
                               className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-300 bg-white text-sm font-semibold text-black"
                             >
@@ -544,7 +549,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 </div>
                 {selectedMenu && menusReady ? (
                   <Link
-                    href={buildMenuSettingsHref(siteData.id, {
+                    href={buildMenuSettingsHref(adminBasePath, siteData.id, {
                       menu: selectedMenu.id,
                       item: selectedItem?.id,
                       createItem: true,
@@ -573,7 +578,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                       const parent = item.parentId
                         ? selectedMenu.items.find((entry) => entry.id === item.parentId)?.title || "Unknown"
                         : "Root";
-                      const itemHref = menuSettingsHref(siteData.id, selectedMenu.id, item.id);
+                      const itemHref = menuSettingsHref(adminBasePath, siteData.id, selectedMenu.id, item.id);
                       return (
                         <tr key={item.id} className={isActive ? "bg-amber-50/40 dark:bg-amber-950/10" : ""}>
                           <td className="px-3 py-2">
@@ -602,7 +607,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                           <td className="px-3 py-2">
                             <div className="flex items-center justify-end gap-2">
                               <Link
-                                href={buildMenuSettingsHref(siteData.id, {
+                                href={buildMenuSettingsHref(adminBasePath, siteData.id, {
                                   menu: selectedMenu.id,
                                   item: item.id,
                                   editItem: item.id,

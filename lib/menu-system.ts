@@ -317,7 +317,7 @@ async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]
         : Promise.resolve([]),
       mediaIds.length
         ? db.query.media.findMany({
-            where: inArray(media.id, mediaIds),
+            where: and(inArray(media.id, mediaIds), eq(media.siteId, siteId)),
           })
         : Promise.resolve([]),
     ]);
@@ -506,6 +506,22 @@ export async function createSiteMenuItem(siteId: string, menuId: string, input: 
   });
   if (!menu) throw new Error("Menu not found.");
 
+  let resolvedMediaId: number | null = null;
+  if (input.mediaId) {
+    const requestedMediaId = Number(input.mediaId);
+    if (!Number.isFinite(requestedMediaId)) {
+      throw new Error("Invalid media id.");
+    }
+    const mediaRow = await db.query.media.findFirst({
+      where: and(eq(media.id, requestedMediaId), eq(media.siteId, siteId)),
+      columns: { id: true },
+    });
+    if (!mediaRow) {
+      throw new Error("Media item not found for this site.");
+    }
+    resolvedMediaId = mediaRow.id;
+  }
+
   const [created] = await db
     .insert(siteMenuItems)
     .values({
@@ -514,7 +530,7 @@ export async function createSiteMenuItem(siteId: string, menuId: string, input: 
       title: input.title.trim(),
       href: input.href.trim(),
       description: String(input.description || "").trim(),
-      mediaId: input.mediaId ? Number(input.mediaId) : null,
+      mediaId: resolvedMediaId,
       target: String(input.target || "").trim() || null,
       rel: String(input.rel || "").trim() || null,
       external: Boolean(input.external),
@@ -540,6 +556,22 @@ export async function updateSiteMenuItem(siteId: string, menuId: string, itemId:
   });
   if (!menu) throw new Error("Menu not found.");
 
+  let resolvedMediaId: number | null = null;
+  if (input.mediaId) {
+    const requestedMediaId = Number(input.mediaId);
+    if (!Number.isFinite(requestedMediaId)) {
+      throw new Error("Invalid media id.");
+    }
+    const mediaRow = await db.query.media.findFirst({
+      where: and(eq(media.id, requestedMediaId), eq(media.siteId, siteId)),
+      columns: { id: true },
+    });
+    if (!mediaRow) {
+      throw new Error("Media item not found for this site.");
+    }
+    resolvedMediaId = mediaRow.id;
+  }
+
   const [updated] = await db
     .update(siteMenuItems)
     .set({
@@ -547,7 +579,7 @@ export async function updateSiteMenuItem(siteId: string, menuId: string, itemId:
       title: input.title.trim(),
       href: input.href.trim(),
       description: String(input.description || "").trim(),
-      mediaId: input.mediaId ? Number(input.mediaId) : null,
+      mediaId: resolvedMediaId,
       target: String(input.target || "").trim() || null,
       rel: String(input.rel || "").trim() || null,
       external: Boolean(input.external),

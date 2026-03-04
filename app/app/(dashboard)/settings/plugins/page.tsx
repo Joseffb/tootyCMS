@@ -21,16 +21,19 @@ import {
 import { userCan } from "@/lib/authorization";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { inArray } from "drizzle-orm";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
 };
 
 export default async function PluginSettingsPage({ searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
+  const settingsPluginsPath = `${adminBasePath}/settings/plugins`;
   const session = await getSession();
   if (!session) redirect("/login");
   const canManageNetworkPlugins = await userCan("network.plugins.manage", session.user.id);
-  if (!canManageNetworkPlugins) redirect("/app");
+  if (!canManageNetworkPlugins) redirect(adminBasePath);
   const params = (await searchParams) || {};
   const activeTab = params.tab === "discover" ? "discover" : "installed";
   const query = String(params.q || "");
@@ -97,6 +100,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     }
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
+    revalidatePath(settingsPluginsPath);
   }
 
   async function saveConfig(formData: FormData) {
@@ -117,6 +121,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     await savePluginConfig(pluginId, config);
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
+    revalidatePath(settingsPluginsPath);
   }
 
   async function installPlugin(formData: FormData) {
@@ -130,10 +135,11 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     try {
       await installFromRepo("plugin", directory);
     } catch {
-      redirect("/app/settings/plugins?tab=discover&error=rate_limit");
+      redirect(`${settingsPluginsPath}?tab=discover&error=rate_limit`);
     }
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
+    revalidatePath(settingsPluginsPath);
   }
 
   async function bulkTogglePlugins(formData: FormData) {
@@ -160,6 +166,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     }
     revalidatePath("/settings/plugins");
     revalidatePath("/app/settings/plugins");
+    revalidatePath(settingsPluginsPath);
     if (singleSiteMode && mainSiteId) {
       revalidatePath(`/site/${mainSiteId}/settings/plugins`);
       revalidatePath(`/app/site/${mainSiteId}/settings/plugins`);
@@ -177,7 +184,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
         </p>
       ) : null}
 
-      <CatalogTabs basePath="/settings/plugins" activeTab={activeTab} />
+      <CatalogTabs basePath={settingsPluginsPath} activeTab={activeTab} />
 
       {activeTab === "discover" ? (
         <div className="space-y-4 rounded-lg border border-stone-200 bg-white p-4 dark:border-stone-700 dark:bg-black">
@@ -226,7 +233,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <a
-            href={`/settings/plugins?tab=installed&view=all`}
+            href={`${settingsPluginsPath}?tab=installed&view=all`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "all"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -236,7 +243,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
             View All
           </a>
           <a
-            href={`/settings/plugins?tab=installed&view=installed`}
+            href={`${settingsPluginsPath}?tab=installed&view=installed`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "installed"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"
@@ -246,7 +253,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
             View Installed
           </a>
           <a
-            href={`/settings/plugins?tab=installed&view=uninstalled`}
+            href={`${settingsPluginsPath}?tab=installed&view=uninstalled`}
             className={`no-underline rounded-md border px-3 py-1.5 text-xs font-medium ${
               view === "uninstalled"
                 ? "border-black bg-black text-white dark:border-stone-200 dark:bg-stone-200 dark:text-black"

@@ -16,6 +16,7 @@ import {
 import { userCan } from "@/lib/authorization";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { inArray } from "drizzle-orm";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 function getSiteUrl(
   site: { subdomain: string | null; customDomain: string | null; isPrimary?: boolean },
@@ -33,6 +34,7 @@ function getSiteUrl(
 }
 
 export default async function SitesSettingsIndexPage() {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session?.user?.id) redirect("/login");
 
@@ -74,8 +76,9 @@ export default async function SitesSettingsIndexPage() {
     await setTextSetting(THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY, allowedSiteIds);
     revalidatePath("/settings/sites");
     revalidatePath("/app/settings/sites");
+    revalidatePath(`${adminBasePath}/settings/sites`);
     revalidatePath("/[domain]", "layout");
-    redirect("/app/settings/sites");
+    redirect(`${adminBasePath}/settings/sites`);
   }
 
   return (
@@ -145,7 +148,7 @@ export default async function SitesSettingsIndexPage() {
                 </td>
                 <td className="px-4 py-3">
                   <Link
-                    href={`/app/site/${site.id}/settings`}
+                    href={`${adminBasePath}/site/${site.id}/settings`}
                     className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white"
                   >
                     Open Site Settings

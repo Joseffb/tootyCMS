@@ -8,12 +8,12 @@ const adminPassword = "password123";
 const runSetupFlow = process.env.RUN_SETUP_FLOW_E2E === "1";
 
 async function resetTootyTables() {
-  await sql`DELETE FROM tooty_domain_post_meta`;
+  await sql`DELETE FROM tooty_site_domain_post_meta`;
   await sql`DELETE FROM tooty_post_categories`;
   await sql`DELETE FROM tooty_term_relationships`;
   await sql`DELETE FROM tooty_term_taxonomy_domains`;
   await sql`DELETE FROM tooty_term_taxonomies`;
-  await sql`DELETE FROM tooty_domain_posts`;
+  await sql`DELETE FROM tooty_site_domain_posts`;
   await sql`DELETE FROM tooty_posts`;
   await sql`DELETE FROM tooty_media`;
   await sql`DELETE FROM tooty_site_data_domains`;

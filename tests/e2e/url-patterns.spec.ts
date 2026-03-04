@@ -223,7 +223,7 @@ test.beforeAll(async () => {
 
   const taxRows = await db
     .insert(termTaxonomies)
-    .values({ termId, taxonomy: "category" })
+    .values({ siteId, termId, taxonomy: "category" })
     .onConflictDoNothing()
     .returning({ id: termTaxonomies.id });
   categoryTaxonomyId =
@@ -232,7 +232,7 @@ test.beforeAll(async () => {
       await db
         .select({ id: termTaxonomies.id })
         .from(termTaxonomies)
-        .where(and(eq(termTaxonomies.termId, termId), eq(termTaxonomies.taxonomy, "category")))
+        .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, termId), eq(termTaxonomies.taxonomy, "category")))
         .limit(1)
     )[0]?.id;
   if (!categoryTaxonomyId) throw new Error("Failed to create test category taxonomy.");

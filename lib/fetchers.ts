@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import db from "./db";
 import { isMissingRelationError } from "./db-errors";
 import { and, desc, eq, inArray, not } from "drizzle-orm";
-import { dataDomains, domainPostMeta, domainPosts, posts, sites, termRelationships, termTaxonomies, termTaxonomyDomains, terms, users } from "./schema";
+import { dataDomains, domainPostMeta, domainPosts, sites, termRelationships, termTaxonomies, termTaxonomyDomains, terms, users } from "./schema";
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
 import { serialize } from "next-mdx-remote/serialize";
 
@@ -89,28 +89,11 @@ export async function getPostsForSite(domain: string) {
           )
         )
         .orderBy(desc(domainPosts.createdAt));
-      if (rows.length > 0) return rows;
-      return db
-        .select({
-          title: posts.title,
-          description: posts.description,
-          slug: posts.slug,
-          image: posts.image,
-          imageBlurhash: posts.imageBlurhash,
-          createdAt: posts.createdAt,
-        })
-        .from(posts)
-        .innerJoin(sites, eq(posts.siteId, sites.id))
-        .where(
-          subdomain
-            ? eq(sites.subdomain, subdomain)
-            : eq(sites.customDomain, normalizedDomain),
-        )
-        .orderBy(desc(posts.createdAt));
+      return rows;
     },
     [`${domain}-posts-v3`], // cache key
     {
-      revalidate: 900, // 15 min fallback revalidation
+      revalidate: 900,
       tags: [`${domain}-posts`], // 💡 allows manual busting
     }
   )();
@@ -157,85 +140,7 @@ export async function getPostData(domain: string, slug: string) {
           };
         });
 
-      if (!data) {
-        const legacy = await db
-          .select({
-            post: {
-              id: posts.id,
-              title: posts.title,
-              description: posts.description,
-              content: posts.content,
-              layout: posts.layout,
-              slug: posts.slug,
-              image: posts.image,
-              imageBlurhash: posts.imageBlurhash,
-              createdAt: posts.createdAt,
-              updatedAt: posts.updatedAt,
-              published: posts.published,
-              siteId: posts.siteId,
-              userId: posts.userId,
-            },
-            site: sites,
-            user: users,
-          })
-          .from(posts)
-          .leftJoin(sites, eq(sites.id, posts.siteId))
-          .leftJoin(users, eq(users.id, sites.userId))
-          .where(
-            and(
-              eq(posts.slug, slug),
-              eq(posts.published, true),
-              subdomain
-                ? eq(sites.subdomain, subdomain)
-                : eq(sites.customDomain, normalizedDomain),
-            ),
-          )
-          .then((res) => {
-            const row = res[0];
-            if (!row || !row.post) return null;
-            const postData = row.post as Record<string, unknown>;
-            const siteData = row.site as Record<string, unknown> | null;
-            return {
-              ...postData,
-              site: siteData
-                ? {
-                    ...siteData,
-                    user: row.user,
-                  }
-                : null,
-            };
-          });
-        if (!legacy) return null;
-        const typedLegacy = legacy as any;
-        const [mdxSource, adjacentPosts] = await Promise.all([
-          getMdxSource(typedLegacy.content!),
-          db
-            .select({
-              slug: posts.slug,
-              title: posts.title,
-              createdAt: posts.createdAt,
-              description: posts.description,
-              image: posts.image,
-              imageBlurhash: posts.imageBlurhash,
-            })
-            .from(posts)
-            .leftJoin(sites, eq(sites.id, posts.siteId))
-            .where(
-              and(
-                eq(posts.published, true),
-                not(eq(posts.id, typedLegacy.id)),
-                subdomain
-                  ? eq(sites.subdomain, subdomain)
-                  : eq(sites.customDomain, normalizedDomain),
-              ),
-            ),
-        ]);
-        return {
-          ...typedLegacy,
-          mdxSource,
-          adjacentPosts,
-        };
-      }
+      if (!data) return null;
       const typedData = data as any;
 
       const [mdxSource, adjacentPosts, metaRows] = await Promise.all([
@@ -357,6 +262,7 @@ export async function getDomainPostsForSite(domain: string, dataDomainKey: strin
           id: domainPosts.id,
           title: domainPosts.title,
           description: domainPosts.description,
+          content: domainPosts.content,
           slug: domainPosts.slug,
           createdAt: domainPosts.createdAt,
         })
@@ -373,7 +279,7 @@ export async function getDomainPostsForSite(domain: string, dataDomainKey: strin
           ),
         )
         .orderBy(desc(domainPosts.createdAt)),
-    [`${domain}-${dataDomainKey}-archive-v1`],
+    [`${domain}-${dataDomainKey}-archive-v2`],
     {
       tags: [`${domain}-posts`],
       revalidate: 3600,

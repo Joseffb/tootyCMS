@@ -207,4 +207,38 @@ describe("theme menu partial rendering", () => {
     expect(html).toContain("href='/posts'");
     expect(html).toContain("data-depth='1'");
   });
+
+  it("renders theme.excerpt with a continuation link for the active post", () => {
+    const html = renderThemeTemplate("{{ theme.excerpt(5, '...') | safe }}", {
+      post: {
+        href: "/post/welcome",
+        content:
+          "One two three four five six seven eight nine ten eleven twelve.",
+      },
+    });
+
+    expect(html).toContain('class="theme-excerpt__text"');
+    expect(html).toContain("One two three four five");
+    expect(html).toContain('class="theme-excerpt__more"');
+    expect(html).toContain('href="/post/welcome"');
+    expect(html).toContain(">...</a>");
+  });
+
+  it("attaches excerpt helpers to archive post items", () => {
+    const html = renderThemeTemplate(
+      "{% for post in posts %}<article>{{ post.excerpt(4, 'More') | safe }}</article>{% endfor %}",
+      {
+        posts: [
+          {
+            href: "/post/archive-item",
+            content: "Alpha beta gamma delta epsilon zeta eta theta.",
+          },
+        ],
+      },
+    );
+
+    expect(html).toContain("Alpha beta gamma delta");
+    expect(html).toContain('class="theme-excerpt__more"');
+    expect(html).toContain(">More</a>");
+  });
 });

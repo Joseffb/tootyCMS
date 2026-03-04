@@ -4,17 +4,24 @@ import { cookies } from "next/headers";
 import { getDomainPostsForSite, getPostData, getSiteData } from "@/lib/fetchers";
 import SitePostContent from "./page-content";
 import db from "@/lib/db";
-import { eq } from "drizzle-orm";
-import { dataDomains, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
+import { and, eq } from "drizzle-orm";
+import { dataDomains, siteDataDomains, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
 import { toDateString } from "@/lib/utils";
 import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
-import { getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
+import { getSiteTextSetting, getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
+import {
+  dataDomainDescriptionSettingKey,
+  dataDomainKeySettingKey,
+  dataDomainLabelSettingKey,
+  dataDomainPermalinkSettingKey,
+  resolveDataDomainDescription,
+} from "@/lib/data-domain-descriptions";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
 import { isDomainArchiveSegment, normalizeDomainKeyFromSegment, normalizeDomainSegment } from "@/lib/data-domain-routing";
 import { domainArchiveTemplateCandidates } from "@/lib/theme-fallback";
@@ -23,6 +30,7 @@ import { trace } from "@/lib/debug";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
+import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
@@ -37,6 +45,7 @@ export default async function SitePostPage({
   // Await the entire params object.
   const resolvedParams = await params;
   const resolvedSearchParams = (await searchParams) || {};
+  await ensureDefaultCoreDataDomains();
 
   const decodedDomain = decodeURIComponent(resolvedParams.domain);
   const decodedSlug = decodeURIComponent(resolvedParams.slug);
@@ -67,18 +76,91 @@ export default async function SitePostPage({
     }
   }
 
-  if (!existingPost && (singularFromSlug || noDomainPrefixDomainKey)) {
-    const domainKeyForArchive = noDomainPrefixDomainKey || singularFromSlug;
-    if (!domainKeyForArchive) notFound();
-    const domainRow = await db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, domainKeyForArchive),
-      columns: { key: true, label: true },
-    });
+  if (!existingPost) {
+    const candidateRows = await db
+      .select({
+        id: dataDomains.id,
+        key: dataDomains.key,
+        label: dataDomains.label,
+        description: dataDomains.description,
+        settings: dataDomains.settings,
+        siteIsActive: siteDataDomains.isActive,
+      })
+      .from(dataDomains)
+      .leftJoin(
+        siteDataDomains,
+        and(eq(siteDataDomains.dataDomainId, dataDomains.id), eq(siteDataDomains.siteId, site.id as string)),
+      )
+      .orderBy(dataDomains.id);
+
+    const candidateWithSegments = await Promise.all(
+      candidateRows.map(async (row) => {
+        const configuredPermalink = await getSiteTextSetting(
+          site.id as string,
+          dataDomainPermalinkSettingKey(row.id),
+          "",
+        );
+        const fallbackPermalink = String((row.settings as any)?.permalink || "").trim() || domainPluralSegment(row.key);
+        const segment = normalizeDomainSegment(configuredPermalink || fallbackPermalink);
+        return { ...row, segment };
+      }),
+    );
+
+    const domainRow =
+      candidateWithSegments.find(
+        (row) =>
+          Boolean(noDomainPrefixDomainKey) &&
+          normalizeDomainSegment(row.key) === normalizeDomainSegment(String(noDomainPrefixDomainKey || "")),
+      ) ||
+      candidateWithSegments.find((row) => row.segment === normalizedSlug) ||
+      candidateWithSegments.find((row) => isDomainArchiveSegment(normalizedSlug, row.key, row.label)) ||
+      (singularFromSlug
+        ? candidateWithSegments.find((row) => normalizeDomainSegment(row.key) === normalizeDomainSegment(singularFromSlug))
+        : undefined);
+
     if (domainRow) {
+      const isCoreDomain = DEFAULT_CORE_DOMAIN_KEYS.includes(
+        domainRow.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number],
+      );
+      const isAssignedToSite = domainRow.siteIsActive !== null && domainRow.siteIsActive !== undefined;
+      if (!isCoreDomain && !isAssignedToSite) {
+        notFound();
+      }
+      const siteScopedDescription = await getSiteTextSetting(
+        site.id as string,
+        dataDomainDescriptionSettingKey(domainRow.id),
+        "",
+      );
+      const siteScopedLabel = (await getSiteTextSetting(
+        site.id as string,
+        dataDomainLabelSettingKey(domainRow.id),
+        "",
+      )).trim();
+      const siteScopedKey = (await getSiteTextSetting(
+        site.id as string,
+        dataDomainKeySettingKey(domainRow.id),
+        "",
+      )).trim();
+      const effectiveDomainKey = siteScopedKey || domainRow.key;
+      const effectiveDomainLabel = siteScopedLabel || domainRow.label || effectiveDomainKey;
+      const isPrimarySite = Boolean((site as any).isPrimary) || (site as any).subdomain === "main";
+      const resolvedDomainDescription = resolveDataDomainDescription({
+        domainKey: effectiveDomainKey,
+        siteDescription: siteScopedDescription || (isPrimarySite ? (domainRow.description || "") : ""),
+        globalDescription: domainRow.description || "",
+      });
       const isMappedNoDomainArchive = Boolean(noDomainPrefixDomainKey);
-      if (isMappedNoDomainArchive || isDomainArchiveSegment(normalizedSlug, domainRow.key, domainRow.label)) {
+      const matchesConfiguredArchiveSegment = normalizedSlug === normalizeDomainSegment(domainRow.segment);
+      if (
+        isMappedNoDomainArchive ||
+        matchesConfiguredArchiveSegment ||
+        isDomainArchiveSegment(normalizedSlug, domainRow.key, domainRow.label)
+      ) {
         const incomingArchivePath = `/${decodedSlug}`;
-        const canonicalArchivePath = buildArchivePath(domainRow.key, writing);
+        const canonicalArchivePath =
+          writing.permalinkMode === "default"
+            ? `/${domainRow.segment}`
+            : buildArchivePath(domainRow.key, writing);
         if (incomingArchivePath !== canonicalArchivePath) {
           trace("routing", "domain archive redirect to canonical", {
             from: incomingArchivePath,
@@ -164,6 +246,7 @@ export default async function SitePostPage({
               posts: entries.map((entry) => ({
                 title: entry.title || "Untitled",
                 description: entry.description || "",
+                content: entry.content || "",
                 slug: entry.slug,
                 href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath(domainRow.key, entry.slug, writing)}`,
                 created_at: toDateString(entry.createdAt),
@@ -171,7 +254,7 @@ export default async function SitePostPage({
               links: {
                 root: rootUrl,
                 main_site: siteUrl,
-                posts: `${siteUrl.replace(/\/$/, "")}${buildArchivePath(domainRow.key, writing)}`,
+                posts: `${siteUrl.replace(/\/$/, "")}${canonicalArchivePath}`,
                 about: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "about-this-site", writing)}`,
                 tos: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "terms-of-service", writing)}`,
                 privacy: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("page", "privacy-policy", writing)}`,
@@ -185,7 +268,10 @@ export default async function SitePostPage({
                 ...(themeTemplate.config || {}),
               },
               route_kind: "domain_archive",
-              data_domain: domainRow.key,
+              data_domain: effectiveDomainLabel,
+              data_domain_label: effectiveDomainLabel,
+              data_domain_key: effectiveDomainKey,
+              data_domain_description: resolvedDomainDescription,
             });
             return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
           }
@@ -194,9 +280,9 @@ export default async function SitePostPage({
         return (
           <main className="mx-auto min-h-screen w-full max-w-5xl px-5 pb-20 pt-12 text-[#f1dfc4]">
             <header className="rounded-xl border border-[#3b2b1e] bg-[#0f121b] p-6">
-              <p className="text-sm uppercase tracking-[0.12em] text-[#bda17c]">All {pluralizeLabel(domainRow.label)}</p>
-              <h1 className="mt-2 text-4xl font-semibold text-[#f3d7b2]">{pluralizeLabel(domainRow.label)}</h1>
-              <p className="mt-3 text-[#cfb290]">All published {pluralizeLabel(domainRow.label).toLowerCase()} for this site.</p>
+              <p className="text-sm uppercase tracking-[0.12em] text-[#bda17c]">All {pluralizeLabel(effectiveDomainLabel)}</p>
+              <h1 className="mt-2 text-4xl font-semibold text-[#f3d7b2]">{pluralizeLabel(effectiveDomainLabel)}</h1>
+              <p className="mt-3 text-[#cfb290]">All published {pluralizeLabel(effectiveDomainLabel).toLowerCase()} for this site.</p>
             </header>
             <section className="mt-5 grid gap-3">
               {entries.length === 0 ? (
@@ -298,7 +384,12 @@ export default async function SitePostPage({
           .from(termRelationships)
           .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
           .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-          .where(eq(termRelationships.objectId, (data as any).id))
+          .where(
+            and(
+              eq(termRelationships.objectId, (data as any).id),
+              ...(siteId ? [eq(termTaxonomies.siteId, siteId)] : []),
+            ),
+          )
       : [];
   const categorySlugs = categoryRows
     .map((row) => row.slug)

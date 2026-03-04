@@ -1,6 +1,7 @@
 import db from "@/lib/db";
 import { domainPosts, sites } from "@/lib/schema";
 import { eq, sql } from "drizzle-orm";
+import { getThemeDevCacheBustToken, isThemeDevDynamicMode } from "@/lib/theme-dev-mode";
 
 function toMillis(value: unknown) {
   if (value instanceof Date) return value.getTime();
@@ -13,6 +14,10 @@ function toMillis(value: unknown) {
 }
 
 export async function getThemeCacheBustToken(siteId: string) {
+  if (isThemeDevDynamicMode()) {
+    return getThemeDevCacheBustToken();
+  }
+
   const [siteRow, postsRow] = await Promise.all([
     db
       .select({ updatedAt: sites.updatedAt })
@@ -40,4 +45,3 @@ export function withCacheBust(url: string, token: string) {
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}v=${encodeURIComponent(token)}`;
 }
-

@@ -129,6 +129,16 @@ Database compatibility is a first-class operational concern:
 - the tracked target must move when the required schema contract changes
 - health checks must verify the real required table/column surface for the current release
 - the admin status page must not report "up to date" if required compatibility columns are missing
+- every schema change must be wired into `lib/db-health.ts`:
+  - update required table/column checks
+  - add pending migration reason/id
+  - add `applyDatabaseCompatibilityFixes()` DDL so admin "Apply Database Update" can repair drift
+  - add/adjust `tests/db-health-versioning.test.ts` coverage
+
+Pre-v1 compatibility mode policy:
+- default runtime posture is **no-compat**
+- forward schema migration capability remains enabled
+- optional compatibility mode can be explicitly enabled with `CMS_COMPAT_MODE=1` only when a release gate requires it
 
 Admin "Database Updates" page provides:
 - current vs target version display

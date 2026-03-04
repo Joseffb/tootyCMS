@@ -90,7 +90,7 @@ export const verificationTokens = pgTable(
   },
 );
 
-export const examples = pgTable(tableName("examples"), {
+export const examples = pgTable(tableName("site_examples"), {
   id: serial("id").primaryKey(),
   name: text("name"),
   description: text("description"),
@@ -100,18 +100,8 @@ export const examples = pgTable(tableName("examples"), {
   imageBlurhash: text("imageBlurhash"),
 });
 
-export const categories = pgTable(tableName("categories"), {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
-});
-
-export const tags = pgTable(tableName("tags"), {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
-});
-
 export const terms = pgTable(
-  tableName("terms"),
+  tableName("site_terms"),
   {
     id: serial("id").primaryKey(),
     name: text("name").notNull().unique(),
@@ -128,9 +118,12 @@ export const terms = pgTable(
 );
 
 export const termTaxonomies = pgTable(
-  tableName("term_taxonomies"),
+  tableName("site_term_taxonomies"),
   {
     id: serial("id").primaryKey(),
+    siteId: text("siteId")
+      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
     termId: integer("termId")
       .references(() => terms.id)
       .notNull(),
@@ -145,13 +138,14 @@ export const termTaxonomies = pgTable(
       .defaultNow(),
   },
   (table) => ({
-    termTaxonomyUnique: uniqueIndex().on(table.termId, table.taxonomy),
+    siteTermTaxonomyUnique: uniqueIndex().on(table.siteId, table.termId, table.taxonomy),
+    siteTaxonomyIdx: index().on(table.siteId, table.taxonomy),
     taxonomyIdx: index().on(table.taxonomy),
   }),
 );
 
 export const termRelationships = pgTable(
-  tableName("term_relationships"),
+  tableName("site_term_relationships"),
   {
     objectId: text("objectId").notNull(), // post id / domain-post id
     termTaxonomyId: integer("termTaxonomyId")
@@ -197,13 +191,13 @@ export const rbacRoles = pgTable(
 );
 
 export const dataDomains = pgTable(
-  tableName("data_domains"),
+  tableName("site_data_domains"),
   {
     id: serial("id").primaryKey(),
     key: text("key").notNull().unique(),
     label: text("label").notNull(),
-    contentTable: text("contentTable").notNull().unique(),
-    metaTable: text("metaTable").notNull().unique(),
+    contentTable: text("contentTable").notNull(),
+    metaTable: text("metaTable").notNull(),
     description: text("description"),
     settings: jsonb("settings").default({}),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
@@ -218,7 +212,7 @@ export const dataDomains = pgTable(
 );
 
 export const termTaxonomyDomains = pgTable(
-  tableName("term_taxonomy_domains"),
+  tableName("site_term_taxonomy_domains"),
   {
     dataDomainId: integer("dataDomainId")
       .references(() => dataDomains.id)
@@ -234,7 +228,7 @@ export const termTaxonomyDomains = pgTable(
 );
 
 export const termTaxonomyMeta = pgTable(
-  tableName("term_taxonomy_meta"),
+  tableName("site_term_taxonomy_meta"),
   {
     id: serial("id").primaryKey(),
     termTaxonomyId: integer("termTaxonomyId")
@@ -255,7 +249,7 @@ export const termTaxonomyMeta = pgTable(
 );
 
 export const siteDataDomains = pgTable(
-  tableName("site_data_domains"),
+  tableName("site_data_domain_assignments"),
   {
     siteId: text("siteId")
       .references(() => sites.id)
@@ -264,6 +258,7 @@ export const siteDataDomains = pgTable(
       .references(() => dataDomains.id)
       .notNull(),
     isActive: boolean("isActive").default(true).notNull(),
+    description: text("description").notNull().default(""),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { mode: "date" })
       .notNull()
@@ -278,7 +273,7 @@ export const siteDataDomains = pgTable(
 );
 
 export const communicationMessages = pgTable(
-  tableName("communication_messages"),
+  tableName("site_communication_messages"),
   {
     id: text("id")
       .primaryKey()
@@ -319,7 +314,7 @@ export const communicationMessages = pgTable(
 );
 
 export const comments = pgTable(
-  tableName("comments"),
+  tableName("site_comments"),
   {
     id: text("id")
       .primaryKey()
@@ -354,7 +349,7 @@ export const comments = pgTable(
 );
 
 export const communicationAttempts = pgTable(
-  tableName("communication_attempts"),
+  tableName("site_communication_attempts"),
   {
     id: serial("id").primaryKey(),
     messageId: text("messageId")
@@ -377,7 +372,7 @@ export const communicationAttempts = pgTable(
 );
 
 export const webcallbackEvents = pgTable(
-  tableName("webcallback_events"),
+  tableName("site_webcallback_events"),
   {
     id: serial("id").primaryKey(),
     siteId: text("siteId").references(() => sites.id, {
@@ -407,7 +402,7 @@ export const webcallbackEvents = pgTable(
 );
 
 export const webhookSubscriptions = pgTable(
-  tableName("webhook_subscriptions"),
+  tableName("site_webhook_subscriptions"),
   {
     id: serial("id").primaryKey(),
     siteId: text("siteId").references(() => sites.id, {
@@ -436,7 +431,7 @@ export const webhookSubscriptions = pgTable(
 );
 
 export const webhookDeliveries = pgTable(
-  tableName("webhook_deliveries"),
+  tableName("site_webhook_deliveries"),
   {
     id: text("id")
       .primaryKey()
@@ -477,7 +472,7 @@ export const webhookDeliveries = pgTable(
 );
 
 export const posts = pgTable(
-  tableName("posts"),
+  tableName("site_posts"),
   {
     id: text("id")
       .primaryKey()
@@ -520,7 +515,7 @@ export const posts = pgTable(
 );
 
 export const domainPosts = pgTable(
-  tableName("domain_posts"),
+  tableName("site_domain_posts"),
   {
     id: text("id")
       .primaryKey()
@@ -568,7 +563,7 @@ export const domainPosts = pgTable(
 );
 
 export const domainPostMeta = pgTable(
-  tableName("domain_post_meta"),
+  tableName("site_domain_post_meta"),
   {
     id: serial("id").primaryKey(),
     domainPostId: text("domainPostId")
@@ -589,7 +584,7 @@ export const domainPostMeta = pgTable(
 );
 
 export const media = pgTable(
-  tableName("media"),
+  tableName("site_media"),
   {
     id: serial("id").primaryKey(),
     siteId: text("siteId").references(() => sites.id, {
@@ -717,20 +712,6 @@ export const siteMenuItemMeta = pgTable(
   }),
 );
 
-export const postCategories = pgTable(tableName("post_categories"), {
-  postId: text("post_id").references(() => posts.id).notNull(),
-  categoryId: integer("category_id").references(() => categories.id).notNull(),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.postId, table.categoryId] }),
-}));
-
-export const postTags = pgTable(tableName("post_tags"), {
-  postId: text("post_id").references(() => posts.id).notNull(),
-  tagId: integer("tag_id").references(() => tags.id).notNull(),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.postId, table.tagId] }),
-}));
-
 export const postMeta = pgTable(
   tableName("post_meta"),
   {
@@ -754,19 +735,7 @@ export const postMeta = pgTable(
 export const postsRelations = relations(posts, ({ one, many }) => ({
   site: one(sites, { references: [sites.id], fields: [posts.siteId] }),
   user: one(users, { references: [users.id], fields: [posts.userId] }),
-  categories: many(postCategories),
-  tags: many(postTags),
   meta: many(postMeta),
-}));
-
-export const postCategoriesRelations = relations(postCategories, ({ one }) => ({
-  post: one(posts, { references: [posts.id], fields: [postCategories.postId] }),
-  category: one(categories, { references: [categories.id], fields: [postCategories.categoryId] }),
-}));
-
-export const postTagsRelations = relations(postTags, ({ one }) => ({
-  post: one(posts, { references: [posts.id], fields: [postTags.postId] }),
-  tag: one(tags, { references: [tags.id], fields: [postTags.tagId] }),
 }));
 
 export const postMetaRelations = relations(postMeta, ({ one }) => ({

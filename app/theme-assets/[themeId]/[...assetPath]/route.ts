@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { getThemesDirs } from "@/lib/extension-paths";
 import { getAvailableThemes } from "@/lib/themes";
+import { getThemeAssetCacheControlHeader } from "@/lib/theme-dev-mode";
 
 const mimeByExt: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -29,7 +30,7 @@ async function serveFile(filePath: string) {
   return new NextResponse(content, {
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=3600, s-maxage=3600",
+      "Cache-Control": getThemeAssetCacheControlHeader(),
     },
   });
 }

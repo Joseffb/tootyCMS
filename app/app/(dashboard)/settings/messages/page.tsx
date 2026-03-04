@@ -5,6 +5,7 @@ import { userCan } from "@/lib/authorization";
 import { listCommunicationMessages } from "@/lib/communications";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import MessagesTable from "@/components/messages-table";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 type Props = {
   searchParams?: Promise<{
@@ -118,11 +119,12 @@ export async function renderMessagesPage(input: {
 }
 
 export default async function SettingsMessagesPage({ searchParams }: Props) {
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
   const query = (await searchParams) || {};
   return renderMessagesPage({
     searchParams: Promise.resolve(query),
-    basePath: "/settings/messages",
-    denyRedirectPath: "/app",
+    basePath: `${adminBasePath}/settings/messages`,
+    denyRedirectPath: adminBasePath,
     requiredCapability: "network.plugins.manage",
   });
 }
