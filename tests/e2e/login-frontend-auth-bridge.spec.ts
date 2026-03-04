@@ -54,17 +54,37 @@ async function ensurePostDomain() {
     dataDomainId = Number(rows.rows[0].id);
     return;
   }
-  const inserted = await sql`
-    INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
-    VALUES ('post', 'Posts', 'domain_posts', 'domain_post_meta', NOW(), NOW())
-    ON CONFLICT ("key") DO UPDATE
-    SET "label" = EXCLUDED."label",
-        "contentTable" = EXCLUDED."contentTable",
-        "metaTable" = EXCLUDED."metaTable",
-        "updatedAt" = NOW()
-    RETURNING "id"
+  const fallback = await sql`
+    SELECT "id"
+    FROM tooty_data_domains
+    WHERE "contentTable" = 'domain_posts'
+    LIMIT 1
   `;
-  dataDomainId = Number(inserted.rows[0]?.id || 0);
+  if (fallback.rows[0]?.id) {
+    dataDomainId = Number(fallback.rows[0].id);
+    return;
+  }
+  try {
+    const inserted = await sql`
+      INSERT INTO tooty_data_domains ("key", "label", "contentTable", "metaTable", "createdAt", "updatedAt")
+      VALUES ('post', 'Posts', 'domain_posts', 'domain_post_meta', NOW(), NOW())
+      ON CONFLICT ("key") DO UPDATE
+      SET "label" = EXCLUDED."label",
+          "contentTable" = EXCLUDED."contentTable",
+          "metaTable" = EXCLUDED."metaTable",
+          "updatedAt" = NOW()
+      RETURNING "id"
+    `;
+    dataDomainId = Number(inserted.rows[0]?.id || 0);
+  } catch {
+    const retry = await sql`
+      SELECT "id"
+      FROM tooty_data_domains
+      WHERE "key" = ${domainKey} OR "contentTable" = 'domain_posts'
+      LIMIT 1
+    `;
+    dataDomainId = Number(retry.rows[0]?.id || 0);
+  }
   if (!dataDomainId) throw new Error("Failed to create post data domain.");
 }
 

@@ -63,6 +63,18 @@ export default async function TagArchivePage({ params }: { params: Params }) {
       const html = renderThemeTemplate(tagTemplate.template, {
         theme_header: tagTemplate.partials?.header || "",
         theme_footer: tagTemplate.partials?.footer || "",
+        theme_menu: tagTemplate.partials?.menu || "",
+        theme_menu_item: tagTemplate.partials?.menuItem || "",
+        theme_menu_header: tagTemplate.partials?.menuByLocation?.header || "",
+        theme_menu_footer: tagTemplate.partials?.menuByLocation?.footer || "",
+        theme_menu_dashboard: tagTemplate.partials?.menuByLocation?.dashboard || "",
+        theme_menu_item_header: tagTemplate.partials?.menuItemByLocation?.header || "",
+        theme_menu_item_footer: tagTemplate.partials?.menuItemByLocation?.footer || "",
+        theme_menu_item_dashboard: tagTemplate.partials?.menuItemByLocation?.dashboard || "",
+        theme_menu_by_location: tagTemplate.partials?.menuByLocation || {},
+        theme_menu_item_by_location: tagTemplate.partials?.menuItemByLocation || {},
+        theme_menu_by_location_and_key: tagTemplate.partials?.menuByLocationAndKey || {},
+        theme_menu_item_by_location_and_key: tagTemplate.partials?.menuItemByLocationAndKey || {},
         theme_comment_item: tagTemplate.partials?.commentItem || "",
         theme_password: tagTemplate.partials?.password || "",
         site: {

@@ -24,6 +24,23 @@
   align-items: flex-start;
 }
 
+.tooty-menu-node {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tooty-menu-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tooty-menu-description {
+  font-size: 0.72rem;
+  color: rgba(87, 83, 78, 0.9);
+}
+
 .hero-kicker {
   display: inline-block;
   margin: 0 0 0.6rem;

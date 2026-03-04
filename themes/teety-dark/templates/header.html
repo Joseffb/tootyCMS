@@ -1,10 +1,15 @@
 <section>
   <div class="tooty-post-nav">
-    <nav class="tooty-post-nav-links" aria-label="Primary">
-      {% for item in menu_items or [] %}
-      <a class="tooty-post-link" href="{{item.href}}" {% if item.external %}target="_blank" rel="noopener noreferrer"{% endif %}>{{item.label}}</a>
-      {% endfor %}
-    </nav>
+    {% if tooty and tooty.renderedMenus and tooty.renderedMenus.header %}
+      {{ tooty.renderedMenus.header | safe }}
+    {% else %}
+      {% set header_menu = (tooty and tooty.menus and tooty.menus.header) or menu_items or [] %}
+      <nav class="tooty-post-nav-links" aria-label="Primary">
+        {% for item in header_menu %}
+        <a class="tooty-post-link" href="{{item.href}}" {% if item.external %}target="_blank" rel="noopener noreferrer"{% endif %}>{{item.label}}</a>
+        {% endfor %}
+      </nav>
+    {% endif %}
     <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or "there" }}{% endif %}</p>
   </div>
 </section>

@@ -1,0 +1,14 @@
+{% set mega = menu_item.meta and menu_item.meta.menu_style == "mega" %}
+<div class="tooty-menu-node{% if mega %} tooty-menu-node--mega{% endif %}{% if has_children %} has-children{% endif %}">
+  <a class="tooty-post-link" href="{{ menu_item.href }}" {% if menu_item.external %}target="_blank" rel="noopener noreferrer"{% elif menu_item.target %}target="{{ menu_item.target }}"{% if menu_item.rel %} rel="{{ menu_item.rel }}"{% endif %}{% endif %}>
+    {{ menu_item.label or menu_item.title }}
+  </a>
+  {% if menu_item.description and depth == 0 %}
+  <span class="tooty-menu-description">{{ menu_item.description }}</span>
+  {% endif %}
+  {% if has_children %}
+  <div class="tooty-menu-children{% if mega %} tooty-menu-children--mega{% endif %}">
+    {{ children_html | safe }}
+  </div>
+  {% endif %}
+</div>

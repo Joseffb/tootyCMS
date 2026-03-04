@@ -63,6 +63,18 @@ export default async function CategoryArchivePage({ params }: { params: Params }
       const html = renderThemeTemplate(categoryTemplate.template, {
         theme_header: categoryTemplate.partials?.header || "",
         theme_footer: categoryTemplate.partials?.footer || "",
+        theme_menu: categoryTemplate.partials?.menu || "",
+        theme_menu_item: categoryTemplate.partials?.menuItem || "",
+        theme_menu_header: categoryTemplate.partials?.menuByLocation?.header || "",
+        theme_menu_footer: categoryTemplate.partials?.menuByLocation?.footer || "",
+        theme_menu_dashboard: categoryTemplate.partials?.menuByLocation?.dashboard || "",
+        theme_menu_item_header: categoryTemplate.partials?.menuItemByLocation?.header || "",
+        theme_menu_item_footer: categoryTemplate.partials?.menuItemByLocation?.footer || "",
+        theme_menu_item_dashboard: categoryTemplate.partials?.menuItemByLocation?.dashboard || "",
+        theme_menu_by_location: categoryTemplate.partials?.menuByLocation || {},
+        theme_menu_item_by_location: categoryTemplate.partials?.menuItemByLocation || {},
+        theme_menu_by_location_and_key: categoryTemplate.partials?.menuByLocationAndKey || {},
+        theme_menu_item_by_location_and_key: categoryTemplate.partials?.menuItemByLocationAndKey || {},
         theme_comment_item: categoryTemplate.partials?.commentItem || "",
         theme_password: categoryTemplate.partials?.password || "",
         site: {

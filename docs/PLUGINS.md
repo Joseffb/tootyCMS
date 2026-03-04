@@ -120,6 +120,17 @@ Service-style core namespace (recommended):
 - `api.core.settings.set(key, value)`
 - `api.core.site.get(siteId)`
 - `api.core.dataDomain.list(siteId?)`
+- `api.core.menus.list(siteId)`
+- `api.core.menus.get(siteId, menuKey)`
+- `api.core.menus.byLocation(siteId, location)`
+- `api.core.menus.create(siteId, input)`
+- `api.core.menus.update(siteId, menuKey, input)`
+- `api.core.menus.delete(siteId, menuKey)`
+- `api.core.menus.items.list(siteId, menuKey)`
+- `api.core.menus.items.get(siteId, menuKey, itemId)`
+- `api.core.menus.items.create(siteId, menuKey, input)`
+- `api.core.menus.items.update(siteId, menuKey, itemId, input)`
+- `api.core.menus.items.delete(siteId, menuKey, itemId)`
 - `api.core.taxonomy.list()`
 - `api.core.taxonomy.edit(taxonomyKey, "name:New Label")`
 - `api.core.taxonomy.terms.list(taxonomyKey)`
@@ -137,7 +148,25 @@ Comment provider note:
 - Third-party comment providers may register their own provider implementation and use external storage/services instead of Tooty's native comment tables.
 - `tooty-comments` is the first-party plugin that enables the native table-backed provider.
 
+Menu API note:
+
+- Menu reads are available to plugins through the core menu service.
+- Menu writes remain Core-owned and flow through these menu service helpers only.
+- Mutating menu calls require `capabilities.adminExtensions = true`.
+- Use menu keys for CRUD (`menuKey`) and location names for resolved theme-facing reads (`header`, `footer`, `dashboard`).
+
 Route-like dispatcher for dynamic keys:
+- `api.core.invoke("siteId.<siteId>.menus.list")`
+- `api.core.invoke("siteId.<siteId>.menus.add", { key: "homepage", title: "Homepage", location: "header" })`
+- `api.core.invoke("siteId.<siteId>.menus.location.header")`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.get")`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.edit", { title: "Main Nav", location: "header" })`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.delete")`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.items.list")`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.items.add", { title: "Posts", href: "/posts" })`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.items.<itemId>.get")`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.items.<itemId>.edit", { title: "Stories" })`
+- `api.core.invoke("siteId.<siteId>.menus.<menuKey>.items.<itemId>.delete")`
 - `api.core.invoke("siteId.<siteId>.taxonomy.list")`
 - `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.edit", "name:New Label")`
 - `api.core.invoke("siteId.<siteId>.taxonomy.<taxonomyKey>.term.<termTaxonomyId>.edit", "name:New Name")`
@@ -147,6 +176,13 @@ Route-like dispatcher for dynamic keys:
 
 Short form for repeated site calls:
 - `const s = api.core.forSite(siteId)`
+- `s.menus.list()`
+- `s.menus.byLocation("header")`
+- `s.menus.get("homepage")`
+- `s.menus.create({ key: "homepage", title: "Homepage", location: "header" })`
+- `s.menus.update("homepage", { key: "homepage", title: "Homepage", location: "header" })`
+- `s.menus.items.list("homepage")`
+- `s.menus.items.create("homepage", { title: "Posts", href: "/posts" })`
 - `s.taxonomy.list()`
 - `s.taxonomy.edit("featured", "name:Featured Content")`
 - `s.dataDomain.postTaxonomyList("post", postId)`

@@ -181,10 +181,48 @@ Theme templates receive a `tooty` context object (internal JS-backed data, no RE
 - `tooty.settings.seoMetaTitle`
 - `tooty.settings.seoMetaDescription`
 - `tooty.domains`
+- `tooty.menus.header`
+- `tooty.menus.footer`
+- `tooty.menus.dashboard`
 - `tooty.pluginSettings`
 - `tooty.slots` (plugin-provided render slots such as optional mounts/partials)
 - `tooty.query` (Core-resolved, read-only query results)
 - `auth` (current viewer snapshot: `logged_in`, `display_name`)
+
+Theme menu guidance:
+
+- Themes should prefer `tooty.menus.<location>` for location-based navigation rendering.
+- `header`, `footer`, and `dashboard` are the current canonical native menu locations.
+- Themes should treat these arrays as read-only resolved menu DTOs.
+- Legacy top-level `menu_items` may still exist in older render paths, but new theme work should target `tooty.menus.header` for primary navigation.
+- `tooty.menuLocations.<location>` exposes the full resolved native menu object for that location, including:
+  - `key`, `title`, `location`, `description`
+  - nested `items`
+  - `flatItems`
+- Each menu item DTO is safe for presentation-only rendering and includes the full item surface needed for simple navs or card-style mega menus:
+  - `id`, `title`, `label`, `href`, `description`, `image`, `mediaId`
+  - `target`, `rel`, `external`, `enabled`
+  - `sortOrder`, `order`, `meta`, `children`
+
+Theme menu partial contract:
+
+- Generic partials:
+  - `templates/menu.html`
+  - `templates/menu-item.html`
+- Location-specific overrides:
+  - `templates/menu-<location>.html`
+  - `templates/menu-item-<location>.html`
+- Menu-key-pinned overrides:
+  - `templates/menu-<location>-<menuKey>.html`
+  - `templates/menu-item-<location>-<menuKey>.html`
+
+Render precedence is:
+
+1. `menu-<location>-<menuKey>.html` / `menu-item-<location>-<menuKey>.html`
+2. `menu-<location>.html` / `menu-item-<location>.html`
+3. `menu.html` / `menu-item.html`
+
+This allows a theme to keep a general menu renderer while pinning a specific assigned menu, such as `menu-header-homepage.html`, to a different presentation.
 
 Theme-facing auth is presentation-safe only.
 Do not expect theme contracts to expose roles, capabilities, or other permission semantics.

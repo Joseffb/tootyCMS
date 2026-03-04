@@ -13,6 +13,7 @@ import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 export type NativeMenuLocation = MenuLocation | "unassigned";
+export const NATIVE_MENU_LOCATIONS: MenuLocation[] = ["header", "footer", "dashboard"];
 
 export type SiteMenuItemRecord = {
   id: string;
@@ -31,6 +32,12 @@ export type SiteMenuItemRecord = {
   meta: Record<string, string>;
 };
 
+export type SiteMenuThemeItem = SiteMenuItemRecord & {
+  label: string;
+  order: number;
+  children?: SiteMenuThemeItem[];
+};
+
 export type SiteMenuDefinition = {
   id: string;
   siteId: string;
@@ -44,7 +51,7 @@ export type SiteMenuDefinition = {
 
 type MenuMetaInput = Record<string, string>;
 
-type UpsertMenuInput = {
+export type UpsertMenuInput = {
   key: string;
   title: string;
   description?: string;
@@ -52,7 +59,7 @@ type UpsertMenuInput = {
   sortOrder?: number;
 };
 
-type UpsertMenuItemInput = {
+export type UpsertMenuItemInput = {
   title: string;
   href: string;
   description?: string;
@@ -66,8 +73,6 @@ type UpsertMenuItemInput = {
   meta?: MenuMetaInput;
 };
 
-const KNOWN_MENU_LOCATIONS: MenuLocation[] = ["header", "footer", "dashboard"];
-
 function menuKey(siteId: string, location: MenuLocation) {
   return `site_${siteId}_menu_${location}`;
 }
@@ -75,7 +80,7 @@ function menuKey(siteId: string, location: MenuLocation) {
 function normalizeLocation(location: string | null | undefined): NativeMenuLocation {
   const raw = String(location || "").trim().toLowerCase();
   if (!raw) return "unassigned";
-  if (KNOWN_MENU_LOCATIONS.includes(raw as MenuLocation)) return raw as MenuLocation;
+  if (NATIVE_MENU_LOCATIONS.includes(raw as MenuLocation)) return raw as MenuLocation;
   return "unassigned";
 }
 
@@ -150,10 +155,16 @@ function isLegacyDefaultHeaderMenu(items: MenuItem[]) {
     }))
     .sort((a, b) => a.label.localeCompare(b.label) || a.href.localeCompare(b.href));
 
-  const legacyDefault = [
-    { label: "documentation", href: "/c/documentation", external: false },
-    { label: "main site", href: "/", external: false },
-  ].sort((a, b) => a.label.localeCompare(b.label) || a.href.localeCompare(b.href));
+  const legacyDefaults = [
+    [
+      { label: "documentation", href: "/c/documentation", external: false },
+      { label: "main site", href: "/", external: false },
+    ],
+    [
+      { label: "documentation", href: "/c/documentation", external: false },
+      { label: "homepage", href: "/", external: false },
+    ],
+  ].map((items) => items.sort((a, b) => a.label.localeCompare(b.label) || a.href.localeCompare(b.href)));
 
   const same = (a: Array<{ label: string; href: string; external: boolean }>) =>
     normalized.length === a.length &&
@@ -164,7 +175,7 @@ function isLegacyDefaultHeaderMenu(items: MenuItem[]) {
         item.external === a[idx].external,
     );
 
-  return same(legacyDefault);
+  return legacyDefaults.some((items) => same(items));
 }
 
 function isMissingMenuTablesError(error: unknown) {
@@ -217,6 +228,44 @@ function toMenuTree(records: SiteMenuItemRecord[]): MenuItem[] {
   };
 
   return roots.filter((item) => item.enabled !== false).map(finalize);
+}
+
+export function buildSiteMenuItemTree(records: SiteMenuItemRecord[]): SiteMenuThemeItem[] {
+  const ordered = [...records].sort((a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title));
+  const byId = new Map<string, SiteMenuThemeItem & { __children: SiteMenuThemeItem[] }>();
+  const roots: Array<SiteMenuThemeItem & { __children: SiteMenuThemeItem[] }> = [];
+
+  for (const item of ordered) {
+    byId.set(item.id, {
+      ...item,
+      label: item.title,
+      order: item.sortOrder,
+      __children: [],
+    });
+  }
+
+  for (const item of ordered) {
+    const current = byId.get(item.id);
+    if (!current || current.enabled === false) continue;
+    const parent = item.parentId ? byId.get(item.parentId) : null;
+    if (parent && parent.enabled !== false) {
+      parent.__children.push(current);
+      continue;
+    }
+    roots.push(current);
+  }
+
+  const finalize = (
+    node: SiteMenuThemeItem & { __children: SiteMenuThemeItem[] },
+  ): SiteMenuThemeItem => {
+    const { __children, ...rest } = node;
+    return {
+      ...rest,
+      children: __children.length ? __children.map((child) => finalize(child as SiteMenuThemeItem & { __children: SiteMenuThemeItem[] })) : undefined,
+    };
+  };
+
+  return roots.map((node) => finalize(node));
 }
 
 function flattenMenuItemsForLegacy(items: MenuItem[], depth = 0): MenuItem[] {
@@ -357,7 +406,7 @@ async function clearDuplicateLocationAssignments(siteId: string, location: Nativ
 
 export function defaultHeaderMenu(): MenuItem[] {
   return [
-    { label: "Main Site", href: "/", order: 10 },
+    { label: "Homepage", href: "/", order: 10 },
     { label: "Posts", href: "/posts", order: 20 },
   ];
 }
@@ -369,6 +418,20 @@ export async function listSiteMenus(siteId: string) {
 export async function getSiteMenuDefinition(siteId: string, menuId: string) {
   const menus = await listNativeSiteMenus(siteId);
   return menus.find((menu) => menu.id === menuId) || null;
+}
+
+export async function getSiteMenuDefinitionByKey(siteId: string, key: string) {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) return null;
+  const menus = await listNativeSiteMenus(siteId);
+  return menus.find((menu) => menu.key === normalizedKey) || null;
+}
+
+export async function getSiteMenuItemDefinitionById(siteId: string, key: string, itemId: string) {
+  const normalizedItemId = String(itemId || "").trim();
+  if (!normalizedItemId) return null;
+  const menu = await getSiteMenuDefinitionByKey(siteId, key);
+  return menu?.items.find((item) => item.id === normalizedItemId) || null;
 }
 
 export async function getSiteMenu(siteId: string, location: MenuLocation) {

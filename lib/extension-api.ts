@@ -42,6 +42,22 @@ import {
   retryPendingWebhookDeliveries,
   upsertWebhookSubscription,
 } from "@/lib/webhook-delivery";
+import {
+  createCoreMenu,
+  createCoreMenuItem,
+  deleteCoreMenuByKey,
+  deleteCoreMenuItem,
+  getCoreMenuByKey,
+  getCoreMenuDefinitionByLocation,
+  getCoreMenuByLocation,
+  getCoreMenuItem,
+  listCoreMenuItems,
+  listCoreMenus,
+  normalizeCoreMenuLocation,
+  updateCoreMenuByKey,
+  updateCoreMenuItem,
+} from "@/lib/core-menu-contract";
+import type { UpsertMenuInput, UpsertMenuItemInput } from "@/lib/menu-system";
 
 type BaseExtensionApi = {
   pluginId?: string;
@@ -91,6 +107,21 @@ type CoreApiInvokeInput = string | Record<string, unknown> | undefined;
 
 type BoundSiteCoreApi = {
   invoke: (path: string, input?: CoreApiInvokeInput) => Promise<unknown>;
+  menus: {
+    list: () => Promise<any[]>;
+    get: (menuKey: string) => Promise<any>;
+    byLocation: (location: string) => Promise<any>;
+    create: (input: UpsertMenuInput) => Promise<any>;
+    update: (menuKey: string, input: UpsertMenuInput) => Promise<any>;
+    delete: (menuKey: string) => Promise<{ ok: true }>;
+    items: {
+      list: (menuKey: string) => Promise<any[]>;
+      get: (menuKey: string, itemId: string) => Promise<any>;
+      create: (menuKey: string, input: UpsertMenuItemInput) => Promise<any>;
+      update: (menuKey: string, itemId: string, input: UpsertMenuItemInput) => Promise<any>;
+      delete: (menuKey: string, itemId: string) => Promise<{ ok: true }>;
+    };
+  };
   taxonomy: {
     list: () => Promise<Array<{ key: string; termCount: number }>>;
     terms: {
@@ -122,6 +153,21 @@ type CoreServiceApi = {
   };
   dataDomain: {
     list: (siteId?: string) => Promise<any[]>;
+  };
+  menus: {
+    list: (siteId?: string) => Promise<any[]>;
+    get: (siteId: string, menuKey: string) => Promise<any>;
+    byLocation: (siteId: string, location: string) => Promise<any>;
+    create: (siteId: string, input: UpsertMenuInput) => Promise<any>;
+    update: (siteId: string, menuKey: string, input: UpsertMenuInput) => Promise<any>;
+    delete: (siteId: string, menuKey: string) => Promise<{ ok: true }>;
+    items: {
+      list: (siteId: string, menuKey: string) => Promise<any[]>;
+      get: (siteId: string, menuKey: string, itemId: string) => Promise<any>;
+      create: (siteId: string, menuKey: string, input: UpsertMenuItemInput) => Promise<any>;
+      update: (siteId: string, menuKey: string, itemId: string, input: UpsertMenuItemInput) => Promise<any>;
+      delete: (siteId: string, menuKey: string, itemId: string) => Promise<{ ok: true }>;
+    };
   };
   taxonomy: {
     list: () => Promise<Array<{ key: string; termCount: number }>>;
@@ -239,7 +285,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
-  core: Pick<CoreServiceApi, "site" | "settings" | "dataDomain" | "taxonomy">;
+  core: Pick<CoreServiceApi, "site" | "settings" | "dataDomain" | "taxonomy" | "menus">;
   setSetting: (key: string, value: string) => Promise<never>;
   setPluginSetting: (key: string, value: string) => Promise<never>;
   createSchedule: (input: {
@@ -321,6 +367,34 @@ function parseCommandInput(input?: CoreApiInvokeInput): Record<string, string> {
     out[String(key).trim().toLowerCase()] = String(value ?? "").trim();
   }
   return out;
+}
+
+function parseMenuInput(input?: CoreApiInvokeInput): UpsertMenuInput {
+  const command = parseCommandInput(input);
+  return {
+    key: String(command.key || ""),
+    title: String(command.title || ""),
+    description: String(command.description || ""),
+    location: String(command.location || "unassigned") as UpsertMenuInput["location"],
+    sortOrder: Number(command.sortorder || command.sort_order || 10),
+  };
+}
+
+function parseMenuItemInput(input?: CoreApiInvokeInput): UpsertMenuItemInput {
+  const command = parseCommandInput(input);
+  return {
+    title: String(command.title || ""),
+    href: String(command.href || ""),
+    description: String(command.description || ""),
+    parentId: String(command.parentid || command.parent_id || ""),
+    mediaId: String(command.mediaid || command.media_id || ""),
+    target: String(command.target || ""),
+    rel: String(command.rel || ""),
+    external: String(command.external || "").toLowerCase() === "true",
+    enabled: command.enabled ? String(command.enabled).toLowerCase() !== "false" : true,
+    sortOrder: Number(command.sortorder || command.sort_order || 10),
+    meta: parseJsonObject<Record<string, string>>(command.meta, {}),
+  };
 }
 
 function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOptions): BaseExtensionApi {
@@ -683,6 +757,57 @@ export function createPluginExtensionApi(
     return { ok: true };
   };
 
+  const resolveMenuSiteId = (siteId?: string) => {
+    const resolved = String(siteId || options?.siteId || "").trim();
+    if (!resolved) {
+      throw new Error(`[plugin-guard] Plugin "${pluginName}" menu API requires a bound site or explicit siteId.`);
+    }
+    return resolved;
+  };
+
+  const requireMenuWriteCapability = () => {
+    requireCapability("adminExtensions", "core.menus.write()");
+  };
+
+  const menuApi = {
+    list: async (siteId?: string) => listCoreMenus(resolveMenuSiteId(siteId)),
+    get: async (siteId: string, menuKey: string) => getCoreMenuByKey(resolveMenuSiteId(siteId), menuKey),
+    byLocation: async (siteId: string, location: string) => {
+      const normalized = normalizeCoreMenuLocation(location);
+      if (!normalized) throw new Error("Invalid menu location.");
+      return getCoreMenuByLocation(resolveMenuSiteId(siteId), normalized);
+    },
+    create: async (siteId: string, input: UpsertMenuInput) => {
+      requireMenuWriteCapability();
+      return createCoreMenu(resolveMenuSiteId(siteId), input);
+    },
+    update: async (siteId: string, menuKey: string, input: UpsertMenuInput) => {
+      requireMenuWriteCapability();
+      return updateCoreMenuByKey(resolveMenuSiteId(siteId), menuKey, input);
+    },
+    delete: async (siteId: string, menuKey: string) => {
+      requireMenuWriteCapability();
+      return deleteCoreMenuByKey(resolveMenuSiteId(siteId), menuKey);
+    },
+    items: {
+      list: async (siteId: string, menuKey: string) => listCoreMenuItems(resolveMenuSiteId(siteId), menuKey),
+      get: async (siteId: string, menuKey: string, itemId: string) =>
+        getCoreMenuItem(resolveMenuSiteId(siteId), menuKey, itemId),
+      create: async (siteId: string, menuKey: string, input: UpsertMenuItemInput) => {
+        requireMenuWriteCapability();
+        return createCoreMenuItem(resolveMenuSiteId(siteId), menuKey, input);
+      },
+      update: async (siteId: string, menuKey: string, itemId: string, input: UpsertMenuItemInput) => {
+        requireMenuWriteCapability();
+        return updateCoreMenuItem(resolveMenuSiteId(siteId), menuKey, itemId, input);
+      },
+      delete: async (siteId: string, menuKey: string, itemId: string) => {
+        requireMenuWriteCapability();
+        return deleteCoreMenuItem(resolveMenuSiteId(siteId), menuKey, itemId);
+      },
+    },
+  };
+
   const core: CoreServiceApi = {
     async invoke(path, input) {
       const segments = String(path || "")
@@ -734,12 +859,64 @@ export function createPluginExtensionApi(
           return listPostTaxonomyAssignments(boundSiteId, domainKey, postId);
         }
       }
+      if (service === "menu" || service === "menus") {
+        const firstSegment = segments.shift() || "";
+        const firstAction = firstSegment.toLowerCase();
+        if (firstAction === "list") return menuApi.list(boundSiteId);
+        if (firstAction === "add" || firstAction === "create") {
+          return menuApi.create(boundSiteId, parseMenuInput(input));
+        }
+        if (firstAction === "location") {
+          const location = segments.shift() || "";
+          return menuApi.byLocation(boundSiteId, location);
+        }
+        const menuKey = firstSegment;
+        const action = (segments.shift() || "get").toLowerCase();
+        if (action === "get") return menuApi.get(boundSiteId, menuKey);
+        if (action === "edit" || action === "update") {
+          return menuApi.update(boundSiteId, menuKey, parseMenuInput(input));
+        }
+        if (action === "delete" || action === "remove") return menuApi.delete(boundSiteId, menuKey);
+        if (action === "item" || action === "items") {
+          const nextSegment = segments.shift() || "";
+          const nextAction = nextSegment.toLowerCase();
+          if (!nextSegment || nextAction === "list") return menuApi.items.list(boundSiteId, menuKey);
+          if (nextAction === "add" || nextAction === "create") {
+            return menuApi.items.create(boundSiteId, menuKey, parseMenuItemInput(input));
+          }
+          const itemId = nextSegment;
+          const itemAction = (segments.shift() || "get").toLowerCase();
+          if (itemAction === "get") return menuApi.items.get(boundSiteId, menuKey, itemId);
+          if (itemAction === "edit" || itemAction === "update") {
+            return menuApi.items.update(boundSiteId, menuKey, itemId, parseMenuItemInput(input));
+          }
+          if (itemAction === "delete" || itemAction === "remove") {
+            return menuApi.items.delete(boundSiteId, menuKey, itemId);
+          }
+        }
+      }
       throw new Error(`Unknown core route: ${path}`);
     },
     forSite(siteId: string) {
       const bound = String(siteId || "").trim();
       return {
         invoke: (path: string, input?: CoreApiInvokeInput) => core.invoke(`siteId.${bound}.${path}`, input),
+        menus: {
+          list: () => menuApi.list(bound),
+          get: (menuKey: string) => menuApi.get(bound, menuKey),
+          byLocation: (location: string) => menuApi.byLocation(bound, location),
+          create: (input: UpsertMenuInput) => menuApi.create(bound, input),
+          update: (menuKey: string, input: UpsertMenuInput) => menuApi.update(bound, menuKey, input),
+          delete: (menuKey: string) => menuApi.delete(bound, menuKey),
+          items: {
+            list: (menuKey: string) => menuApi.items.list(bound, menuKey),
+            get: (menuKey: string, itemId: string) => menuApi.items.get(bound, menuKey, itemId),
+            create: (menuKey: string, input: UpsertMenuItemInput) => menuApi.items.create(bound, menuKey, input),
+            update: (menuKey: string, itemId: string, input: UpsertMenuItemInput) =>
+              menuApi.items.update(bound, menuKey, itemId, input),
+            delete: (menuKey: string, itemId: string) => menuApi.items.delete(bound, menuKey, itemId),
+          },
+        },
         taxonomy: {
           list: () => core.invoke(`siteId.${bound}.taxonomy.list`) as Promise<Array<{ key: string; termCount: number }>>,
           terms: {
@@ -774,6 +951,7 @@ export function createPluginExtensionApi(
     dataDomain: {
       list: (siteId?: string) => base.listDataDomains(siteId),
     },
+    menus: menuApi,
     taxonomy: {
       list: () => listTaxonomies(),
       edit: (taxonomy: string, input?: CoreApiInvokeInput) => editTaxonomy(taxonomy, input),
@@ -873,6 +1051,29 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
       },
       dataDomain: {
         list: (siteId?: string) => base.listDataDomains(siteId),
+      },
+      menus: {
+        list: (siteId?: string) => {
+          const resolvedSiteId = String(siteId || "").trim();
+          if (!resolvedSiteId) throw new Error("[theme-guard] core.menus.list requires a site id.");
+          return listCoreMenus(resolvedSiteId);
+        },
+        get: (siteId: string, menuKey: string) => getCoreMenuByKey(siteId, menuKey),
+        byLocation: (siteId: string, location: string) => {
+          const normalized = normalizeCoreMenuLocation(location);
+          if (!normalized) throw new Error("Invalid menu location.");
+          return getCoreMenuByLocation(siteId, normalized);
+        },
+        create: async () => throwThemeSideEffectError("core.menus.create"),
+        update: async () => throwThemeSideEffectError("core.menus.update"),
+        delete: async () => throwThemeSideEffectError("core.menus.delete"),
+        items: {
+          list: (siteId: string, menuKey: string) => listCoreMenuItems(siteId, menuKey),
+          get: (siteId: string, menuKey: string, itemId: string) => getCoreMenuItem(siteId, menuKey, itemId),
+          create: async () => throwThemeSideEffectError("core.menus.items.create"),
+          update: async () => throwThemeSideEffectError("core.menus.items.update"),
+          delete: async () => throwThemeSideEffectError("core.menus.items.delete"),
+        },
       },
       taxonomy: {
         list: async () =>
@@ -983,11 +1184,28 @@ export async function getThemeContextApi(
   });
 
   const domains = await createThemeExtensionApi().listDataDomains(siteId);
-  const [siteUrl, seoMetaTitle, seoMetaDescription, publicPluginSettingsAllowlist] = await Promise.all([
+  const [
+    siteUrl,
+    seoMetaTitle,
+    seoMetaDescription,
+    publicPluginSettingsAllowlist,
+    headerMenu,
+    footerMenu,
+    dashboardMenu,
+    headerMenuDefinition,
+    footerMenuDefinition,
+    dashboardMenuDefinition,
+  ] = await Promise.all([
     getSettingByKey("site_url"),
     getSettingByKey("seo_meta_title"),
     getSettingByKey("seo_meta_description"),
     getSettingByKey("theme_public_plugin_setting_keys"),
+    getCoreMenuByLocation(siteId, "header"),
+    getCoreMenuByLocation(siteId, "footer"),
+    getCoreMenuByLocation(siteId, "dashboard"),
+    getCoreMenuDefinitionByLocation(siteId, "header"),
+    getCoreMenuDefinitionByLocation(siteId, "footer"),
+    getCoreMenuDefinitionByLocation(siteId, "dashboard"),
   ]);
   const allowedPluginSettingKeys = String(publicPluginSettingsAllowlist ?? "")
     .split(",")
@@ -1006,6 +1224,16 @@ export async function getThemeContextApi(
       seoMetaDescription,
     },
     domains,
+    menus: {
+      header: headerMenu,
+      footer: footerMenu,
+      dashboard: dashboardMenu,
+    },
+    menuLocations: {
+      header: headerMenuDefinition,
+      footer: footerMenuDefinition,
+      dashboard: dashboardMenuDefinition,
+    },
     pluginSettings,
     query,
   };

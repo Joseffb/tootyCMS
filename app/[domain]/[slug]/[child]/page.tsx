@@ -188,6 +188,18 @@ export default async function DomainPostPage({
       const html = renderThemeTemplate(themedTemplate.template, {
         theme_header: themedTemplate.partials?.header || "",
         theme_footer: themedTemplate.partials?.footer || "",
+        theme_menu: themedTemplate.partials?.menu || "",
+        theme_menu_item: themedTemplate.partials?.menuItem || "",
+        theme_menu_header: themedTemplate.partials?.menuByLocation?.header || "",
+        theme_menu_footer: themedTemplate.partials?.menuByLocation?.footer || "",
+        theme_menu_dashboard: themedTemplate.partials?.menuByLocation?.dashboard || "",
+        theme_menu_item_header: themedTemplate.partials?.menuItemByLocation?.header || "",
+        theme_menu_item_footer: themedTemplate.partials?.menuItemByLocation?.footer || "",
+        theme_menu_item_dashboard: themedTemplate.partials?.menuItemByLocation?.dashboard || "",
+        theme_menu_by_location: themedTemplate.partials?.menuByLocation || {},
+        theme_menu_item_by_location: themedTemplate.partials?.menuItemByLocation || {},
+        theme_menu_by_location_and_key: themedTemplate.partials?.menuByLocationAndKey || {},
+        theme_menu_item_by_location_and_key: themedTemplate.partials?.menuItemByLocationAndKey || {},
         site: {
           id: canonicalSite?.id,
           name: canonicalSite?.name || "Tooty Site",

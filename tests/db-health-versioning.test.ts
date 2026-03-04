@@ -39,6 +39,9 @@ const FULL_COLUMNS = [
 
 const REQUIRED_TABLES = [
   { table_name: "tooty_media" },
+  { table_name: "tooty_site_menus" },
+  { table_name: "tooty_site_menu_items" },
+  { table_name: "tooty_site_menu_item_meta" },
   { table_name: "tooty_communication_messages" },
   { table_name: "tooty_communication_attempts" },
   { table_name: "tooty_webcallback_events" },
@@ -75,6 +78,22 @@ describe("db health version tracking", () => {
     expect(report.migrationRequired).toBe(false);
     expect(report.pending).toEqual([]);
     expect(report.currentVersion).toBe(TARGET_DB_SCHEMA_VERSION);
+    expect(report.targetVersion).toBe(TARGET_DB_SCHEMA_VERSION);
+  });
+
+  it("uses the code-defined target version even when the stored target version is stale", async () => {
+    mocks.execute
+      .mockResolvedValueOnce({ rows: FULL_COLUMNS })
+      .mockResolvedValueOnce({ rows: REQUIRED_TABLES });
+    mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
+      if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      if (key === DB_SCHEMA_TARGET_VERSION_KEY) return "2026.02.26.3";
+      return fallback;
+    });
+
+    const report = await getDatabaseHealthReport();
+
+    expect(report.ok).toBe(true);
     expect(report.targetVersion).toBe(TARGET_DB_SCHEMA_VERSION);
   });
 
@@ -116,6 +135,30 @@ describe("db health version tracking", () => {
       { table: "tooty_media", column: "altText" },
       { table: "tooty_media", column: "caption" },
       { table: "tooty_media", column: "description" },
+    ]);
+  });
+
+  it("requires migration when native menu tables are missing even if the tracked version matches", async () => {
+    mocks.execute
+      .mockResolvedValueOnce({ rows: FULL_COLUMNS })
+      .mockResolvedValueOnce({
+        rows: REQUIRED_TABLES.filter((entry) => !entry.table_name.startsWith("tooty_site_menu")),
+      });
+    mocks.getTextSetting.mockImplementation(async (key: string, fallback: string) => {
+      if (key === DB_SCHEMA_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      if (key === DB_SCHEMA_TARGET_VERSION_KEY) return TARGET_DB_SCHEMA_VERSION;
+      return fallback;
+    });
+
+    const report = await getDatabaseHealthReport();
+
+    expect(report.ok).toBe(false);
+    expect(report.migrationRequired).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.02.1-native-menus")).toBe(true);
+    expect(report.missingTables).toEqual([
+      "tooty_site_menus",
+      "tooty_site_menu_items",
+      "tooty_site_menu_item_meta",
     ]);
   });
 

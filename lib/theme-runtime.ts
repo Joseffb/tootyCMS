@@ -1,4 +1,4 @@
-import { access, readFile } from "fs/promises";
+import { access, readFile, readdir } from "fs/promises";
 import path from "path";
 import { getSiteThemeId, listThemesWithState, type ThemeWithState } from "@/lib/themes";
 import { getThemesDirs } from "@/lib/extension-paths";
@@ -34,14 +34,40 @@ async function exists(filePath: string) {
 }
 
 async function loadThemePartials(themeRoot: string) {
-  const partials: { header: string; footer: string; commentItem: string; password: string; comments: string } = {
+  const partials: {
+    header: string;
+    footer: string;
+    commentItem: string;
+    password: string;
+    comments: string;
+    menu: string;
+    menuItem: string;
+    menuByLocation: Record<string, string>;
+    menuItemByLocation: Record<string, string>;
+    menuByLocationAndKey: Record<string, Record<string, string>>;
+    menuItemByLocationAndKey: Record<string, Record<string, string>>;
+  } = {
     header: "",
     footer: "",
     commentItem: "",
     password: "",
     comments: "",
+    menu: "",
+    menuItem: "",
+    menuByLocation: {},
+    menuItemByLocation: {},
+    menuByLocationAndKey: {},
+    menuItemByLocationAndKey: {},
   };
-  for (const partialName of ["header.html", "footer.html", "comment-item.html", "password.html", "comments.html"] as const) {
+  for (const partialName of [
+    "header.html",
+    "footer.html",
+    "comment-item.html",
+    "password.html",
+    "comments.html",
+    "menu.html",
+    "menu-item.html",
+  ] as const) {
     const partialPath = path.join(themeRoot, "templates", partialName);
     try {
       const partialRaw = await readFile(partialPath, "utf8");
@@ -50,9 +76,54 @@ async function loadThemePartials(themeRoot: string) {
       if (partialName === "comment-item.html") partials.commentItem = partialRaw;
       if (partialName === "password.html") partials.password = partialRaw;
       if (partialName === "comments.html") partials.comments = partialRaw;
+      if (partialName === "menu.html") partials.menu = partialRaw;
+      if (partialName === "menu-item.html") partials.menuItem = partialRaw;
     } catch {
       // optional partial
     }
+  }
+
+  for (const location of ["header", "footer", "dashboard"] as const) {
+    const locationMenuPath = path.join(themeRoot, "templates", `menu-${location}.html`);
+    const locationMenuItemPath = path.join(themeRoot, "templates", `menu-item-${location}.html`);
+    try {
+      partials.menuByLocation[location] = await readFile(locationMenuPath, "utf8");
+    } catch {
+      // optional partial
+    }
+    try {
+      partials.menuItemByLocation[location] = await readFile(locationMenuItemPath, "utf8");
+    } catch {
+      // optional partial
+    }
+  }
+
+  const templatesDir = path.join(themeRoot, "templates");
+  try {
+    const entries = await readdir(templatesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const name = entry.name.trim().toLowerCase();
+      if (name.startsWith("menu-item-")) {
+        const match = /^menu-item-([a-z0-9_-]+)-([a-z0-9_-]+)\.html$/.exec(name);
+        if (!match) continue;
+        const [, location, menuKey] = match;
+        const raw = await readFile(path.join(templatesDir, entry.name), "utf8");
+        partials.menuItemByLocationAndKey[location] = partials.menuItemByLocationAndKey[location] || {};
+        partials.menuItemByLocationAndKey[location]![menuKey] = raw;
+        continue;
+      }
+
+      if (!name.startsWith("menu-")) continue;
+      const match = /^menu-([a-z0-9_-]+)-([a-z0-9_-]+)\.html$/.exec(name);
+      if (!match) continue;
+      const [, location, menuKey] = match;
+      const raw = await readFile(path.join(templatesDir, entry.name), "utf8");
+      partials.menuByLocationAndKey[location] = partials.menuByLocationAndKey[location] || {};
+      partials.menuByLocationAndKey[location]![menuKey] = raw;
+    }
+  } catch {
+    // optional template directory scan
   }
   return partials;
 }

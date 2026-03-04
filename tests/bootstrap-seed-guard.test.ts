@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => {
   const insert = vi.fn();
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) }));
   const del = vi.fn(() => ({ where: vi.fn(async () => undefined) }));
+  const createSiteMenu = vi.fn(async () => ({ id: "menu-1" }));
+  const createSiteMenuItem = vi.fn(async () => ({ id: "item-1" }));
 
   return {
     listSiteIdsForUser: vi.fn(async () => []),
@@ -21,6 +23,8 @@ const mocks = vi.hoisted(() => {
     insertValues,
     update,
     del,
+    createSiteMenu,
+    createSiteMenuItem,
     seededRows: [] as unknown[],
   };
 });
@@ -50,6 +54,11 @@ vi.mock("@/lib/db", () => ({
     update: mocks.update,
     delete: mocks.del,
   },
+}));
+
+vi.mock("@/lib/menu-system", () => ({
+  createSiteMenu: mocks.createSiteMenu,
+  createSiteMenuItem: mocks.createSiteMenuItem,
 }));
 
 function buildInsertChain() {
@@ -84,6 +93,8 @@ describe("bootstrap seed guard", () => {
     mocks.usersFindFirst.mockReset();
     mocks.update.mockClear();
     mocks.del.mockClear();
+    mocks.createSiteMenu.mockClear();
+    mocks.createSiteMenuItem.mockClear();
     mocks.seededRows.length = 0;
 
     // getGlobalMainSite() before and after initial insert
@@ -108,6 +119,15 @@ describe("bootstrap seed guard", () => {
     await ensureMainSiteForUser("user-1", { seedStarterContent: false });
 
     expect(mocks.seededRows.length).toBe(0);
+    expect(mocks.createSiteMenu).toHaveBeenCalledWith(
+      "site-1",
+      expect.objectContaining({
+        key: "homepage",
+        title: "Homepage",
+        location: "header",
+      }),
+    );
+    expect(mocks.createSiteMenuItem).toHaveBeenCalledTimes(2);
   });
 
   it("seeds starter posts when seedStarterContent is true", async () => {

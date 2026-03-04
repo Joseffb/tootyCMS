@@ -3,6 +3,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SiteMenuSettingsPage from "@/app/app/(dashboard)/site/[id]/settings/menus/page";
+import { listSiteMenus } from "@/lib/menu-system";
+import { getDatabaseHealthReport } from "@/lib/db-health";
 
 vi.mock("@/lib/auth", () => ({
   getSession: vi.fn(async () => ({ user: { id: "user-1" } })),
@@ -54,6 +56,18 @@ vi.mock("@/lib/menu-system", () => ({
   updateSiteMenuItem: vi.fn(),
 }));
 
+vi.mock("@/lib/db-health", () => ({
+  getDatabaseHealthReport: vi.fn(async () => ({
+    ok: true,
+    currentVersion: "2026.03.02.1",
+    targetVersion: "2026.03.02.1",
+    pending: [],
+    missingTables: [],
+    missingColumns: [],
+    migrationRequired: false,
+  })),
+}));
+
 vi.mock("@/components/media/media-picker-field", () => ({
   default: ({ label }: { label: string }) => <div data-testid="menu-media-field">{label}</div>,
 }));
@@ -72,7 +86,7 @@ describe("SiteMenuSettingsPage", () => {
     cleanup();
   });
 
-  it("renders the native menu manager UI with menu and item editors", async () => {
+  it("renders the native menu manager UI with list-first controls", async () => {
     const ui = await SiteMenuSettingsPage({
       params: Promise.resolve({ id: "site-1" }),
       searchParams: Promise.resolve({}),
@@ -82,8 +96,111 @@ describe("SiteMenuSettingsPage", () => {
 
     expect(screen.getByText("Site Menus")).toBeTruthy();
     expect(screen.getByText("Primary Menu")).toBeTruthy();
+    expect(screen.getByText("Add Menu")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Edit menu Primary Menu" })).toBeTruthy();
+    expect(screen.queryByText("primary")).toBeNull();
+    expect(screen.queryByText("Menu Items")).toBeNull();
+    expect(screen.queryByText("Add Item")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Edit menu item Worlds" })).toBeNull();
+    expect(screen.queryByText("Edit Menu Item")).toBeNull();
+  });
+
+  it("renders the detail-first menu workspace when a menu is selected", async () => {
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({ menu: "menu-1" }),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("heading", { name: "Primary Menu" })).toBeTruthy();
+    expect(screen.getByText("Main navigation")).toBeTruthy();
     expect(screen.getByText("Menu Items")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Add Item" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Menus" })).toBeNull();
+  });
+
+  it("renders the edit-menu form inside the detail workspace", async () => {
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({ menu: "menu-1", editMenu: "menu-1" }),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("heading", { name: "Edit Menu" })).toBeTruthy();
+    expect(screen.getByText("Assigned Key")).toBeTruthy();
+    expect(screen.queryByLabelText("Assigned Key")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Menus" })).toBeNull();
+  });
+
+  it("renders the item editor on demand when edit state is requested", async () => {
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({ menu: "menu-1", item: "item-1", editItem: "item-1" }),
+    });
+
+    render(ui);
+
     expect(screen.getByText("Edit Menu Item")).toBeTruthy();
     expect(screen.getByTestId("menu-media-field")).toBeTruthy();
+  });
+
+  it("shows a list-first empty state when the site has no menus", async () => {
+    vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
+
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({}),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("link", { name: "Add Menu" })).toBeTruthy();
+    expect(screen.getByText("No native menus yet.")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Start with a Native Menu" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Import Current Header Menu" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Create Menu" })).toBeNull();
+  });
+
+  it("opens the create-menu editor on demand in an empty state", async () => {
+    vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
+
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({ createMenu: "1" }),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("heading", { name: "Create Menu" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Menu" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Start with a Native Menu" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Import Current Header Menu" })).toBeNull();
+  });
+
+  it("shows the database update guard when native menu tables are unavailable", async () => {
+    vi.mocked(getDatabaseHealthReport).mockResolvedValueOnce({
+      ok: false,
+      currentVersion: "2026.02.26.3",
+      targetVersion: "2026.03.02.1",
+      pending: ["2026.03.02.1-native-menus"],
+      missingTables: ["tooty_site_menus", "tooty_site_menu_items", "tooty_site_menu_item_meta"],
+      missingColumns: [],
+      migrationRequired: true,
+    });
+    vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
+
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({}),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("heading", { name: "Native Menus Need a Database Update" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Database Updates" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Menus" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Add Menu" })).toBeNull();
   });
 });

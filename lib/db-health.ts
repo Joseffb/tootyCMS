@@ -47,6 +47,9 @@ const REQUIRED_COLUMNS: RequiredColumn[] = [
 
 const REQUIRED_TABLE_SUFFIXES = [
   "media",
+  "site_menus",
+  "site_menu_items",
+  "site_menu_item_meta",
   "communication_messages",
   "communication_attempts",
   "webcallback_events",
@@ -113,9 +116,7 @@ export async function getDatabaseHealthReport() {
   }
 
   const currentVersion = await safeGetSetting(DB_SCHEMA_VERSION_KEY, "");
-  const targetVersion =
-    (await safeGetSetting(DB_SCHEMA_TARGET_VERSION_KEY, TARGET_DB_SCHEMA_VERSION)) ||
-    TARGET_DB_SCHEMA_VERSION;
+  const targetVersion = TARGET_DB_SCHEMA_VERSION;
   const versionBehind = currentVersion !== targetVersion;
   const migrationRequired = missing.length > 0 || missingTables.length > 0 || versionBehind;
   const pending = [
@@ -125,6 +126,17 @@ export async function getDatabaseHealthReport() {
             id: "2026.02.26.1-required-tables",
             title: "Create required communication/taxonomy compatibility tables",
             reason: "Missing required communication queue/webhook and/or taxonomy meta tables.",
+          },
+        ]
+      : []),
+    ...(missingTables.some((table) =>
+      [`${prefix}site_menus`, `${prefix}site_menu_items`, `${prefix}site_menu_item_meta`].includes(table),
+    )
+      ? [
+          {
+            id: "2026.03.02.1-native-menus",
+            title: "Create native menu tables",
+            reason: "Missing required native menu tables for the built-in menu spine.",
           },
         ]
       : []),
@@ -178,6 +190,9 @@ export async function applyDatabaseCompatibilityFixes() {
   const domainPostsTable = toTableName("domain_posts");
   const communicationMessagesTable = `${prefix}communication_messages`;
   const communicationAttemptsTable = `${prefix}communication_attempts`;
+  const siteMenusTable = `${prefix}site_menus`;
+  const siteMenuItemsTable = `${prefix}site_menu_items`;
+  const siteMenuItemMetaTable = `${prefix}site_menu_item_meta`;
   const webcallbackEventsTable = `${prefix}webcallback_events`;
   const webhookSubscriptionsTable = `${prefix}webhook_subscriptions`;
   const webhookDeliveriesTable = `${prefix}webhook_deliveries`;
@@ -208,10 +223,101 @@ export async function applyDatabaseCompatibilityFixes() {
   );
   await db.execute(
     sql.raw(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenusTable)} (
+        "id" text PRIMARY KEY,
+        "siteId" text NOT NULL,
+        "key" text NOT NULL,
+        "title" text NOT NULL,
+        "description" text NOT NULL DEFAULT '',
+        "location" text NULL,
+        "sortOrder" integer NOT NULL DEFAULT 10,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenuItemsTable)} (
+        "id" text PRIMARY KEY,
+        "menuId" text NOT NULL,
+        "parentId" text NULL,
+        "title" text NOT NULL,
+        "href" text NOT NULL,
+        "description" text NOT NULL DEFAULT '',
+        "mediaId" integer NULL,
+        "target" text NULL,
+        "rel" text NULL,
+        "external" boolean NOT NULL DEFAULT false,
+        "enabled" boolean NOT NULL DEFAULT true,
+        "sortOrder" integer NOT NULL DEFAULT 10,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenuItemMetaTable)} (
+        "id" serial PRIMARY KEY,
+        "menuItemId" text NOT NULL,
+        "key" text NOT NULL,
+        "value" text NOT NULL DEFAULT '',
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
       `DO $$ BEGIN
         ALTER TABLE ${quoteIdentifier(mediaTable)}
           ADD CONSTRAINT "${mediaTable}_siteId_fkey"
           FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
+          ON UPDATE CASCADE ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(siteMenusTable)}
+          ADD CONSTRAINT "${siteMenusTable}_siteId_fkey"
+          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
+          ON UPDATE CASCADE ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(siteMenuItemsTable)}
+          ADD CONSTRAINT "${siteMenuItemsTable}_menuId_fkey"
+          FOREIGN KEY ("menuId") REFERENCES ${quoteIdentifier(siteMenusTable)}("id")
+          ON UPDATE CASCADE ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(siteMenuItemsTable)}
+          ADD CONSTRAINT "${siteMenuItemsTable}_mediaId_fkey"
+          FOREIGN KEY ("mediaId") REFERENCES ${quoteIdentifier(mediaTable)}("id")
+          ON UPDATE CASCADE ON DELETE SET NULL;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `DO $$ BEGIN
+        ALTER TABLE ${quoteIdentifier(siteMenuItemMetaTable)}
+          ADD CONSTRAINT "${siteMenuItemMetaTable}_menuItemId_fkey"
+          FOREIGN KEY ("menuItemId") REFERENCES ${quoteIdentifier(siteMenuItemsTable)}("id")
           ON UPDATE CASCADE ON DELETE CASCADE;
       EXCEPTION WHEN duplicate_object THEN NULL;
       END $$`,
@@ -495,6 +601,46 @@ export async function applyDatabaseCompatibilityFixes() {
   );
   await db.execute(
     sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${siteMenusTable}_site_key_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "key")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenusTable}_site_location_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "location")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenusTable}_site_sort_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "sortOrder")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_menu_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("menuId")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_parent_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("parentId")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_menu_sort_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("menuId", "sortOrder")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS "${siteMenuItemMetaTable}_menuItemId_idx" ON ${quoteIdentifier(siteMenuItemMetaTable)} ("menuItemId")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${siteMenuItemMetaTable}_menu_item_key_idx" ON ${quoteIdentifier(siteMenuItemMetaTable)} ("menuItemId", "key")`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
       `CREATE INDEX IF NOT EXISTS "${communicationMessagesTable}_nextAttemptAt_idx" ON ${quoteIdentifier(communicationMessagesTable)} ("nextAttemptAt")`,
     ),
   );
@@ -600,6 +746,9 @@ export async function applyDatabaseCompatibilityFixes() {
       domainPostsTable,
       communicationMessagesTable,
       communicationAttemptsTable,
+      siteMenusTable,
+      siteMenuItemsTable,
+      siteMenuItemMetaTable,
       webcallbackEventsTable,
       webhookSubscriptionsTable,
       webhookDeliveriesTable,

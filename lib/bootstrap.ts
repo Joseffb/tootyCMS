@@ -6,6 +6,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { listSiteIdsForUser, upsertSiteUserRole } from "@/lib/site-user-tables";
 import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 import { NETWORK_ADMIN_ROLE } from "@/lib/rbac";
+import { createSiteMenu, createSiteMenuItem } from "@/lib/menu-system";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -147,6 +148,40 @@ async function createPrimarySiteForUser(userId: string) {
   }
   if (globalMain?.id) return globalMain.id;
   throw new Error("Main site bootstrap conflict: global main site could not be resolved.");
+}
+
+async function ensureDefaultHeaderMenu(siteId: string) {
+  try {
+    const menu = await createSiteMenu(siteId, {
+      key: "homepage",
+      title: "Homepage",
+      description: "Default primary navigation for new sites.",
+      location: "header",
+      sortOrder: 10,
+    });
+
+    await createSiteMenuItem(siteId, menu.id, {
+      title: "Homepage",
+      href: "/",
+      sortOrder: 10,
+    });
+
+    await createSiteMenuItem(siteId, menu.id, {
+      title: "Posts",
+      href: "/posts",
+      sortOrder: 20,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (
+      message.includes("site_menus") ||
+      message.includes("site_menu_items") ||
+      message.includes("duplicate key")
+    ) {
+      return;
+    }
+    throw error;
+  }
 }
 
 type TiptapNode = {
@@ -488,6 +523,7 @@ export async function ensureMainSiteForUser(
   const siteId = await createPrimarySiteForUser(userId);
   await upsertSiteUserRole(siteId, userId, defaultRole);
   await ensureDefaultSiteDataDomains(siteId);
+  await ensureDefaultHeaderMenu(siteId);
   if (seedStarterContent) {
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
     await ensureDefaultStarterPosts(siteId, userId, useRandomDefaultImages);
