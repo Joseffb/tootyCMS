@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { useMediaPicker } from "@/components/media/use-media-picker";
 
@@ -24,6 +25,7 @@ type SlideState = {
 
 type Props = {
   siteId: string;
+  siteSubdomain?: string;
   setId: string;
   childLabel: string;
   closeHref: string;
@@ -67,8 +69,26 @@ function isPreviewableImageUrl(value: string) {
   );
 }
 
+function toDomainLabelSlug(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildTitleDomainValue(title: string) {
+  const slug = toDomainLabelSlug(title);
+  if (!slug) return "{domain}";
+  if (slug === "main" || slug === "root" || slug === "home" || slug === "homepage") {
+    return "{domain}";
+  }
+  return `${slug}.{domain}`;
+}
+
 export default function CollectionChildEditModal({
   siteId,
+  siteSubdomain = "",
   setId,
   childLabel,
   closeHref,
@@ -87,6 +107,7 @@ export default function CollectionChildEditModal({
   const [status, setStatus] = useState("All changes saved.");
   const [isPending, startTransition] = useTransition();
   const { openMediaPicker, mediaPickerElement } = useMediaPicker();
+  const router = useRouter();
 
   function commit(next: SlideState, label: string) {
     setDraft(next);
@@ -106,6 +127,7 @@ export default function CollectionChildEditModal({
       formData.set("sort_order", next.sortOrder);
       try {
         await saveAction(formData);
+        router.refresh();
         setStatus(`${label} saved.`);
       } catch {
         setStatus(`Failed to save ${label.toLowerCase()}.`);
@@ -128,6 +150,12 @@ export default function CollectionChildEditModal({
         return;
       }
       const next = { ...draft, [field]: nextValue };
+      if (field === "title") {
+        const prevTitleDomainValue = buildTitleDomainValue(draft.title);
+        if (String(draft.ctaUrl || "").trim() === prevTitleDomainValue) {
+          next.ctaUrl = buildTitleDomainValue(nextValue);
+        }
+      }
       event.currentTarget.textContent = displayValue(nextValue, fallback);
       commit(next, label);
     };
@@ -137,6 +165,10 @@ export default function CollectionChildEditModal({
     const current = Number(draft.sortOrder || "0");
     const nextValue = String(Math.max(0, Number.isFinite(current) ? current + delta : 0));
     commit({ ...draft, sortOrder: nextValue }, "Sort Order");
+  }
+
+  function setCtaUrl(nextValue: string) {
+    commit({ ...draft, ctaUrl: nextValue }, "CTA URL");
   }
 
   async function submitDelete() {
@@ -152,6 +184,12 @@ export default function CollectionChildEditModal({
     (isPreviewableImageUrl(draft.image) ? normalizeImageValue(draft.image) : "") ||
     mediaItems.find((item) => String(item.id) === draft.mediaId)?.url ||
     "";
+  const titleDomainValue = buildTitleDomainValue(draft.title);
+  const normalizedSiteSubdomain = String(siteSubdomain || "").trim().toLowerCase();
+  const currentSubdomainValue =
+    normalizedSiteSubdomain && normalizedSiteSubdomain !== "main"
+      ? `${normalizedSiteSubdomain}.{domain}`
+      : "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
@@ -316,6 +354,41 @@ export default function CollectionChildEditModal({
 
             <div className="rounded-xl border border-stone-200 bg-stone-50 p-4">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA URL</div>
+              <p className="mb-2 text-xs text-stone-600">
+                Tip: use <code>{"{domain}"}</code> for root and <code>label.{"{domain}"}</code> for subdomains.
+              </p>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCtaUrl("{domain}")}
+                  className="rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-black"
+                >
+                  Root
+                </button>
+                {currentSubdomainValue ? (
+                  <button
+                    type="button"
+                    onClick={() => setCtaUrl(currentSubdomainValue)}
+                    className="rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-black"
+                  >
+                    Current Sub
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setCtaUrl(titleDomainValue)}
+                  className="rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-black"
+                >
+                  Label.Root
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCtaUrl("https://")}
+                  className="rounded-md border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-black"
+                >
+                  External
+                </button>
+              </div>
               <textarea
                 value={draft.ctaUrl}
                 onChange={(event) => setDraft((current) => ({ ...current, ctaUrl: event.target.value }))}

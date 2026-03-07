@@ -1,27 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findFirst: vi.fn(),
-  updateSetWhereReturning: vi.fn(),
+  findDomainPostForMutation: vi.fn(),
+  updateSiteDomainPostById: vi.fn(),
   canTransitionContentState: vi.fn(),
   emitDomainEvent: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({
-  default: {
-    query: {
-      domainPosts: {
-        findFirst: mocks.findFirst,
-      },
-    },
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => ({
-          returning: mocks.updateSetWhereReturning,
-        })),
-      })),
-    })),
-  },
+vi.mock("@/lib/site-domain-post-store", () => ({
+  findDomainPostForMutation: mocks.findDomainPostForMutation,
+  updateSiteDomainPostById: mocks.updateSiteDomainPostById,
 }));
 
 vi.mock("@/lib/content-state-engine", () => ({
@@ -37,18 +25,19 @@ import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
 
 describe("content lifecycle service", () => {
   beforeEach(() => {
-    mocks.findFirst.mockReset();
-    mocks.updateSetWhereReturning.mockReset();
+    mocks.findDomainPostForMutation.mockReset();
+    mocks.updateSiteDomainPostById.mockReset();
     mocks.canTransitionContentState.mockReset();
     mocks.emitDomainEvent.mockReset();
   });
 
   it("blocks when transition engine denies", async () => {
-    mocks.findFirst.mockResolvedValue({
+    mocks.findDomainPostForMutation.mockResolvedValue({
       id: "p1",
       siteId: "s1",
       published: false,
       dataDomainId: 1,
+      dataDomainKey: "post",
     });
     mocks.canTransitionContentState.mockResolvedValue(false);
 
@@ -61,16 +50,15 @@ describe("content lifecycle service", () => {
   });
 
   it("updates and emits publish lifecycle event", async () => {
-    mocks.findFirst.mockResolvedValue({
+    mocks.findDomainPostForMutation.mockResolvedValue({
       id: "p1",
       siteId: "s1",
       published: false,
       dataDomainId: 1,
+      dataDomainKey: "post",
     });
     mocks.canTransitionContentState.mockResolvedValue(true);
-    mocks.updateSetWhereReturning.mockResolvedValue([
-      { id: "p1", siteId: "s1", published: true, dataDomainId: 1 },
-    ]);
+    mocks.updateSiteDomainPostById.mockResolvedValue({ id: "p1", siteId: "s1", published: true, dataDomainId: 1 });
 
     const result = await setDomainPostPublishedState({
       postId: "p1",
@@ -82,4 +70,3 @@ describe("content lifecycle service", () => {
     expect(mocks.emitDomainEvent).toHaveBeenCalledTimes(1);
   });
 });
-

@@ -5,6 +5,7 @@ import db from "@/lib/db";
 import { createThemeBridgeToken } from "@/lib/theme-auth-bridge";
 import { userMeta, users } from "@/lib/schema";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { traceInfo } from "@/lib/debug";
 import {
   deriveThemeBridgeAdminBaseFromReturnUrl,
   isAllowedThemeBridgeReturnUrl,
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
   const returnUrl = String(url.searchParams.get("return") || "").trim();
   if (!isAllowedThemeBridgeReturnUrl(returnUrl)) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:theme-bridge-start] invalid return URL", { returnUrl });
+      traceInfo("theme-bridge-start", "invalid return URL", { returnUrl });
     }
     return redirectNoStore(new URL("/", url), 302);
   }
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
     const callbackUrl = `${appOrigin}/theme-bridge-start?${nestedParams.toString()}`;
     const loginParams = new URLSearchParams({ callbackUrl });
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:theme-bridge-start] unauthenticated, redirecting to login", {
+      traceInfo("theme-bridge-start", "unauthenticated, redirecting to login", {
         appOrigin,
         callbackUrl,
       });
@@ -70,7 +71,7 @@ export async function GET(request: Request) {
   });
   if (!token) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:theme-bridge-start] failed to mint token", { userId });
+      traceInfo("theme-bridge-start", "failed to mint token", { userId });
     }
     return redirectNoStore(`${returnUrl}#tootyBridgeAttempted=1`, 302);
   }
@@ -82,7 +83,7 @@ export async function GET(request: Request) {
   });
   if (displayName) hashParams.set("tootyBridgeDisplayName", displayName);
   if (process.env.TRACE_PROFILE === "Test") {
-    console.info("[trace:Test:theme-bridge-start] authenticated redirect", {
+    traceInfo("theme-bridge-start", "authenticated redirect", {
       userId,
       returnUrl,
       hasDisplayName: Boolean(displayName),

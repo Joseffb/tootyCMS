@@ -2,9 +2,17 @@ import { unstable_cache } from "next/cache";
 import db from "./db";
 import { isMissingRelationError } from "./db-errors";
 import { and, desc, eq, inArray, not } from "drizzle-orm";
-import { dataDomains, domainPostMeta, domainPosts, sites, termRelationships, termTaxonomies, termTaxonomyDomains, terms, users } from "./schema";
+import { sites, users } from "./schema";
+import { getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
 import { convertTiptapJSONToMarkdown } from "@/lib/convertTiptapJSON";
 import { serialize } from "next-mdx-remote/serialize";
+import {
+  getSiteDomainPostBySlug,
+  listNetworkDomainPosts,
+  listSiteDomainPostMeta,
+  listSiteDomainPostMetaMany,
+  listSiteDomainPosts,
+} from "@/lib/site-domain-post-store";
 
 function normalizeDomainForLookup(domain: string) {
   return domain.trim().toLowerCase().replace(/:\d+$/, "");
@@ -63,33 +71,25 @@ export async function getSiteData(domain: string) {
 }
 
 export async function getPostsForSite(domain: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
-
   return await unstable_cache(
     async () => {
-      const rows = await db
-        .select({
-          title: domainPosts.title,
-          description: domainPosts.description,
-          slug: domainPosts.slug,
-          image: domainPosts.image,
-          imageBlurhash: domainPosts.imageBlurhash,
-          createdAt: domainPosts.createdAt,
-        })
-        .from(domainPosts)
-        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .innerJoin(sites, eq(domainPosts.siteId, sites.id))
-        .where(
-          and(
-            eq(dataDomains.key, "post"),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          )
-        )
-        .orderBy(desc(domainPosts.createdAt));
-      return rows;
+      const site = await getSiteData(domain);
+      if (!site?.id) return [];
+      const rows = await listSiteDomainPosts({
+        siteId: site.id,
+        dataDomainKey: "post",
+        published: true,
+      });
+      return rows
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+        .map((row) => ({
+          title: row.title,
+          description: row.description,
+          slug: row.slug,
+          image: row.image,
+          imageBlurhash: row.imageBlurhash,
+          createdAt: row.createdAt,
+        }));
     },
     [`${domain}-posts-v3`], // cache key
     {
@@ -98,92 +98,65 @@ export async function getPostsForSite(domain: string) {
     }
   )();
 }
-export async function getPostData(domain: string, slug: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
-
+export async function getPostData(
+  domain: string,
+  slug: string,
+  options?: {
+    includeMdxSource?: boolean;
+    includeAdjacentPosts?: boolean;
+  },
+) {
   return await unstable_cache(
     async () => {
-      const data = await db
-        .select({
-          post: domainPosts,
-          site: sites,
-          user: users,
-        })
-        .from(domainPosts)
-        .leftJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .leftJoin(sites, eq(sites.id, domainPosts.siteId))
-        .leftJoin(users, eq(users.id, sites.userId))
-        .where(
-          and(
-            eq(domainPosts.slug, slug),
-            eq(domainPosts.published, true),
-            eq(dataDomains.key, "post"),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          ),
-        )
-        .then((res) => {
-          const row = res[0];
-          if (!row || !row.post) return null;
-          const postData = row.post as Record<string, unknown>;
-          const siteData = row.site as Record<string, unknown> | null;
-          return {
-            ...postData,
-            site: siteData
-              ? {
-                  ...siteData,
-                  user: row.user,
-                }
-              : null,
-          };
-        });
+      const site = await getSiteData(domain);
+      if (!site?.id) return null;
+      const post = await getSiteDomainPostBySlug({
+        siteId: site.id,
+        slug,
+        dataDomainKey: "post",
+        published: true,
+      });
+      if (!post) return null;
 
-      if (!data) return null;
-      const typedData = data as any;
+      const includeMdxSource = options?.includeMdxSource !== false;
+      const includeAdjacentPosts = options?.includeAdjacentPosts !== false;
 
       const [mdxSource, adjacentPosts, metaRows] = await Promise.all([
-        getMdxSource(typedData.content!),
-        db
-          .select({
-            slug: domainPosts.slug,
-            title: domainPosts.title,
-            createdAt: domainPosts.createdAt,
-            description: domainPosts.description,
-            image: domainPosts.image,
-            imageBlurhash: domainPosts.imageBlurhash,
-          })
-          .from(domainPosts)
-          .leftJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-          .leftJoin(sites, eq(sites.id, domainPosts.siteId))
-          .where(
-            and(
-              eq(domainPosts.published, true),
-              eq(dataDomains.key, "post"),
-              not(eq(domainPosts.id, typedData.id)),
-              subdomain
-                ? eq(sites.subdomain, subdomain)
-                : eq(sites.customDomain, normalizedDomain),
-            ),
-          ),
-        db
-          .select({
-            key: domainPostMeta.key,
-            value: domainPostMeta.value,
-          })
-          .from(domainPostMeta)
-          .where(eq(domainPostMeta.domainPostId, typedData.id)),
+        includeMdxSource ? getMdxSource(post.content || "") : Promise.resolve(null),
+        includeAdjacentPosts
+          ? listSiteDomainPosts({
+              siteId: site.id,
+              dataDomainKey: "post",
+              published: true,
+            }).then((rows) =>
+              rows
+                .filter((row) => row.id !== post.id)
+                .map((row) => ({
+                  slug: row.slug,
+                  title: row.title,
+                  createdAt: row.createdAt,
+                  description: row.description,
+                  image: row.image,
+                  imageBlurhash: row.imageBlurhash,
+                })),
+            )
+          : Promise.resolve([]),
+        listSiteDomainPostMeta({
+          siteId: site.id,
+          dataDomainKey: "post",
+          postId: post.id,
+        }),
       ]);
-      console.log("mdxSource");
+
       return {
-        ...typedData,
+        ...post,
+        site,
         mdxSource,
         adjacentPosts,
         meta: metaRows,
       };
     },
-    [`${domain}-${slug}-v3`],
+    [`${domain}-${slug}-v4`, options?.includeMdxSource === false ? "no-mdx" : "with-mdx", options?.includeAdjacentPosts === false ? "no-adjacent" : "with-adjacent"],
     {
       revalidate: 900, // 15 minutes
       tags: [`${domain}-${slug}`],
@@ -192,54 +165,26 @@ export async function getPostData(domain: string, slug: string) {
 }
 
 export async function getDomainPostData(domain: string, dataDomainKey: string, slug: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
-
   return await unstable_cache(
     async () => {
-      const data = await db
-        .select({
-          post: domainPosts,
-          site: sites,
-          user: users,
-          dataDomain: dataDomains,
-        })
-        .from(domainPosts)
-        .leftJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .leftJoin(sites, eq(sites.id, domainPosts.siteId))
-        .leftJoin(users, eq(users.id, sites.userId))
-        .where(
-          and(
-            eq(domainPosts.slug, slug),
-            eq(domainPosts.published, true),
-            eq(dataDomains.key, dataDomainKey),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          ),
-        )
-        .then((res) => {
-          const row = res[0];
-          if (!row?.post) return null;
-          const postRecord = row.post as Record<string, unknown>;
-          const siteRecord = row.site as Record<string, unknown> | null;
-          return {
-            ...postRecord,
-            site: siteRecord
-              ? {
-                  ...siteRecord,
-                  user: row.user,
-                }
-              : null,
-            dataDomain: row.dataDomain ?? null,
-          };
-        });
-
-      if (!data) return null;
-
-      const mdxSource = await getMdxSource((data as any).content ?? "");
+      const site = await getSiteData(domain);
+      if (!site?.id) return null;
+      const post = await getSiteDomainPostBySlug({
+        siteId: site.id,
+        slug,
+        dataDomainKey,
+        published: true,
+      });
+      if (!post) return null;
+      const mdxSource = await getMdxSource(post.content ?? "");
       return {
-        ...(data as any),
+        ...post,
+        site,
+        dataDomain: {
+          id: post.dataDomainId,
+          key: post.dataDomainKey,
+          label: post.dataDomainLabel,
+        },
         mdxSource,
         adjacentPosts: [],
       };
@@ -253,32 +198,27 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
 }
 
 export async function getDomainPostsForSite(domain: string, dataDomainKey: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
   return unstable_cache(
-    async () =>
-      db
-        .select({
-          id: domainPosts.id,
-          title: domainPosts.title,
-          description: domainPosts.description,
-          content: domainPosts.content,
-          slug: domainPosts.slug,
-          createdAt: domainPosts.createdAt,
-        })
-        .from(domainPosts)
-        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .innerJoin(sites, eq(sites.id, domainPosts.siteId))
-        .where(
-          and(
-            eq(domainPosts.published, true),
-            eq(dataDomains.key, dataDomainKey),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          ),
-        )
-        .orderBy(desc(domainPosts.createdAt)),
+    async () => {
+      const site = await getSiteData(domain);
+      if (!site?.id) return [];
+      return listSiteDomainPosts({
+        siteId: site.id,
+        dataDomainKey,
+        published: true,
+      }).then((rows) =>
+        rows
+          .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+          .map((row) => ({
+            id: row.id,
+            title: row.title,
+            description: row.description,
+            content: row.content,
+            slug: row.slug,
+            createdAt: row.createdAt,
+          })),
+      );
+    },
     [`${domain}-${dataDomainKey}-archive-v2`],
     {
       tags: [`${domain}-posts`],
@@ -311,66 +251,22 @@ function extractFirstImageFromContent(rawContent: unknown): string {
 }
 
 export async function getFeaturedProjectsForSite(domain: string) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
   return await unstable_cache(
     async () => {
-      const rows = await db
-        .select({
-          id: domainPosts.id,
-          title: domainPosts.title,
-          description: domainPosts.description,
-          slug: domainPosts.slug,
-          content: domainPosts.content,
-          createdAt: domainPosts.createdAt,
-          domainKey: dataDomains.key,
-        })
-        .from(domainPosts)
-        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .innerJoin(sites, eq(sites.id, domainPosts.siteId))
-        .where(
-          and(
-            eq(domainPosts.published, true),
-            eq(dataDomains.key, "showcase"),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          ),
-        )
-        .orderBy(desc(domainPosts.createdAt))
-        .limit(20);
-
+      const site = await getSiteData(domain);
+      if (!site?.id) return [];
+      const rows = await listSiteDomainPosts({
+        siteId: site.id,
+        dataDomainKey: "showcase",
+        published: true,
+      });
       if (!rows.length) return [];
 
-      const ids = rows.map((row) => row.id);
-      const relRows = await db
-        .select({
-          objectId: termRelationships.objectId,
-          taxonomy: termTaxonomies.taxonomy,
-          slug: terms.slug,
-          name: terms.name,
-        })
-        .from(termRelationships)
-        .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
-        .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-        .where(and(eq(termTaxonomies.taxonomy, "category"), inArray(termRelationships.objectId, ids as string[])));
-
-      const metaRows = await db
-        .select({
-          domainPostId: domainPostMeta.domainPostId,
-          key: domainPostMeta.key,
-          value: domainPostMeta.value,
-        })
-        .from(domainPostMeta)
-        .where(inArray(domainPostMeta.domainPostId, ids as string[]));
-
-      const termsByObject = new Map<string, Array<{ slug: string | null; name: string | null }>>();
-      for (const row of relRows) {
-        const list = termsByObject.get(row.objectId) || [];
-        list.push({ slug: row.slug, name: row.name });
-        termsByObject.set(row.objectId, list);
-      }
-
+      const metaRows = await listSiteDomainPostMetaMany({
+        siteId: site.id,
+        dataDomainKey: "showcase",
+        postIds: rows.map((row) => row.id),
+      });
       const metaByObject = new Map<string, Record<string, string>>();
       for (const row of metaRows) {
         const bag = metaByObject.get(row.domainPostId) || {};
@@ -378,38 +274,24 @@ export async function getFeaturedProjectsForSite(domain: string) {
         metaByObject.set(row.domainPostId, bag);
       }
 
-      const featured = rows
-        .filter((row) => {
-          const terms = termsByObject.get(row.id) || [];
-          return terms.some((term) => (term.slug || "").toLowerCase() === "featured");
-        })
-        .slice(0, 4)
-        .map((row) => {
-          const terms = termsByObject.get(row.id) || [];
-          const meta = metaByObject.get(row.id) || {};
-          const technologyTerms = terms
-            .filter((term) => (term.slug || "").toLowerCase() !== "featured")
-            .map((term) => term.name || term.slug || "")
-            .filter(Boolean);
-          const thumbnail =
-            meta.thumbnail ||
-            meta.thumbnail_image ||
-            meta.image ||
-            meta.cover ||
-            extractFirstImageFromContent(row.content || "");
-          const link = meta.link || meta.url || meta.external_url || "";
-
-          return {
-            title: row.title || "Untitled Showcase",
-            description: row.description || "Showcase entry",
-            href: link || `/${domain}/${row.domainKey}/${row.slug}`,
-            thumbnail,
-            technologies: technologyTerms,
-            createdAt: row.createdAt,
-          };
-        });
-
-      return featured;
+      return rows.slice(0, 4).map((row) => {
+        const meta = metaByObject.get(row.id) || {};
+        const thumbnail =
+          meta.thumbnail ||
+          meta.thumbnail_image ||
+          meta.image ||
+          meta.cover ||
+          extractFirstImageFromContent(row.content || "");
+        const link = meta.link || meta.url || meta.external_url || "";
+        return {
+          title: row.title || "Untitled Showcase",
+          description: row.description || "Showcase entry",
+          href: link || `/${domain}/${row.dataDomainKey}/${row.slug}`,
+          thumbnail,
+          technologies: [],
+          createdAt: row.createdAt,
+        };
+      });
     },
     [`${domain}-featured-showcases-v1`],
     {
@@ -424,43 +306,69 @@ export async function getTaxonomyArchiveData(
   taxonomy: "category" | "tag",
   termSlug: string,
 ) {
-  const normalizedDomain = normalizeDomainForLookup(domain);
-  const subdomain = parseSubdomainFromDomain(normalizedDomain);
-  const rows = await unstable_cache(
-    async () =>
-      db
-        .select({
-          termName: terms.name,
-          termSlug: terms.slug,
-          postTitle: domainPosts.title,
-          postDescription: domainPosts.description,
-          postSlug: domainPosts.slug,
-          postCreatedAt: domainPosts.createdAt,
-          postDataDomain: dataDomains.key,
-        })
-        .from(termRelationships)
-        .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
-        .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-        .innerJoin(domainPosts, eq(domainPosts.id, termRelationships.objectId))
-        .innerJoin(
-          termTaxonomyDomains,
-          and(
-            eq(termTaxonomyDomains.termTaxonomyId, termTaxonomies.id),
-            eq(termTaxonomyDomains.dataDomainId, domainPosts.dataDomainId),
-          ),
-        )
-        .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-        .innerJoin(sites, eq(sites.id, domainPosts.siteId))
-        .where(
-          and(
-            eq(termTaxonomies.taxonomy, taxonomy),
-            eq(terms.slug, termSlug),
-            eq(domainPosts.published, true),
-            subdomain
-              ? eq(sites.subdomain, subdomain)
-              : eq(sites.customDomain, normalizedDomain),
-          ),
-        ),
+  const result = await unstable_cache(
+    async () => {
+      try {
+        const site = await getSiteData(domain);
+        if (!site?.id) return null;
+        const relationRows = await withSiteTaxonomyTableRecovery(site.id, async () => {
+          const { termsTable, termTaxonomiesTable, termRelationshipsTable } = getSiteTaxonomyTables(site.id);
+          return db
+            .select({
+              termName: termsTable.name,
+              termSlug: termsTable.slug,
+              objectId: termRelationshipsTable.objectId,
+            })
+            .from(termRelationshipsTable)
+            .innerJoin(termTaxonomiesTable, eq(termTaxonomiesTable.id, termRelationshipsTable.termTaxonomyId))
+            .innerJoin(termsTable, eq(termsTable.id, termTaxonomiesTable.termId))
+            .where(
+              and(
+                eq(termTaxonomiesTable.taxonomy, taxonomy),
+                eq(termsTable.slug, termSlug),
+              ),
+            );
+        });
+        if (!relationRows.length) return null;
+        const postIds = relationRows.map((row) => String(row.objectId || "")).filter(Boolean);
+        if (!postIds.length) return null;
+        const posts = await listSiteDomainPosts({
+          siteId: site.id,
+          ids: postIds,
+          published: true,
+        });
+        if (!posts.length) return null;
+        const postById = new Map(posts.map((post) => [post.id, post]));
+        const rows = relationRows
+          .map((row) => {
+            const post = postById.get(String(row.objectId || ""));
+            if (!post) return null;
+            return {
+              termName: row.termName,
+              termSlug: row.termSlug,
+              postTitle: post.title,
+              postDescription: post.description,
+              postSlug: post.slug,
+              postCreatedAt: post.createdAt,
+              postDataDomain: post.dataDomainKey,
+            };
+          })
+          .filter(Boolean) as Array<{
+          termName: string | null;
+          termSlug: string | null;
+          postTitle: string;
+          postDescription: string;
+          postSlug: string;
+          postCreatedAt: Date;
+          postDataDomain: string;
+        }>;
+        if (!rows.length) return null;
+        return rows;
+      } catch (error) {
+        if (isMissingRelationError(error)) return [];
+        throw error;
+      }
+    },
     [`${domain}-${taxonomy}-${termSlug}-v2`],
     {
       revalidate: 900,
@@ -468,7 +376,16 @@ export async function getTaxonomyArchiveData(
     },
   )();
 
-  if (!rows.length) return null;
+  if (!result || !result.length) return null;
+  const rows = result as Array<{
+    termName: string | null;
+    termSlug: string | null;
+    postTitle: string;
+    postDescription: string;
+    postSlug: string;
+    postDataDomain: string;
+    postCreatedAt: Date;
+  }>;
   return {
     taxonomy,
     term: {
@@ -485,7 +402,6 @@ export async function getTaxonomyArchiveData(
   };
 }
 export async function getMdxSource(postContents: string) {
-  console.log("🧾 getMdxSource Before Everything:", postContents);
   const json = (() => {
     try {
       return typeof postContents === "string"
@@ -501,11 +417,8 @@ export async function getMdxSource(postContents: string) {
     console.error("🚨 Invalid TipTap JSON structure", json);
     return null;
   }
-  console.log("🧾 Before Tiptap:", json);
 
   const markdown = convertTiptapJSONToMarkdown(json);
-  console.log("🧾 Tiptap JSON input:", JSON.stringify(json, null, 2));
-  console.log("📝 Converted Markdown:\n", markdown);
   return await serialize(markdown, {
     mdxOptions: {
       remarkPlugins: [],
@@ -523,46 +436,33 @@ export type SitemapPost = {
 };
 
 export async function getAllPosts(): Promise<SitemapPost[]> {
-  let results: Array<{
-    slug: string;
-    dataDomain: string;
-    siteId: string | null;
-    subdomain: string | null;
-    customDomain: string | null;
-    updatedAt: Date | null;
-  }> = [];
-
-  try {
-    results = await db
-      .select({
-        slug: domainPosts.slug,
-        dataDomain: dataDomains.key,
-        siteId: domainPosts.siteId,
-        subdomain: sites.subdomain,
-        customDomain: sites.customDomain,
-        updatedAt: domainPosts.updatedAt,
-      })
-      .from(domainPosts)
-      .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-      .innerJoin(sites, eq(domainPosts.siteId, sites.id))
-      .where(eq(domainPosts.published, true));
-  } catch (error) {
-    // Fresh installs can build before migrations create CMS tables.
-    if (isMissingRelationError(error)) return [];
-    throw error;
-  }
-
-  return results
-    .filter((row) => typeof row.siteId === "string" && row.siteId.length > 0)
-    .map((row) => ({
-    slug: row.slug,
-    dataDomain: row.dataDomain || "post",
-    siteId: row.siteId as string,
-    domain:
-      row.customDomain ||
-      (row.subdomain === "main"
-        ? String(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost")
-        : `${row.subdomain || "main"}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost"}`),
-    updatedAt: row.updatedAt,
-    }));
+  const siteRows = await db.query.sites.findMany({
+    columns: {
+      id: true,
+      subdomain: true,
+      customDomain: true,
+    },
+  });
+  if (!siteRows.length) return [];
+  const posts = await listNetworkDomainPosts({
+    siteIds: siteRows.map((site) => site.id),
+    published: true,
+  });
+  const siteMap = new Map(
+    siteRows.map((site) => [site.id, { subdomain: site.subdomain, customDomain: site.customDomain }]),
+  );
+  return posts.map((post) => {
+    const site = siteMap.get(post.siteId);
+    return {
+      slug: post.slug,
+      dataDomain: post.dataDomainKey || "post",
+      siteId: post.siteId,
+      domain:
+        site?.customDomain ||
+        (site?.subdomain === "main"
+          ? String(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost")
+          : `${site?.subdomain || "main"}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost"}`),
+      updatedAt: post.updatedAt,
+    };
+  });
 }

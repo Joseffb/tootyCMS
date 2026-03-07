@@ -18,7 +18,11 @@ if (fs.existsSync(envPath)) {
 }
 
 // Force isolated, domain-neutral test defaults so local branded installs do not leak into E2E.
-process.env.CMS_DB_PREFIX = process.env.CMS_DB_PREFIX_TEST_OVERRIDE || "tooty_";
+// Respect wrapper-provided slot prefixes first so the app server and Playwright workers share one DB namespace.
+process.env.CMS_DB_PREFIX =
+  process.env.CMS_DB_PREFIX ||
+  process.env.CMS_DB_PREFIX_TEST_OVERRIDE ||
+  "tooty_";
 process.env.ADMIN_PATH = process.env.ADMIN_PATH_TEST_OVERRIDE || "cp";
 if (process.env.POSTGRES_TEST_URL) {
   process.env.POSTGRES_URL = process.env.POSTGRES_TEST_URL;

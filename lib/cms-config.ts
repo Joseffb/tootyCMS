@@ -22,6 +22,7 @@ export const WRITING_SINGLE_PATTERN_KEY = "writing_single_pattern";
 export const WRITING_LIST_PATTERN_KEY = "writing_list_pattern";
 export const WRITING_NO_DOMAIN_PREFIX_KEY = "writing_no_domain_prefix";
 export const WRITING_NO_DOMAIN_DATA_DOMAIN_KEY = "writing_no_domain_data_domain";
+export const WRITING_ENABLE_TAXONOMY_SHORTCUTS_KEY = "writing_enable_taxonomy_shortcuts";
 export const SCHEDULES_ENABLED_KEY = "schedules_enabled";
 export const SCHEDULES_PING_SITEMAP_KEY = "schedules_ping_sitemap";
 export const THEME_QUERY_NETWORK_ENABLED_KEY = "theme_query_network_enabled";
@@ -255,7 +256,16 @@ export async function getWritingSettings() {
 
 export async function getSiteWritingSettings(siteId: string) {
   const global = await getWritingSettings();
-  const [permalinkMode, singlePattern, listPattern, noDomainPrefix, noDomainDataDomain, editorMode, enableComments] = await Promise.all([
+  const [
+    permalinkMode,
+    singlePattern,
+    listPattern,
+    noDomainPrefix,
+    noDomainDataDomain,
+    editorMode,
+    enableComments,
+    enableTaxonomyShortcuts,
+  ] = await Promise.all([
     getSiteTextSetting(siteId, WRITING_PERMALINK_MODE_KEY, "default"),
     getSiteTextSetting(siteId, WRITING_SINGLE_PATTERN_KEY, "/%domain%/%slug%"),
     getSiteTextSetting(siteId, WRITING_LIST_PATTERN_KEY, "/%domain_plural%"),
@@ -263,6 +273,7 @@ export async function getSiteWritingSettings(siteId: string) {
     getSiteTextSetting(siteId, WRITING_NO_DOMAIN_DATA_DOMAIN_KEY, "post"),
     getSiteTextSetting(siteId, WRITING_EDITOR_MODE_KEY, global.editorMode),
     getSiteBooleanSetting(siteId, WRITING_ENABLE_COMMENTS_KEY, true),
+    getSiteBooleanSetting(siteId, WRITING_ENABLE_TAXONOMY_SHORTCUTS_KEY, false),
   ]);
 
   const permalinkModeValue: "default" | "custom" = permalinkMode === "custom" ? "custom" : "default";
@@ -275,6 +286,7 @@ export async function getSiteWritingSettings(siteId: string) {
     noDomainDataDomain: noDomainDataDomain.trim().toLowerCase() || "post",
     editorMode: editorMode || global.editorMode,
     enableComments,
+    enableTaxonomyShortcuts,
     categoryBase: global.categoryBase,
     tagBase: global.tagBase,
   };

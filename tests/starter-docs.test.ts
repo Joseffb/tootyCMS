@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const DOCS_DIR = path.join(process.cwd(), "public", "docs");
 const REQUIRED_DOCS = [
-  "welcome.md",
-  "about.md",
-  "terms-of-service.md",
-  "privacy-policy.md",
+  "posts_welcome_to_tooty.md",
+  "pages_about_this_site.md",
+  "pages_terms_of_service.md",
+  "pages_privacy_policy.md",
 ];
 
 describe("starter docs", () => {

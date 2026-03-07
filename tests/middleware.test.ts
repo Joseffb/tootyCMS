@@ -46,6 +46,20 @@ describe("middleware routing", () => {
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/login");
   });
 
+  it("preserves /app/cp/login even when a stale auth cookie exists", async () => {
+    mockedToken = { sub: "deleted-user" };
+    const req = makeRequest(
+      "http://example.com/app/cp/login",
+      "example.com",
+      "next-auth.session-token=stale-session",
+    );
+
+    const response = await proxy(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/login");
+    expect(response.headers.get("location")).toBeNull();
+  });
+
   it("rewrites canonical /app/cp nested requests to /app", async () => {
     mockedToken = { sub: "user-1" };
     const req = makeRequest(
@@ -61,7 +75,7 @@ describe("middleware routing", () => {
     );
   });
 
-  it("rewrites canonical /app/cp root path to /app", async () => {
+  it("rewrites canonical /app/cp root path to /app for server dashboard routing", async () => {
     mockedToken = { sub: "user-1" };
     const req = makeRequest(
       "http://example.com/app/cp",
@@ -71,6 +85,7 @@ describe("middleware routing", () => {
 
     const response = await proxy(req);
 
+    expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app");
   });
 
@@ -160,6 +175,15 @@ describe("middleware routing", () => {
     expect(response.headers.get("location")).toBe("http://example.com/app/cp/login");
   });
 
+  it("redirects bare /login on the root host to the canonical /app/cp/login path", async () => {
+    const req = makeRequest("http://example.com/login", "example.com");
+
+    const response = await proxy(req);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://example.com/app/cp/login");
+  });
+
   it("normalizes preview hostnames before tenant rewrite", async () => {
     const req = makeRequest(
       "http://my-site---abc123.vercel.app/blog/my-post",
@@ -211,6 +235,13 @@ describe("middleware routing", () => {
     const adminResponse = await proxy(adminReq);
 
     expect(adminResponse.headers.get("location")).toBe(
+      "http://robertbetan.test/app/cp/login",
+    );
+
+    const rootLoginReq = makeRequest("http://robertbetan.test/login", "robertbetan.test");
+    const rootLoginResponse = await proxy(rootLoginReq);
+
+    expect(rootLoginResponse.headers.get("location")).toBe(
       "http://robertbetan.test/app/cp/login",
     );
   });

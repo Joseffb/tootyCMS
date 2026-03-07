@@ -1,14 +1,8 @@
 import db from "@/lib/db";
 import {
-  dataDomains,
-  domainPostMeta,
-  domainPosts,
   sites,
-  termRelationships,
-  termTaxonomies,
-  terms,
 } from "@/lib/schema";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { userCan } from "@/lib/authorization";
 import type { SiteCapability } from "@/lib/rbac";
 import {
@@ -16,6 +10,9 @@ import {
   THEME_QUERY_NETWORK_ENABLED_KEY,
 } from "@/lib/cms-config";
 import { getSettingByKey } from "@/lib/settings-store";
+import { isMissingRelationError } from "@/lib/db-errors";
+import { listSiteDomainPostMetaMany, listSiteDomainPosts } from "@/lib/site-domain-post-store";
+import { getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
 
 export type ThemeQuerySource = "content.list";
 export type ThemeQueryScope = "site" | "network";
@@ -58,6 +55,7 @@ function normalizeSortField(value: unknown) {
   const raw = String(value || "createdAt").trim();
   const normalized = raw.toLowerCase();
   if (normalized === "createdat" || normalized === "created_at" || normalized === "date") return "createdAt";
+  if (normalized === "sortorder" || normalized === "sort_order" || normalized === "order") return "meta.sort_order";
   if (normalized === "title") return "title";
   if (normalized === "slug") return "slug";
   if (normalized === "id") return "id";
@@ -260,132 +258,173 @@ async function runContentListQuery(siteId: string, scope: ThemeQueryScope, param
   const requestedMetaKeys = Array.isArray(readQueryParam(params, ["metaKeys", "meta_keys"]))
     ? (readQueryParam(params, ["metaKeys", "meta_keys"]) as unknown[])
     : [];
-  const metaKeys = requestedMetaKeys
+  const metaKeySet = new Set(
+    requestedMetaKeys
     .map((value) => normalizeSlugLike(value))
     .filter(Boolean)
-    .slice(0, 20);
+    .slice(0, 20),
+  );
+  if (orderBy.startsWith("meta.")) {
+    const orderMetaKey = normalizeSlugLike(orderBy.slice(5));
+    if (orderMetaKey) metaKeySet.add(orderMetaKey);
+  }
+  const metaKeys = Array.from(metaKeySet).slice(0, 20);
 
   const siteIds = scope === "network" ? await resolveAllowedNetworkSiteIds(siteId) : [siteId];
   if (!siteIds.length) return [];
 
-  const rows = await db
-    .select({
-      id: domainPosts.id,
-      siteId: domainPosts.siteId,
-      title: domainPosts.title,
-      description: domainPosts.description,
-      content: domainPosts.content,
-      image: domainPosts.image,
-      slug: domainPosts.slug,
-      createdAt: domainPosts.createdAt,
-    })
-    .from(domainPosts)
-    .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-    .where(
-      and(
-        inArray(domainPosts.siteId, siteIds as string[]),
-        eq(domainPosts.published, true),
-        eq(dataDomains.key, dataDomain),
-      ),
+  try {
+    const rows = (
+      await Promise.all(
+        siteIds.map((currentSiteId) =>
+          listSiteDomainPosts({
+            siteId: currentSiteId,
+            dataDomainKey: dataDomain,
+            published: true,
+            includeContent: true,
+            includeInactiveDomains: false,
+            limit: Math.max(limit * 5, limit),
+          }),
+        ),
+      )
     )
-    .orderBy(desc(domainPosts.createdAt))
-    .limit(Math.max(limit * 5, limit));
+      .flat()
+      .map((row) => ({
+        id: row.id,
+        siteId: row.siteId,
+        title: row.title,
+        description: row.description,
+        content: row.content,
+        image: row.image,
+        slug: row.slug,
+        createdAt: row.createdAt,
+      }))
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, Math.max(limit * 5, limit));
 
-  if (!rows.length) return [];
+    if (!rows.length) return [];
 
-  const objectIds = rows.map((row) => row.id);
-  const termRows = await db
-    .select({
-      objectId: termRelationships.objectId,
-      taxonomy: termTaxonomies.taxonomy,
-      slug: terms.slug,
-      name: terms.name,
-    })
-    .from(termRelationships)
-    .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
-    .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-    .where(inArray(termRelationships.objectId, objectIds as string[]));
+    const rowsBySite = rows.reduce<Record<string, string[]>>((acc, row) => {
+      const siteKey = String(row.siteId || "").trim();
+      if (!siteKey) return acc;
+      const list = acc[siteKey] || [];
+      list.push(String(row.id || ""));
+      acc[siteKey] = list;
+      return acc;
+    }, {});
+    const termRows = (
+      await Promise.all(
+        Object.entries(rowsBySite).map(async ([currentSiteId, objectIds]) => {
+          return withSiteTaxonomyTableRecovery(currentSiteId, async () => {
+            const { termsTable, termTaxonomiesTable, termRelationshipsTable } = getSiteTaxonomyTables(currentSiteId);
+            return db
+              .select({
+                objectId: termRelationshipsTable.objectId,
+                taxonomy: termTaxonomiesTable.taxonomy,
+                slug: termsTable.slug,
+                name: termsTable.name,
+              })
+              .from(termRelationshipsTable)
+              .innerJoin(termTaxonomiesTable, eq(termTaxonomiesTable.id, termRelationshipsTable.termTaxonomyId))
+              .innerJoin(termsTable, eq(termsTable.id, termTaxonomiesTable.termId))
+              .where(inArray(termRelationshipsTable.objectId, objectIds as string[]));
+          });
+        }),
+      )
+    ).flat();
 
-  const termsByObject = new Map<string, Array<{ taxonomy: string; slug: string | null; name: string | null }>>();
-  for (const row of termRows) {
-    const list = termsByObject.get(row.objectId) || [];
-    list.push({ taxonomy: row.taxonomy, slug: row.slug, name: row.name });
-    termsByObject.set(row.objectId, list);
-  }
-
-  const metaByObject = new Map<string, Record<string, string>>();
-  if (metaKeys.length > 0) {
-    const metaRows = await db
-      .select({
-        domainPostId: domainPostMeta.domainPostId,
-        key: domainPostMeta.key,
-        value: domainPostMeta.value,
-      })
-      .from(domainPostMeta)
-      .where(and(inArray(domainPostMeta.domainPostId, objectIds as string[]), inArray(domainPostMeta.key, metaKeys)));
-    for (const row of metaRows) {
-      const bag = metaByObject.get(row.domainPostId) || {};
-      bag[row.key] = row.value;
-      metaByObject.set(row.domainPostId, bag);
+    const termsByObject = new Map<string, Array<{ taxonomy: string; slug: string | null; name: string | null }>>();
+    for (const row of termRows) {
+      const list = termsByObject.get(row.objectId) || [];
+      list.push({ taxonomy: row.taxonomy, slug: row.slug, name: row.name });
+      termsByObject.set(row.objectId, list);
     }
-  }
 
-  const filtered = rows
-    .filter((row) => {
-      if (!withTerm) return true;
-      const localTerms = termsByObject.get(row.id) || [];
-      return localTerms.some(
-        (term) => normalizeSlugLike(term.taxonomy) === taxonomy && normalizeSlugLike(term.slug || term.name || "") === withTerm,
-      );
-    })
-    .map((row) => {
-      const rowTerms = termsByObject.get(row.id) || [];
-      const termsByTaxonomy = rowTerms.reduce<Record<string, string[]>>((acc, term) => {
-        const key = normalizeSlugLike(term.taxonomy);
+    const metaByObject = new Map<string, Record<string, string>>();
+    if (metaKeys.length > 0) {
+      const postIdsBySite = rows.reduce<Record<string, string[]>>((acc, row) => {
+        const key = String(row.siteId || "").trim();
         if (!key) return acc;
-        const label = (term.name || term.slug || "").trim();
-        if (!label) return acc;
         const list = acc[key] || [];
-        list.push(label);
+        list.push(String(row.id || ""));
         acc[key] = list;
         return acc;
       }, {});
-      const meta = metaByObject.get(row.id) || {};
-      const thumbnailFromMeta = meta.thumbnail || meta.thumbnail_image || meta.image || meta.cover || "";
-      return {
-        id: row.id,
-        siteId: row.siteId,
-        title: row.title || "Untitled",
-        description: row.description || "",
-        slug: row.slug,
-        createdAt: row.createdAt,
-        href: meta.link || meta.url || meta.external_url || "",
-        thumbnail: thumbnailFromMeta || row.image || extractFirstImageFromContent(row.content || ""),
-        meta,
-        terms: termsByTaxonomy,
-      };
-    });
+      for (const [currentSiteId, postIds] of Object.entries(postIdsBySite)) {
+        const metaRows = await listSiteDomainPostMetaMany({
+          siteId: currentSiteId,
+          dataDomainKey: dataDomain,
+          postIds,
+          keys: metaKeys,
+        });
+        for (const row of metaRows) {
+          const bag = metaByObject.get(row.domainPostId) || {};
+          bag[row.key] = row.value;
+          metaByObject.set(row.domainPostId, bag);
+        }
+      }
+    }
 
-  const whereFiltered = where ? filtered.filter((entry) => evaluateWhereNode(entry as Record<string, unknown>, where)) : filtered;
-  const sorted = [...whereFiltered].sort((left, right) => {
-    const leftValue = getFieldValue(left as Record<string, unknown>, orderBy);
-    const rightValue = getFieldValue(right as Record<string, unknown>, orderBy);
-  const leftDate = toDateValue(leftValue);
-  const rightDate = toDateValue(rightValue);
-  if (leftDate !== null && rightDate !== null) {
-    return order === "asc" ? leftDate - rightDate : rightDate - leftDate;
+    const filtered = rows
+      .filter((row) => {
+        if (!withTerm) return true;
+        const localTerms = termsByObject.get(row.id) || [];
+        return localTerms.some(
+          (term) => normalizeSlugLike(term.taxonomy) === taxonomy && normalizeSlugLike(term.slug || term.name || "") === withTerm,
+        );
+      })
+      .map((row) => {
+        const rowTerms = termsByObject.get(row.id) || [];
+        const termsByTaxonomy = rowTerms.reduce<Record<string, string[]>>((acc, term) => {
+          const key = normalizeSlugLike(term.taxonomy);
+          if (!key) return acc;
+          const label = (term.name || term.slug || "").trim();
+          if (!label) return acc;
+          const list = acc[key] || [];
+          list.push(label);
+          acc[key] = list;
+          return acc;
+        }, {});
+        const meta = metaByObject.get(row.id) || {};
+        const thumbnailFromMeta = meta.thumbnail || meta.thumbnail_image || meta.image || meta.cover || "";
+        return {
+          id: row.id,
+          siteId: row.siteId,
+          title: row.title || "Untitled",
+          description: row.description || "",
+          slug: row.slug,
+          createdAt: row.createdAt,
+          href: meta.link || meta.url || meta.external_url || "",
+          thumbnail: thumbnailFromMeta || row.image || extractFirstImageFromContent(row.content || ""),
+          meta,
+          terms: termsByTaxonomy,
+        };
+      });
+
+    const whereFiltered = where ? filtered.filter((entry) => evaluateWhereNode(entry as Record<string, unknown>, where)) : filtered;
+    const sorted = [...whereFiltered].sort((left, right) => {
+      const leftValue = getFieldValue(left as Record<string, unknown>, orderBy);
+      const rightValue = getFieldValue(right as Record<string, unknown>, orderBy);
+      const leftDate = toDateValue(leftValue);
+      const rightDate = toDateValue(rightValue);
+      if (leftDate !== null && rightDate !== null) {
+        return order === "asc" ? leftDate - rightDate : rightDate - leftDate;
+      }
+      const leftNumber = Number(leftValue);
+      const rightNumber = Number(rightValue);
+      if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+        return order === "asc" ? leftNumber - rightNumber : rightNumber - leftNumber;
+      }
+      const leftText = toStringValue(leftValue).toLowerCase();
+      const rightText = toStringValue(rightValue).toLowerCase();
+      if (leftText === rightText) return 0;
+      return order === "asc" ? (leftText > rightText ? 1 : -1) : (leftText < rightText ? 1 : -1);
+    });
+    return sorted.slice(0, limit);
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
   }
-  const leftNumber = Number(leftValue);
-  const rightNumber = Number(rightValue);
-  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
-    return order === "asc" ? leftNumber - rightNumber : rightNumber - leftNumber;
-  }
-  const leftText = toStringValue(leftValue).toLowerCase();
-    const rightText = toStringValue(rightValue).toLowerCase();
-    if (leftText === rightText) return 0;
-    return order === "asc" ? (leftText > rightText ? 1 : -1) : (leftText < rightText ? 1 : -1);
-  });
-  return sorted.slice(0, limit);
 }
 
 export async function runThemeQueries(

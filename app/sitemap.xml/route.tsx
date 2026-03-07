@@ -5,6 +5,8 @@ import { buildDetailPath } from "@/lib/permalink";
 import { getRootSiteUrl, isLocalHostLike } from "@/lib/site-url";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 function escapeXml(input: string) {
   return input
     .replace(/&/g, "&amp;")

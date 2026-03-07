@@ -52,7 +52,7 @@ import { cookies } from "next/headers";
 import { withSiteAuth } from "./auth";
 import db from "./db";
 import { SelectSite, accounts, sites, users } from "./schema";
-import { dataDomains, domainPostMeta, domainPosts, siteDataDomains, termRelationships, termTaxonomies, termTaxonomyDomains, termTaxonomyMeta, terms } from "./schema";
+import { isMissingRelationError } from "@/lib/db-errors";
 import { singularizeLabel } from "./data-domain-labels";
 import {
   USER_ROLES,
@@ -78,6 +78,9 @@ import { listSiteUsers, upsertSiteUserRole } from "@/lib/site-user-tables";
 import { createKernelForRequest, listPluginsWithState } from "@/lib/plugin-runtime";
 import type { ProfileSection, ProfileSectionRow } from "@/lib/profile-contracts";
 import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
+import { normalizeProfileImageUrl } from "@/lib/profile-image";
+import { readCoreProfile, updateCoreProfile } from "@/lib/core-profile";
+import { resolvePrimaryAccessibleSiteIdForUser } from "@/lib/admin-site-selection";
 import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 import {
   dataDomainDescriptionSettingKey,
@@ -97,6 +100,41 @@ import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
 import { getSettingsByKeys, listSettingsByLikePatterns, setSettingByKey } from "@/lib/settings-store";
 import { getCommentProviderWritingOptions, hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import {
+  deleteSiteDataDomainById,
+  findSiteDataDomainByKey,
+  findSiteDataDomainById,
+  listSiteDataDomains,
+  setSiteDataDomainActivation,
+  updateSiteDataDomainById,
+  upsertSiteDataDomain,
+} from "@/lib/site-data-domain-registry";
+import {
+  ensureSiteDomainTypeTables,
+  siteTableExists,
+  siteDomainTypeMetaTableName,
+  siteDomainTypeMetaTableTemplate,
+  siteDomainTypeTableName,
+  siteDomainTypeTableTemplate,
+} from "@/lib/site-domain-type-tables";
+import {
+  countSiteDomainPostUsageByDomain,
+  createSiteDomainPost as createSiteScopedDomainPost,
+  deleteSiteDomainPostById,
+  findDomainPostForMutation,
+  getSiteDomainPostById,
+  listNetworkDomainPosts,
+  listSiteDomainDefinitions,
+  listSiteDomainPostMeta,
+  replaceSiteDomainPostMeta,
+  resolveSiteIdForDomainPostId,
+  updateSiteDomainPostById,
+} from "@/lib/site-domain-post-store";
+import {
+  ensureSiteTaxonomyTables,
+  getSiteTaxonomyTables,
+  withSiteTaxonomyTableRecovery,
+} from "@/lib/site-taxonomy-tables";
 
 function emitCmsLifecycleEvent(input: {
   name: "content_published" | "content_deleted" | "custom_event";
@@ -119,18 +157,43 @@ function emitCmsLifecycleEvent(input: {
 
 const normalizeSiteScope = (siteId: string) => String(siteId || "").trim();
 
+async function resolveSiteTaxonomyTables(siteId: string) {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) {
+    throw new Error("siteId is required");
+  }
+  await ensureSiteTaxonomyTables(normalizedSiteId);
+  return getSiteTaxonomyTables(normalizedSiteId);
+}
+
+async function withResolvedSiteTaxonomyTables<T>(
+  siteId: string,
+  run: (tables: Awaited<ReturnType<typeof resolveSiteTaxonomyTables>>) => Promise<T>,
+) {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) {
+    throw new Error("siteId is required");
+  }
+  return withSiteTaxonomyTableRecovery(normalizedSiteId, async () => {
+    const tables = await resolveSiteTaxonomyTables(normalizedSiteId);
+    return run(tables);
+  });
+}
+
 export const getAllCategories = async (siteId: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return [];
-  return db
-    .select({
-      id: termTaxonomies.id,
-      name: terms.name,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "category")))
-    .orderBy(asc(terms.name));
+  return withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termsTable, termTaxonomiesTable }) =>
+    db
+      .select({
+        id: termTaxonomiesTable.id,
+        name: termsTable.name,
+      })
+      .from(termTaxonomiesTable)
+      .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+      .where(eq(termTaxonomiesTable.taxonomy, "category"))
+      .orderBy(asc(termsTable.name)),
+  );
 };
 export const createCategoryByName = async (siteId: string, name: string, parentId?: number | null) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
@@ -141,58 +204,64 @@ export const createCategoryByName = async (siteId: string, name: string, parentI
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  const createdTaxonomy = await withResolvedSiteTaxonomyTables(
+    normalizedSiteId,
+    async ({ termsTable, termTaxonomiesTable }) => {
+      const existing = await db
+        .select({
+          id: termTaxonomiesTable.id,
+          name: termsTable.name,
+        })
+        .from(termTaxonomiesTable)
+        .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+        .where(
+          and(
+            eq(termTaxonomiesTable.taxonomy, "category"),
+            eq(termsTable.slug, slug),
+          ),
+        )
+        .limit(1);
+      if (existing[0]) return existing[0];
 
-  const existing = await db
-    .select({
-      id: termTaxonomies.id,
-      name: terms.name,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(
-      and(
-        eq(termTaxonomies.siteId, normalizedSiteId),
-        eq(termTaxonomies.taxonomy, "category"),
-        eq(terms.slug, slug),
-      ),
-    )
-    .limit(1);
-  if (existing[0]) return existing[0];
+      const [reusedTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      const [createdTerm] = await db
+        .insert(termsTable)
+        .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+        .returning()
+        .catch(async () => db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1));
+      const term = reusedTerm || createdTerm;
+      if (!term) return { error: "Failed to create category term" } as const;
 
-  const [reusedTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
-  const [createdTerm] = await db
-    .insert(terms)
-    .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-    .returning()
-    .catch(async () => db.select().from(terms).where(eq(terms.slug, slug)).limit(1));
-  const term = reusedTerm || createdTerm;
-  if (!term) return { error: "Failed to create category term" };
-
-  const [createdTaxonomy] = await db
-    .insert(termTaxonomies)
-    .values({
-      siteId: normalizedSiteId,
-      termId: term.id,
-      taxonomy: "category",
-      parentId: parentId ?? null,
-    })
-    .returning();
+      const [taxonomyRow] = await db
+        .insert(termTaxonomiesTable)
+        .values({
+          termId: term.id,
+          taxonomy: "category",
+          parentId: parentId ?? null,
+        })
+        .returning();
+      return { id: taxonomyRow.id, name: term.name };
+    },
+  );
+  if ("error" in createdTaxonomy) return createdTaxonomy;
 
   revalidateDomainAndTaxonomyCaches();
-  return { id: createdTaxonomy.id, name: term.name };
+  return createdTaxonomy;
 };
 export const getAllTags = async (siteId: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return [];
-  return db
-    .select({
-      id: termTaxonomies.id,
-      name: terms.name,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "tag")))
-    .orderBy(asc(terms.name));
+  return withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termsTable, termTaxonomiesTable }) =>
+    db
+      .select({
+        id: termTaxonomiesTable.id,
+        name: termsTable.name,
+      })
+      .from(termTaxonomiesTable)
+      .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+      .where(eq(termTaxonomiesTable.taxonomy, "tag"))
+      .orderBy(asc(termsTable.name)),
+  );
 };
 export const createTagByName = async (siteId: string, name: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
@@ -203,44 +272,64 @@ export const createTagByName = async (siteId: string, name: string) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+  const createdTaxonomy = await withResolvedSiteTaxonomyTables(
+    normalizedSiteId,
+    async ({ termsTable, termTaxonomiesTable }) => {
+      const existing = await db
+        .select({
+          id: termTaxonomiesTable.id,
+          name: termsTable.name,
+        })
+        .from(termTaxonomiesTable)
+        .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+        .where(and(eq(termTaxonomiesTable.taxonomy, "tag"), eq(termsTable.slug, slug)))
+        .limit(1);
+      if (existing[0]) return existing[0];
 
-  const existing = await db
-    .select({
-      id: termTaxonomies.id,
-      name: terms.name,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "tag"), eq(terms.slug, slug)))
-    .limit(1);
-  if (existing[0]) return existing[0];
+      const [reusedTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      const [createdTerm] = await db
+        .insert(termsTable)
+        .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+        .returning()
+        .catch(async () => db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1));
+      const term = reusedTerm || createdTerm;
+      if (!term) return { error: "Failed to create tag term" } as const;
 
-  const [reusedTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
-  const [createdTerm] = await db
-    .insert(terms)
-    .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-    .returning()
-    .catch(async () => db.select().from(terms).where(eq(terms.slug, slug)).limit(1));
-  const term = reusedTerm || createdTerm;
-  if (!term) return { error: "Failed to create tag term" };
-
-  const [createdTaxonomy] = await db
-    .insert(termTaxonomies)
-    .values({
-      siteId: normalizedSiteId,
-      termId: term.id,
-      taxonomy: "tag",
-    })
-    .returning();
+      const [taxonomyRow] = await db
+        .insert(termTaxonomiesTable)
+        .values({
+          termId: term.id,
+          taxonomy: "tag",
+        })
+        .returning();
+      return { id: taxonomyRow.id, name: term.name };
+    },
+  );
+  if ("error" in createdTaxonomy) return createdTaxonomy;
 
   revalidateDomainAndTaxonomyCaches();
-  return { id: createdTaxonomy.id, name: term.name };
+  return createdTaxonomy;
 };
 export const getAllMetaKeys = async () => {
   try {
-    const rows = await db.select({ key: domainPostMeta.key }).from(domainPostMeta).orderBy(asc(domainPostMeta.key));
-    const unique = Array.from(new Set(rows.map((row) => row.key))).filter(Boolean);
-    return unique;
+    const siteRows = await db.select({ id: sites.id }).from(sites);
+    const unique = new Set<string>();
+    for (const site of siteRows) {
+      const definitions = await listSiteDomainDefinitions(site.id, { includeInactive: true });
+      for (const definition of definitions) {
+        if (!(await siteTableExists(definition.metaTable))) continue;
+        const result = (await db.execute(
+          sql.raw(
+            `SELECT DISTINCT "key" FROM ${quoteIdentifier(definition.metaTable)} ORDER BY "key" ASC`,
+          ),
+        )) as { rows?: Array<{ key?: string | null }> };
+        for (const row of result.rows || []) {
+          const key = String(row.key || "").trim();
+          if (key) unique.add(key);
+        }
+      }
+    }
+    return Array.from(unique).sort((left, right) => left.localeCompare(right));
   } catch {
     return [];
   }
@@ -255,148 +344,124 @@ const toDomainKey = (label: string) =>
       .slice(0, 60),
   ) || `domain_${nanoid().toLowerCase()}`;
 
-export const getAllDataDomains = async (siteId?: string) => {
-  await ensureDefaultCoreDataDomains();
-  const rows = await db.select().from(dataDomains).orderBy(asc(dataDomains.label));
-  let usageRows: Array<{ dataDomainId: number; usageCount: number }> = [];
-  try {
-    const usageBase = db
-      .select({
-        dataDomainId: domainPosts.dataDomainId,
-        usageCount: sql<number>`count(*)::int`,
-      })
-      .from(domainPosts);
-    usageRows = siteId
-      ? await usageBase.where(eq(domainPosts.siteId, siteId)).groupBy(domainPosts.dataDomainId)
-      : await usageBase.groupBy(domainPosts.dataDomainId);
-  } catch {
-    usageRows = [];
-  }
-  const usageMap = new Map(usageRows.map((row) => [row.dataDomainId, row.usageCount]));
+const quoteIdentifier = (identifier: string) => `"${String(identifier || "").replace(/"/g, '""')}"`;
+
+async function countSiteDomainTypeUsage(siteId: string, domainKey: string) {
+  const tableName = siteDomainTypeTableName(siteId, domainKey);
+  if (!(await siteTableExists(tableName))) return 0;
+  const result = (await db.execute(
+    sql.raw(`SELECT COUNT(*)::int AS count FROM ${quoteIdentifier(tableName)}`),
+  )) as { rows?: Array<{ count?: number | string | null }> };
+  const value = result.rows?.[0]?.count;
+  return typeof value === "number" ? value : Number.parseInt(String(value ?? "0"), 10) || 0;
+}
+
+export const getAllDataDomains = async (
+  siteId?: string,
+  options?: {
+    ensurePhysicalTables?: boolean;
+    includeUsageCount?: boolean;
+  },
+) => {
+  const ensurePhysicalTables = options?.ensurePhysicalTables !== false;
+  const includeUsageCount = options?.includeUsageCount !== false;
   if (!siteId) {
-    return rows.map((row) => ({
-      ...row,
-      usageCount: usageMap.get(row.id) ?? 0,
-    }));
+    await ensureDefaultCoreDataDomains();
+    const siteRows = await db
+      .select({ id: sites.id })
+      .from(sites)
+      .orderBy(asc(sites.createdAt));
+    const byKey = new Map<string, any>();
+    for (const row of siteRows) {
+      const currentSiteId = String(row.id || "").trim();
+      if (!currentSiteId) continue;
+      const domains = await listSiteDataDomains(currentSiteId, { includeInactive: true });
+      for (const domain of domains) {
+        if (!byKey.has(domain.key)) {
+          byKey.set(domain.key, {
+            ...domain,
+            assigned: true,
+            usageCount: 0,
+          });
+        }
+      }
+    }
+    return Array.from(byKey.values()).sort((left, right) =>
+      String(left.label || "").localeCompare(String(right.label || ""), undefined, { sensitivity: "base" }),
+    );
   }
 
-  let assignments: Array<{ dataDomainId: number; isActive: boolean; description: string }> = [];
-  try {
-    assignments = await db
-      .select({
-        dataDomainId: siteDataDomains.dataDomainId,
-        isActive: siteDataDomains.isActive,
-        description: siteDataDomains.description,
-      })
-      .from(siteDataDomains)
-      .where(eq(siteDataDomains.siteId, siteId));
-  } catch {
-    assignments = [];
-  }
-
-  const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row]));
+  await ensureDefaultCoreDataDomains(siteId);
+  const rows = await listSiteDataDomains(siteId, { includeInactive: true });
   const defaultCoreKeys = new Set<string>(DEFAULT_CORE_DOMAIN_KEYS);
-  const visibleRows = rows.filter((row) => defaultCoreKeys.has(row.key) || assignmentMap.has(row.id));
-  const siteDescriptionRows =
-    siteId
-      ? await Promise.all(
-          visibleRows.map(async (row) => {
-            const value = await getSiteTextSetting(siteId, dataDomainDescriptionSettingKey(row.id), "");
-            return [row.id, value] as const;
-          }),
-        )
-      : [];
-  const sitePermalinkRows =
-    siteId
-      ? await Promise.all(
-          visibleRows.map(async (row) => {
-            const value = await getSiteTextSetting(siteId, dataDomainPermalinkSettingKey(row.id), "");
-            return [row.id, value] as const;
-          }),
-        )
-      : [];
-  const siteLabelRows =
-    siteId
-      ? await Promise.all(
-          visibleRows.map(async (row) => {
-            const value = await getSiteTextSetting(siteId, dataDomainLabelSettingKey(row.id), "");
-            return [row.id, value] as const;
-          }),
-        )
-      : [];
-  const siteKeyRows =
-    siteId
-      ? await Promise.all(
-          visibleRows.map(async (row) => {
-            const value = await getSiteTextSetting(siteId, dataDomainKeySettingKey(row.id), "");
-            return [row.id, value] as const;
-          }),
-        )
-      : [];
-  const siteShowInMenuRows =
-    siteId
-      ? await Promise.all(
-          visibleRows.map(async (row) => {
-            const value = await getSiteTextSetting(siteId, dataDomainShowInMenuSettingKey(row.id), "");
-            return [row.id, value] as const;
-          }),
-        )
-      : [];
+  const siteDescriptionRows = await Promise.all(
+    rows.map(async (row) => [row.id, await getSiteTextSetting(siteId, dataDomainDescriptionSettingKey(row.id), "")] as const),
+  );
+  const sitePermalinkRows = await Promise.all(
+    rows.map(async (row) => [row.id, await getSiteTextSetting(siteId, dataDomainPermalinkSettingKey(row.id), "")] as const),
+  );
+  const siteLabelRows = await Promise.all(
+    rows.map(async (row) => [row.id, await getSiteTextSetting(siteId, dataDomainLabelSettingKey(row.id), "")] as const),
+  );
+  const siteKeyRows = await Promise.all(
+    rows.map(async (row) => [row.id, await getSiteTextSetting(siteId, dataDomainKeySettingKey(row.id), "")] as const),
+  );
+  const siteShowInMenuRows = await Promise.all(
+    rows.map(async (row) => [row.id, await getSiteTextSetting(siteId, dataDomainShowInMenuSettingKey(row.id), "")] as const),
+  );
+
   const siteDescriptionMap = new Map(siteDescriptionRows);
   const sitePermalinkMap = new Map(sitePermalinkRows);
   const siteLabelMap = new Map(siteLabelRows);
   const siteKeyMap = new Map(siteKeyRows);
   const siteShowInMenuMap = new Map(siteShowInMenuRows);
-  return visibleRows.map((row) => ({
-      ...row,
-      key: String(siteKeyMap.get(row.id) || "").trim() || row.key,
-      label: String(siteLabelMap.get(row.id) || "").trim() || row.label,
-      settings: {
-        ...((row.settings as any) || {}),
-        showInMenu: (() => {
-          const raw = String(siteShowInMenuMap.get(row.id) || "").trim().toLowerCase();
-          if (!raw) return (row.settings as any)?.showInMenu ?? true;
-          return !(raw === "0" || raw === "false" || raw === "off");
-        })(),
-      },
-      assigned: defaultCoreKeys.has(row.key) ? true : assignmentMap.has(row.id),
-      isActive: defaultCoreKeys.has(row.key) ? true : assignmentMap.get(row.id)?.isActive ?? false,
-      description: resolveDataDomainDescription({
-        domainKey: String(siteKeyMap.get(row.id) || "").trim() || row.key,
-        siteDescription: siteDescriptionMap.get(row.id) || assignmentMap.get(row.id)?.description || "",
-        globalDescription: row.description || "",
-      }),
-      permalink:
-        String(sitePermalinkMap.get(row.id) || "").trim() ||
-        String((row.settings as any)?.permalink || "").trim() ||
-        domainPluralSegment(String(siteKeyMap.get(row.id) || "").trim() || row.key),
-      usageCount: usageMap.get(row.id) ?? 0,
-  }));
+
+  const mappedRows = await Promise.all(
+    rows.map(async (row) => {
+      const effectiveKey = String(siteKeyMap.get(row.id) || "").trim() || row.key;
+      if (ensurePhysicalTables && (defaultCoreKeys.has(row.key) || row.isActive)) {
+        await ensureSiteDomainTypeTables(siteId, effectiveKey);
+      }
+      const physicalUsageCount = includeUsageCount
+        ? await countSiteDomainTypeUsage(siteId, effectiveKey)
+        : 0;
+      return {
+        ...row,
+        key: effectiveKey,
+        label: String(siteLabelMap.get(row.id) || "").trim() || row.label,
+        settings: {
+          ...((row.settings as any) || {}),
+          showInMenu: (() => {
+            const raw = String(siteShowInMenuMap.get(row.id) || "").trim().toLowerCase();
+            if (!raw) return (row.settings as any)?.showInMenu ?? true;
+            return !(raw === "0" || raw === "false" || raw === "off");
+          })(),
+        },
+        assigned: true,
+        isActive: defaultCoreKeys.has(row.key) ? true : row.isActive,
+        description: resolveDataDomainDescription({
+          domainKey: effectiveKey,
+          siteDescription: siteDescriptionMap.get(row.id) || row.description || "",
+          globalDescription: row.description || "",
+        }),
+        permalink:
+          String(sitePermalinkMap.get(row.id) || "").trim() ||
+          String((row.settings as any)?.permalink || "").trim() ||
+          domainPluralSegment(effectiveKey),
+        usageCount: physicalUsageCount,
+      };
+    }),
+  );
+  return mappedRows;
 };
 
 export const getSiteDataDomainByKey = async (siteId: string, domainKey: string) => {
-  await ensureDefaultCoreDataDomains();
-  const [row] = await db
-    .select({
-      id: dataDomains.id,
-      key: dataDomains.key,
-      label: dataDomains.label,
-      isActive: siteDataDomains.isActive,
-    })
-    .from(dataDomains)
-    .leftJoin(
-      siteDataDomains,
-      and(eq(siteDataDomains.dataDomainId, dataDomains.id), eq(siteDataDomains.siteId, siteId)),
-    )
-    .where(eq(dataDomains.key, domainKey))
-    .limit(1);
-
+  await ensureDefaultCoreDataDomains(siteId);
+  const row = await findSiteDataDomainByKey(siteId, domainKey);
   if (!row) return null;
   if (DEFAULT_CORE_DOMAIN_KEYS.includes(row.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number])) {
     return { ...row, isActive: true };
   }
-  // Allow any domain assigned to the site, even if currently inactive.
-  if (row.isActive === null || row.isActive === undefined) return null;
   return row;
 };
 
@@ -452,22 +517,24 @@ export const createDataDomain = async (input: {
   const trimmed = input.label.trim();
   if (!trimmed) return { error: "Data Domain label is required" };
   const canonicalLabel = trimmed;
-  const existingByLabel = await db.select().from(dataDomains).where(eq(dataDomains.label, canonicalLabel)).limit(1);
-  if (existingByLabel[0]) return existingByLabel[0];
+  await ensureDefaultCoreDataDomains(input.siteId);
+  const existingRows = await listSiteDataDomains(input.siteId, { includeInactive: true });
+  const existingByLabel = existingRows.find(
+    (row) => String(row.label || "").trim().toLowerCase() === canonicalLabel.toLowerCase(),
+  );
+  if (existingByLabel) return existingByLabel;
 
   const key = toDomainKey(canonicalLabel);
-  const existingByKey = await db.select().from(dataDomains).where(eq(dataDomains.key, key)).limit(1);
-  if (existingByKey[0]) return existingByKey[0];
+  const existingByKey = existingRows.find((row) => row.key === key);
+  if (existingByKey) return existingByKey;
 
   const safeKey = key.replace(/[^a-z0-9-]/g, "").replace(/^-+/, "");
-  const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
-  const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-  const contentTable = `${normalizedPrefix}site_domain_posts`;
-  const metaTable = `${normalizedPrefix}site_domain_post_meta`;
+  const contentTable = siteDomainTypeTableTemplate(key);
+  const metaTable = siteDomainTypeMetaTableTemplate(key);
   const extraFields = Array.isArray(input.fields) ? input.fields : [];
   if (!safeKey) return { error: "Invalid Data Domain key" };
 
-  const [created] = await db.insert(dataDomains).values({
+  const created = await upsertSiteDataDomain(input.siteId, {
     key,
     label: canonicalLabel,
     contentTable,
@@ -475,24 +542,12 @@ export const createDataDomain = async (input: {
     description: "",
     settings: {
       fields: extraFields,
-      storageModel: "shared_site_domain_posts",
+      storageModel: "site_domain_type_table",
       showInMenu: input.showInMenu !== false,
     },
-  }).returning();
-
-  if (input.siteId) {
-    await db
-      .insert(siteDataDomains)
-      .values({
-        siteId: input.siteId,
-        dataDomainId: created.id,
-        isActive: input.activateForSite ?? true,
-      })
-      .onConflictDoUpdate({
-        target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-        set: { isActive: input.activateForSite ?? true },
-      });
-  }
+    isActive: input.activateForSite ?? true,
+  });
+  await ensureSiteDomainTypeTables(input.siteId, key);
   revalidateDomainAndTaxonomyCaches({ siteId: input.siteId || null });
   return created;
 };
@@ -524,16 +579,7 @@ export const updateDataDomain = async (input: {
   if (!trimmed) return { error: "Data Domain label is required" };
   const canonicalLabel = trimmed;
 
-  const [existing] = await db
-    .select({
-      key: dataDomains.key,
-      label: dataDomains.label,
-      description: dataDomains.description,
-      settings: dataDomains.settings,
-    })
-    .from(dataDomains)
-    .where(eq(dataDomains.id, input.id))
-    .limit(1);
+  const existing = await findSiteDataDomainById(input.siteId, input.id);
   if (!existing) {
     return { error: "Data Domain not found" };
   }
@@ -560,20 +606,36 @@ export const updateDataDomain = async (input: {
     dataDomainShowInMenuSettingKey(input.id),
     input.showInMenu === false ? "0" : "1",
   );
-  await db
-    .insert(siteDataDomains)
-    .values({
-      siteId: input.siteId,
-      dataDomainId: input.id,
-      isActive: true,
-      description: nextSiteDescription,
-    })
-    .onConflictDoUpdate({
-      target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-      set: {
-        description: nextSiteDescription,
-      },
-    });
+  const previousSiteKey = currentSiteKey;
+  const previousContentTable = siteDomainTypeTableName(input.siteId, previousSiteKey);
+  const previousMetaTable = siteDomainTypeMetaTableName(input.siteId, previousSiteKey);
+  const nextContentTable = siteDomainTypeTableName(input.siteId, nextSiteKey);
+  const nextMetaTable = siteDomainTypeMetaTableName(input.siteId, nextSiteKey);
+
+  if (nextSiteKey !== previousSiteKey) {
+    if ((await siteTableExists(previousMetaTable)) && !(await siteTableExists(nextMetaTable))) {
+      await db.execute(sql.raw(`ALTER TABLE ${quoteIdentifier(previousMetaTable)} RENAME TO ${quoteIdentifier(nextMetaTable)}`));
+    }
+    if ((await siteTableExists(previousContentTable)) && !(await siteTableExists(nextContentTable))) {
+      await db.execute(sql.raw(`ALTER TABLE ${quoteIdentifier(previousContentTable)} RENAME TO ${quoteIdentifier(nextContentTable)}`));
+    }
+  }
+
+  await updateSiteDataDomainById(input.siteId, input.id, {
+    key: nextSiteKey,
+    label: nextSiteLabel,
+    contentTable: siteDomainTypeTableTemplate(nextSiteKey),
+    metaTable: siteDomainTypeMetaTableTemplate(nextSiteKey),
+    description: nextSiteDescription,
+    settings: {
+      ...((existing.settings as Record<string, unknown>) || {}),
+      showInMenu: input.showInMenu !== false,
+      storageModel: "site_domain_type_table",
+    },
+    isActive: true,
+  });
+  await setSiteDataDomainActivation(input.siteId, nextSiteKey, true);
+  await ensureSiteDomainTypeTables(input.siteId, nextSiteKey);
   revalidateDomainAndTaxonomyCaches();
   return {
     id: input.id,
@@ -583,14 +645,10 @@ export const updateDataDomain = async (input: {
   };
 };
 
-const sanitizeDbIdentifier = (value: string) => value.replace(/[^a-zA-Z0-9_]/g, "_");
-
 export const deleteDataDomain = async (input: number | { id: number; siteId?: string; confirmText?: string }) => {
   const targetId = typeof input === "number" ? input : input.id;
   const siteId = typeof input === "number" ? undefined : String(input.siteId || "").trim() || undefined;
   const confirmText = typeof input === "number" ? "delete" : String(input.confirmText || "").trim().toLowerCase();
-  const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
-  const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
   if (!siteId) return { error: "Site-scoped Data Domains are required. Provide siteId." };
   if (confirmText !== "delete") {
     return { error: "Delete confirmation required" };
@@ -601,90 +659,37 @@ export const deleteDataDomain = async (input: number | { id: number; siteId?: st
   const allowed = await userCan("site.settings.write", session.user.id, { siteId });
   if (!allowed) return { error: "Not authorized" };
 
-  const [domain] = await db.select().from(dataDomains).where(eq(dataDomains.id, targetId)).limit(1);
+  const domain = await findSiteDataDomainById(siteId, targetId);
   if (!domain) return { error: "Data Domain not found" };
   if (DEFAULT_CORE_DOMAIN_KEYS.includes(domain.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number])) {
     return { error: "Core Post Types cannot be deleted" };
   }
 
-  if (siteId) {
-    const [siteAssignment] = await db
-      .select({ isActive: siteDataDomains.isActive })
-      .from(siteDataDomains)
-      .where(and(eq(siteDataDomains.siteId, siteId), eq(siteDataDomains.dataDomainId, targetId)))
-      .limit(1);
-    if (siteAssignment?.isActive) {
-      return { error: "Deactivate this Post Type before deleting it." };
-    }
-
-    await db.transaction(async (tx) => {
-      const scopedPostIds = await tx
-        .select({ id: domainPosts.id })
-        .from(domainPosts)
-        .where(and(eq(domainPosts.dataDomainId, targetId), eq(domainPosts.siteId, siteId)));
-      if (scopedPostIds.length > 0) {
-        await tx
-          .delete(domainPostMeta)
-          .where(inArray(domainPostMeta.domainPostId, scopedPostIds.map((row) => row.id)));
-      }
-
-      await tx
-        .delete(domainPosts)
-        .where(and(eq(domainPosts.dataDomainId, targetId), eq(domainPosts.siteId, siteId)));
-      await tx
-        .delete(siteDataDomains)
-        .where(and(eq(siteDataDomains.dataDomainId, targetId), eq(siteDataDomains.siteId, siteId)));
-    });
-
-    await setSiteTextSetting(siteId, dataDomainDescriptionSettingKey(targetId), "");
-
-    const [remainingAssignment] = await db
-      .select({ dataDomainId: siteDataDomains.dataDomainId })
-      .from(siteDataDomains)
-      .where(eq(siteDataDomains.dataDomainId, targetId))
-      .limit(1);
-    const [remainingPost] = await db
-      .select({ id: domainPosts.id })
-      .from(domainPosts)
-      .where(eq(domainPosts.dataDomainId, targetId))
-      .limit(1);
-
-    if (remainingAssignment || remainingPost) {
-      const adminBasePath = `/app/${getAdminPathAlias()}`;
-      revalidatePath(`${adminBasePath}/site/${encodeURIComponent(siteId)}/settings/domains`);
-      revalidateDomainAndTaxonomyCaches({ siteId });
-      return { ok: true };
-    }
+  if (domain.isActive) {
+    return { error: "Deactivate this Post Type before deleting it." };
   }
 
-  await db.transaction(async (tx) => {
-    const domainPostIds = await tx
-      .select({ id: domainPosts.id })
-      .from(domainPosts)
-      .where(eq(domainPosts.dataDomainId, targetId));
-    if (domainPostIds.length > 0) {
-      await tx
-        .delete(domainPostMeta)
-        .where(inArray(domainPostMeta.domainPostId, domainPostIds.map((row) => row.id)));
-    }
-    await tx.delete(domainPosts).where(eq(domainPosts.dataDomainId, targetId));
-    await tx.delete(siteDataDomains).where(eq(siteDataDomains.dataDomainId, targetId));
-    await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.dataDomainId, targetId));
-    await tx.delete(dataDomains).where(eq(dataDomains.id, targetId));
+  const siteDomainKey = String(
+    await getSiteTextSetting(siteId, dataDomainKeySettingKey(targetId), String(domain.key || "")),
+  ).trim() || String(domain.key || "");
+  const contentTable = siteDomainTypeTableName(siteId, siteDomainKey);
+  const metaTable = siteDomainTypeMetaTableName(siteId, siteDomainKey);
+  await db.execute(sql.raw(`DROP TABLE IF EXISTS ${quoteIdentifier(metaTable)}`));
+  await db.execute(sql.raw(`DROP TABLE IF EXISTS ${quoteIdentifier(contentTable)}`));
 
-    const sharedContentTable = `${normalizedPrefix}site_domain_posts`;
-    const sharedMetaTable = `${normalizedPrefix}site_domain_post_meta`;
-    const safeContentTable = sanitizeDbIdentifier(domain.contentTable);
-    const safeMetaTable = sanitizeDbIdentifier(domain.metaTable);
-    if (safeMetaTable !== sharedMetaTable && safeContentTable !== sharedContentTable) {
-      await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeMetaTable}"`));
-      await tx.execute(sql.raw(`DROP TABLE IF EXISTS "${safeContentTable}"`));
-    }
+  await setSiteTextSetting(siteId, dataDomainDescriptionSettingKey(targetId), "");
+  await setSiteTextSetting(siteId, dataDomainPermalinkSettingKey(targetId), "");
+  await setSiteTextSetting(siteId, dataDomainKeySettingKey(targetId), "");
+  await setSiteTextSetting(siteId, dataDomainLabelSettingKey(targetId), "");
+  await setSiteTextSetting(siteId, dataDomainShowInMenuSettingKey(targetId), "");
+
+  await deleteSiteDataDomainById(siteId, targetId);
+  await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomyDomainsTable }) => {
+    await db.delete(termTaxonomyDomainsTable).where(eq(termTaxonomyDomainsTable.dataDomainId, targetId));
   });
-  if (siteId) {
-    const adminBasePath = `/app/${getAdminPathAlias()}`;
-    revalidatePath(`${adminBasePath}/site/${encodeURIComponent(siteId)}/settings/domains`);
-  }
+
+  const adminBasePath = `/app/${getAdminPathAlias()}`;
+  revalidatePath(`${adminBasePath}/site/${encodeURIComponent(siteId)}/settings/domains`);
   revalidateDomainAndTaxonomyCaches({ siteId: siteId || null });
   return { ok: true };
 };
@@ -704,17 +709,18 @@ export const setDataDomainActivation = async (input: {
   }
 
   try {
-    await db
-      .insert(siteDataDomains)
-      .values({
-        siteId: input.siteId,
-        dataDomainId: input.dataDomainId,
-        isActive: input.isActive,
-      })
-      .onConflictDoUpdate({
-        target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-        set: { isActive: input.isActive },
-      });
+    const domainRow = await findSiteDataDomainById(input.siteId, input.dataDomainId);
+    if (!domainRow) return { error: "Data Domain not found" };
+    await setSiteDataDomainActivation(input.siteId, domainRow.key, input.isActive);
+    if (input.isActive) {
+      const fallbackKey = String(domainRow.key || "").trim();
+      const siteKey = String(
+        await getSiteTextSetting(input.siteId, dataDomainKeySettingKey(input.dataDomainId), fallbackKey),
+      ).trim() || fallbackKey;
+      if (siteKey) {
+        await ensureSiteDomainTypeTables(input.siteId, siteKey);
+      }
+    }
   } catch (error: any) {
     return { error: error?.message ?? "Failed to update activation state" };
   }
@@ -743,52 +749,53 @@ export const registerCustomTaxonomyForDataDomain = async (input: {
     .replace(/^-+|-+$/g, "");
 
   try {
-    const [existingTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
-    const term =
-      existingTerm ??
-      (
-        await db
-          .insert(terms)
-          .values({
-            name: label,
-            slug: slug || `term-${nanoid().toLowerCase()}`,
-          })
-          .returning()
-      )[0];
+    return await withResolvedSiteTaxonomyTables(siteId, async ({ termsTable, termTaxonomiesTable, termTaxonomyDomainsTable }) => {
+      const [existingTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      const term =
+        existingTerm ??
+        (
+          await db
+            .insert(termsTable)
+            .values({
+              name: label,
+              slug: slug || `term-${nanoid().toLowerCase()}`,
+            })
+            .returning()
+        )[0];
 
-    const [taxonomyRow] = await db
-      .insert(termTaxonomies)
-      .values({
-        siteId,
-        termId: term.id,
-        taxonomy,
-        description: input.description ?? "",
-      })
-      .onConflictDoNothing()
-      .returning();
+      const [taxonomyRow] = await db
+        .insert(termTaxonomiesTable)
+        .values({
+          termId: term.id,
+          taxonomy,
+          description: input.description ?? "",
+        })
+        .onConflictDoNothing()
+        .returning();
 
-    const taxonomyId =
-      taxonomyRow?.id ??
-      (
-        await db
-          .select({ id: termTaxonomies.id })
-          .from(termTaxonomies)
-          .where(
-            and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)),
-          )
-          .limit(1)
-      )[0]?.id;
+      const taxonomyId =
+        taxonomyRow?.id ??
+        (
+          await db
+            .select({ id: termTaxonomiesTable.id })
+            .from(termTaxonomiesTable)
+            .where(
+              and(eq(termTaxonomiesTable.termId, term.id), eq(termTaxonomiesTable.taxonomy, taxonomy)),
+            )
+            .limit(1)
+        )[0]?.id;
 
-    if (!taxonomyId) {
-      return { error: "Could not resolve taxonomy id" };
-    }
+      if (!taxonomyId) {
+        return { error: "Could not resolve taxonomy id" };
+      }
 
-    await db.insert(termTaxonomyDomains).values({
-      dataDomainId: input.dataDomainId,
-      termTaxonomyId: taxonomyId,
-    }).onConflictDoNothing();
+      await db.insert(termTaxonomyDomainsTable).values({
+        dataDomainId: input.dataDomainId,
+        termTaxonomyId: taxonomyId,
+      }).onConflictDoNothing();
 
-    return { ok: true, taxonomyId };
+      return { ok: true, taxonomyId };
+    });
   } catch (error: any) {
     return { error: error?.message ?? "Failed to register taxonomy" };
   }
@@ -816,14 +823,15 @@ const validateParentAssignment = async (input: {
   const { siteId, taxonomy, termTaxonomyId, parentId } = input;
   if (parentId === null) return { ok: true as const };
   if (parentId === termTaxonomyId) return { error: "A term cannot be its own parent." };
-
-  const taxonomyRows = await db
-    .select({
-      id: termTaxonomies.id,
-      parentId: termTaxonomies.parentId,
-    })
-    .from(termTaxonomies)
-    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.taxonomy, taxonomy)));
+  const taxonomyRows = await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomiesTable }) =>
+    db
+      .select({
+        id: termTaxonomiesTable.id,
+        parentId: termTaxonomiesTable.parentId,
+      })
+      .from(termTaxonomiesTable)
+      .where(eq(termTaxonomiesTable.taxonomy, taxonomy)),
+  );
 
   const byId = new Map(taxonomyRows.map((row) => [row.id, row]));
   if (!byId.has(parentId)) {
@@ -847,60 +855,64 @@ const validateParentAssignment = async (input: {
 async function ensureDefaultCategoryTaxonomy(siteId: string) {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return;
-  const existingCategory = await db
-    .select({ id: termTaxonomies.id })
-    .from(termTaxonomies)
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, "category")))
-    .limit(1);
-  if (existingCategory[0]) return;
+  await withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termsTable, termTaxonomiesTable }) => {
+    const existingCategory = await db
+      .select({ id: termTaxonomiesTable.id })
+      .from(termTaxonomiesTable)
+      .where(eq(termTaxonomiesTable.taxonomy, "category"))
+      .limit(1);
+    if (existingCategory[0]) return;
 
-  const [existingGeneral] = await db
-    .select({ id: terms.id })
-    .from(terms)
-    .where(eq(terms.slug, "general"))
-    .limit(1);
+    const [existingGeneral] = await db
+      .select({ id: termsTable.id })
+      .from(termsTable)
+      .where(eq(termsTable.slug, "general"))
+      .limit(1);
 
-  const termId =
-    existingGeneral?.id ??
-    (
-      await db
-        .insert(terms)
-        .values({
-          name: "General",
-          slug: "general",
-        })
-        .returning({ id: terms.id })
-    )[0]?.id;
+    const termId =
+      existingGeneral?.id ??
+      (
+        await db
+          .insert(termsTable)
+          .values({
+            name: "General",
+            slug: "general",
+          })
+          .returning({ id: termsTable.id })
+          .catch(async () =>
+            db.select({ id: termsTable.id }).from(termsTable).where(eq(termsTable.slug, "general")).limit(1),
+          )
+      )[0]?.id;
 
-  if (!termId) return;
+    if (!termId) return;
 
-  await db
-    .insert(termTaxonomies)
-    .values({
-      siteId: normalizedSiteId,
-      termId,
-      taxonomy: "category",
-      description: "Default category taxonomy",
-      count: 0,
-    })
-    .onConflictDoNothing();
+    await db
+      .insert(termTaxonomiesTable)
+      .values({
+        termId,
+        taxonomy: "category",
+        description: "Default category taxonomy",
+        count: 0,
+      })
+      .onConflictDoNothing();
+  });
 }
 
 export const getTaxonomyOverview = async (siteId: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return [];
   await ensureDefaultCategoryTaxonomy(normalizedSiteId);
-
-  const rows = await db
-    .select({
-      taxonomy: termTaxonomies.taxonomy,
-      termCount: sql<number>`count(*)::int`,
-      usageCount: sql<number>`coalesce(sum(${termTaxonomies.count}), 0)::int`,
-    })
-    .from(termTaxonomies)
-    .where(eq(termTaxonomies.siteId, normalizedSiteId))
-    .groupBy(termTaxonomies.taxonomy)
-    .orderBy(termTaxonomies.taxonomy);
+  const rows = await withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termTaxonomiesTable }) => {
+    return db
+      .select({
+        taxonomy: termTaxonomiesTable.taxonomy,
+        termCount: sql<number>`count(*)::int`,
+        usageCount: sql<number>`coalesce(sum(${termTaxonomiesTable.count}), 0)::int`,
+      })
+      .from(termTaxonomiesTable)
+      .groupBy(termTaxonomiesTable.taxonomy)
+      .orderBy(termTaxonomiesTable.taxonomy);
+  });
 
   const merged = new Map<string, { taxonomy: string; termCount: number; usageCount: number }>();
   for (const row of rows) merged.set(row.taxonomy, row);
@@ -951,20 +963,22 @@ export const getTaxonomyTerms = async (siteId: string, taxonomy: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   const key = normalizeTaxonomyKey(taxonomy);
   if (!normalizedSiteId || !key) return [];
-  return db
-    .select({
-      id: termTaxonomies.id,
-      termId: terms.id,
-      taxonomy: termTaxonomies.taxonomy,
-      name: terms.name,
-      slug: terms.slug,
-      parentId: termTaxonomies.parentId,
-      usageCount: termTaxonomies.count,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)))
-    .orderBy(asc(terms.name));
+  return withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termsTable, termTaxonomiesTable }) => {
+    return db
+      .select({
+        id: termTaxonomiesTable.id,
+        termId: termsTable.id,
+        taxonomy: termTaxonomiesTable.taxonomy,
+        name: termsTable.name,
+        slug: termsTable.slug,
+        parentId: termTaxonomiesTable.parentId,
+        usageCount: termTaxonomiesTable.count,
+      })
+      .from(termTaxonomiesTable)
+      .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+      .where(eq(termTaxonomiesTable.taxonomy, key))
+      .orderBy(asc(termsTable.name));
+  });
 };
 
 export const getTaxonomyTermsPreview = async (siteId: string, taxonomy: string, limit = 20) => {
@@ -972,21 +986,23 @@ export const getTaxonomyTermsPreview = async (siteId: string, taxonomy: string, 
   const key = normalizeTaxonomyKey(taxonomy);
   if (!normalizedSiteId || !key) return [];
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 20;
-  return db
-    .select({
-      id: termTaxonomies.id,
-      termId: terms.id,
-      taxonomy: termTaxonomies.taxonomy,
-      name: terms.name,
-      slug: terms.slug,
-      parentId: termTaxonomies.parentId,
-      usageCount: termTaxonomies.count,
-    })
-    .from(termTaxonomies)
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)))
-    .orderBy(asc(terms.name))
-    .limit(safeLimit);
+  return withResolvedSiteTaxonomyTables(normalizedSiteId, async ({ termsTable, termTaxonomiesTable }) => {
+    return db
+      .select({
+        id: termTaxonomiesTable.id,
+        termId: termsTable.id,
+        taxonomy: termTaxonomiesTable.taxonomy,
+        name: termsTable.name,
+        slug: termsTable.slug,
+        parentId: termTaxonomiesTable.parentId,
+        usageCount: termTaxonomiesTable.count,
+      })
+      .from(termTaxonomiesTable)
+      .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+      .where(eq(termTaxonomiesTable.taxonomy, key))
+      .orderBy(asc(termsTable.name))
+      .limit(safeLimit);
+  });
 };
 
 const normalizeTaxonomyMetaKey = (value: string) =>
@@ -998,38 +1014,53 @@ const normalizeTaxonomyMetaKey = (value: string) =>
 
 export const getTaxonomyTermMeta = async (termTaxonomyId: number) => {
   if (!Number.isFinite(termTaxonomyId) || termTaxonomyId <= 0) return [];
-  return db
-    .select({
-      key: termTaxonomyMeta.key,
-      value: termTaxonomyMeta.value,
-    })
-    .from(termTaxonomyMeta)
-    .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
-    .orderBy(asc(termTaxonomyMeta.key));
+  const siteRowsRaw =
+    (await db.query?.sites?.findMany?.({ columns: { id: true } })) ??
+    (await db.select({ id: sites.id }).from(sites).orderBy(asc(sites.id)));
+  const siteRows = Array.isArray(siteRowsRaw) ? siteRowsRaw : [];
+  for (const siteRow of siteRows) {
+    const siteId = String(siteRow.id || "").trim();
+    if (!siteId) continue;
+    const rows = await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomyMetaTable }) =>
+      db
+        .select({
+          key: termTaxonomyMetaTable.key,
+          value: termTaxonomyMetaTable.value,
+        })
+        .from(termTaxonomyMetaTable)
+        .where(eq(termTaxonomyMetaTable.termTaxonomyId, Math.trunc(termTaxonomyId)))
+        .orderBy(asc(termTaxonomyMetaTable.key)),
+    );
+    if (rows.length) return rows;
+  }
+  return [];
 };
 
 export const setTaxonomyTermMeta = async (input: {
+  siteId: string;
   termTaxonomyId: number;
   key: string;
   value: string;
 }) => {
+  const siteId = normalizeSiteScope(input.siteId);
   const termTaxonomyId = Math.trunc(input.termTaxonomyId);
   const key = normalizeTaxonomyMetaKey(input.key);
-  if (!Number.isFinite(termTaxonomyId) || termTaxonomyId <= 0 || !key) {
-    return { error: "termTaxonomyId and key are required" };
+  if (!siteId || !Number.isFinite(termTaxonomyId) || termTaxonomyId <= 0 || !key) {
+    return { error: "siteId, termTaxonomyId and key are required" };
   }
-
-  await db
-    .insert(termTaxonomyMeta)
-    .values({
-      termTaxonomyId,
-      key,
-      value: String(input.value ?? ""),
-    })
-    .onConflictDoUpdate({
-      target: [termTaxonomyMeta.termTaxonomyId, termTaxonomyMeta.key],
-      set: { value: String(input.value ?? ""), updatedAt: new Date() },
-    });
+  await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomyMetaTable }) => {
+    await db
+      .insert(termTaxonomyMetaTable)
+      .values({
+        termTaxonomyId,
+        key,
+        value: String(input.value ?? ""),
+      })
+      .onConflictDoUpdate({
+        target: [termTaxonomyMetaTable.termTaxonomyId, termTaxonomyMetaTable.key],
+        set: { value: String(input.value ?? ""), updatedAt: new Date() },
+      });
+  });
 
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
@@ -1055,10 +1086,12 @@ export const renameTaxonomy = async (input: { siteId: string; current: string; n
   const current = normalizeTaxonomyKey(input.current);
   const next = normalizeTaxonomyKey(input.next);
   if (!current || !next) return { error: "Current and next taxonomy keys are required" };
-  await db
-    .update(termTaxonomies)
-    .set({ taxonomy: next })
-    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.taxonomy, current)));
+  await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomiesTable }) => {
+    await db
+      .update(termTaxonomiesTable)
+      .set({ taxonomy: next })
+      .where(eq(termTaxonomiesTable.taxonomy, current));
+  });
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
@@ -1068,30 +1101,34 @@ export const deleteTaxonomy = async (siteId: string, taxonomy: string) => {
   if (!normalizedSiteId) return { error: "Site id is required" };
   const key = normalizeTaxonomyKey(taxonomy);
   if (!key) return { error: "Taxonomy key is required" };
+  await withResolvedSiteTaxonomyTables(
+    normalizedSiteId,
+    async ({ termsTable, termTaxonomiesTable, termRelationshipsTable, termTaxonomyDomainsTable, termTaxonomyMetaTable }) => {
+      await db.transaction(async (tx) => {
+        const rows = await tx
+          .select({ id: termTaxonomiesTable.id, termId: termTaxonomiesTable.termId })
+          .from(termTaxonomiesTable)
+          .where(eq(termTaxonomiesTable.taxonomy, key));
+        if (rows.length === 0) return;
+        const taxonomyIds = rows.map((row) => row.id);
+        await tx.delete(termRelationshipsTable).where(inArray(termRelationshipsTable.termTaxonomyId, taxonomyIds));
+        await tx.delete(termTaxonomyMetaTable).where(inArray(termTaxonomyMetaTable.termTaxonomyId, taxonomyIds));
+        await tx.delete(termTaxonomyDomainsTable).where(inArray(termTaxonomyDomainsTable.termTaxonomyId, taxonomyIds));
+        await tx.delete(termTaxonomiesTable).where(inArray(termTaxonomiesTable.id, taxonomyIds));
 
-  await db.transaction(async (tx) => {
-    const rows = await tx
-      .select({ id: termTaxonomies.id, termId: termTaxonomies.termId })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.taxonomy, key)));
-    if (rows.length === 0) return;
-    const taxonomyIds = rows.map((row) => row.id);
-    await tx.delete(termRelationships).where(inArray(termRelationships.termTaxonomyId, taxonomyIds));
-    await tx.delete(termTaxonomyMeta).where(inArray(termTaxonomyMeta.termTaxonomyId, taxonomyIds));
-    await tx.delete(termTaxonomyDomains).where(inArray(termTaxonomyDomains.termTaxonomyId, taxonomyIds));
-    await tx.delete(termTaxonomies).where(inArray(termTaxonomies.id, taxonomyIds));
-
-    const termIds = rows.map((row) => row.termId);
-    const remaining = await tx
-      .select({ termId: termTaxonomies.termId })
-      .from(termTaxonomies)
-      .where(inArray(termTaxonomies.termId, termIds));
-    const remainingSet = new Set(remaining.map((row) => row.termId));
-    const orphaned = termIds.filter((termId) => !remainingSet.has(termId));
-    if (orphaned.length > 0) {
-      await tx.delete(terms).where(inArray(terms.id, orphaned));
-    }
-  });
+        const termIds = rows.map((row) => row.termId);
+        const remaining = await tx
+          .select({ termId: termTaxonomiesTable.termId })
+          .from(termTaxonomiesTable)
+          .where(inArray(termTaxonomiesTable.termId, termIds));
+        const remainingSet = new Set(remaining.map((row) => row.termId));
+        const orphaned = termIds.filter((termId) => !remainingSet.has(termId));
+        if (orphaned.length > 0) {
+          await tx.delete(termsTable).where(inArray(termsTable.id, orphaned));
+        }
+      });
+    },
+  );
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
@@ -1120,52 +1157,54 @@ export const createTaxonomyTerm = async (input: {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  const [existingTerm] = await db.select().from(terms).where(eq(terms.slug, slug)).limit(1);
-  const term =
-    existingTerm ??
-    (
-      await db
-        .insert(terms)
-        .values({
-          name: label,
-          slug: slug || `term-${nanoid().toLowerCase()}`,
-        })
-        .returning()
-    )[0];
+  const existing = await withResolvedSiteTaxonomyTables(siteId, async ({ termsTable, termTaxonomiesTable }) => {
+    const [existingTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+    const term =
+      existingTerm ??
+      (
+        await db
+          .insert(termsTable)
+          .values({
+            name: label,
+            slug: slug || `term-${nanoid().toLowerCase()}`,
+          })
+          .returning()
+      )[0];
 
-  if (parentId !== null) {
-    const [parent] = await db
-      .select({ id: termTaxonomies.id })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, parentId), eq(termTaxonomies.taxonomy, taxonomy)))
-      .limit(1);
-    if (!parent) {
-      return { error: "Parent term does not exist in this taxonomy." };
+    if (parentId !== null) {
+      const [parent] = await db
+        .select({ id: termTaxonomiesTable.id })
+        .from(termTaxonomiesTable)
+        .where(and(eq(termTaxonomiesTable.id, parentId), eq(termTaxonomiesTable.taxonomy, taxonomy)))
+        .limit(1);
+      if (!parent) {
+        return { error: "Parent term does not exist in this taxonomy." } as const;
+      }
     }
-  }
 
-  const [created] = await db
-    .insert(termTaxonomies)
-    .values({
-      siteId,
-      termId: term.id,
-      taxonomy,
-      description: input.description ?? "",
-      parentId,
-    })
-    .onConflictDoNothing()
-    .returning();
-  if (created) {
-    revalidateDomainAndTaxonomyCaches();
-    return created;
-  }
-  const [existing] = await db
-    .select()
-    .from(termTaxonomies)
-    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, term.id), eq(termTaxonomies.taxonomy, taxonomy)))
-    .limit(1);
+    const [created] = await db
+      .insert(termTaxonomiesTable)
+      .values({
+        termId: term.id,
+        taxonomy,
+        description: input.description ?? "",
+        parentId,
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (created) {
+      return created;
+    }
+    const [existingRow] = await db
+      .select()
+      .from(termTaxonomiesTable)
+      .where(and(eq(termTaxonomiesTable.termId, term.id), eq(termTaxonomiesTable.taxonomy, taxonomy)))
+      .limit(1);
+    return existingRow ?? { error: "Failed to create term taxonomy" };
+  });
+  if ("error" in existing) return existing;
   if (existing) revalidateDomainAndTaxonomyCaches();
-  return existing ?? { error: "Failed to create term taxonomy" };
+  return existing;
 };
 
 export const updateTaxonomyTerm = async (input: {
@@ -1184,19 +1223,25 @@ export const updateTaxonomyTerm = async (input: {
     return { error: "No updates supplied" };
   }
 
-  const [current] = await db
-    .select({ termId: termTaxonomies.termId, taxonomy: termTaxonomies.taxonomy })
-    .from(termTaxonomies)
-    .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, input.termTaxonomyId)))
-    .limit(1);
+  const current = await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomiesTable }) => {
+    const [row] = await db
+      .select({ termId: termTaxonomiesTable.termId, taxonomy: termTaxonomiesTable.taxonomy })
+      .from(termTaxonomiesTable)
+      .where(eq(termTaxonomiesTable.id, input.termTaxonomyId))
+      .limit(1);
+    return row ?? null;
+  });
   if (!current) return { error: "Term taxonomy not found" };
 
   if (hasLabel || hasSlug) {
-    const [currentTerm] = await db
-      .select({ name: terms.name, slug: terms.slug })
-      .from(terms)
-      .where(eq(terms.id, current.termId))
-      .limit(1);
+    const currentTerm = await withResolvedSiteTaxonomyTables(siteId, async ({ termsTable }) => {
+      const [row] = await db
+        .select({ name: termsTable.name, slug: termsTable.slug })
+        .from(termsTable)
+        .where(eq(termsTable.id, current.termId))
+        .limit(1);
+      return row ?? null;
+    });
     if (!currentTerm) return { error: "Term not found" };
 
     const nextLabel = hasLabel ? input.label!.trim() : currentTerm.name;
@@ -1207,10 +1252,12 @@ export const updateTaxonomyTerm = async (input: {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
 
-    await db
-      .update(terms)
-      .set({ name: nextLabel, slug: nextSlug || `term-${nanoid().toLowerCase()}` })
-      .where(eq(terms.id, current.termId));
+    await withResolvedSiteTaxonomyTables(siteId, async ({ termsTable }) => {
+      await db
+        .update(termsTable)
+        .set({ name: nextLabel, slug: nextSlug || `term-${nanoid().toLowerCase()}` })
+        .where(eq(termsTable.id, current.termId));
+    });
   }
 
   if (hasParent) {
@@ -1223,10 +1270,12 @@ export const updateTaxonomyTerm = async (input: {
     });
     if ("error" in validation) return validation;
 
-    await db
-      .update(termTaxonomies)
-      .set({ parentId: nextParentId })
-      .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.id, input.termTaxonomyId)));
+    await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomiesTable }) => {
+      await db
+        .update(termTaxonomiesTable)
+        .set({ parentId: nextParentId })
+        .where(eq(termTaxonomiesTable.id, input.termTaxonomyId));
+    });
   }
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
@@ -1235,39 +1284,43 @@ export const updateTaxonomyTerm = async (input: {
 export const deleteTaxonomyTerm = async (siteId: string, termTaxonomyId: number) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return { error: "Site id is required" };
-  await db.transaction(async (tx) => {
-    const [current] = await tx
-      .select({ id: termTaxonomies.id, termId: termTaxonomies.termId, taxonomy: termTaxonomies.taxonomy })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.id, termTaxonomyId)))
-      .limit(1);
-    if (!current) return;
+  await withResolvedSiteTaxonomyTables(
+    normalizedSiteId,
+    async ({ termsTable, termTaxonomiesTable, termRelationshipsTable, termTaxonomyDomainsTable, termTaxonomyMetaTable }) => {
+      await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ id: termTaxonomiesTable.id, termId: termTaxonomiesTable.termId, taxonomy: termTaxonomiesTable.taxonomy })
+          .from(termTaxonomiesTable)
+          .where(eq(termTaxonomiesTable.id, termTaxonomyId))
+          .limit(1);
+        if (!current) return;
 
-    await tx
-      .update(termTaxonomies)
-      .set({ parentId: null })
-      .where(
-        and(
-          eq(termTaxonomies.siteId, normalizedSiteId),
-          eq(termTaxonomies.taxonomy, current.taxonomy),
-          eq(termTaxonomies.parentId, termTaxonomyId),
-        ),
-      );
+        await tx
+          .update(termTaxonomiesTable)
+          .set({ parentId: null })
+          .where(
+            and(
+              eq(termTaxonomiesTable.taxonomy, current.taxonomy),
+              eq(termTaxonomiesTable.parentId, termTaxonomyId),
+            ),
+          );
 
-    await tx.delete(termRelationships).where(eq(termRelationships.termTaxonomyId, termTaxonomyId));
-    await tx.delete(termTaxonomyMeta).where(eq(termTaxonomyMeta.termTaxonomyId, termTaxonomyId));
-    await tx.delete(termTaxonomyDomains).where(eq(termTaxonomyDomains.termTaxonomyId, termTaxonomyId));
-    await tx.delete(termTaxonomies).where(and(eq(termTaxonomies.siteId, normalizedSiteId), eq(termTaxonomies.id, termTaxonomyId)));
+        await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.termTaxonomyId, termTaxonomyId));
+        await tx.delete(termTaxonomyMetaTable).where(eq(termTaxonomyMetaTable.termTaxonomyId, termTaxonomyId));
+        await tx.delete(termTaxonomyDomainsTable).where(eq(termTaxonomyDomainsTable.termTaxonomyId, termTaxonomyId));
+        await tx.delete(termTaxonomiesTable).where(eq(termTaxonomiesTable.id, termTaxonomyId));
 
-    const [stillUsed] = await tx
-      .select({ id: termTaxonomies.id })
-      .from(termTaxonomies)
-      .where(eq(termTaxonomies.termId, current.termId))
-      .limit(1);
-    if (!stillUsed) {
-      await tx.delete(terms).where(eq(terms.id, current.termId));
-    }
-  });
+        const [stillUsed] = await tx
+          .select({ id: termTaxonomiesTable.id })
+          .from(termTaxonomiesTable)
+          .where(eq(termTaxonomiesTable.termId, current.termId))
+          .limit(1);
+        if (!stillUsed) {
+          await tx.delete(termsTable).where(eq(termsTable.id, current.termId));
+        }
+      });
+    },
+  );
   revalidateDomainAndTaxonomyCaches();
   return { ok: true };
 };
@@ -1324,6 +1377,10 @@ export const createSite = async (formData: FormData) => {
       .returning();
 
     await upsertSiteUserRole(response.id, session.user.id, "administrator");
+    await ensureDefaultCoreDataDomains(response.id);
+    for (const key of DEFAULT_CORE_DOMAIN_KEYS) {
+      await ensureSiteDomainTypeTables(response.id, key);
+    }
 
     revalidateTag(
       `${subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-metadata`,
@@ -1505,14 +1562,7 @@ export const deleteSite = withSiteAuth(
 );
 
 export const getSiteFromDomainPostId = async (postId: string) => {
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, postId),
-    columns: {
-      siteId: true,
-    },
-  });
-
-  return post?.siteId;
+  return resolveSiteIdForDomainPostId(postId);
 };
 
 export const createDomainPost = withSiteAuth(
@@ -1537,17 +1587,18 @@ export const createDomainPost = withSiteAuth(
     }
 
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
-    const [response] = await db
-      .insert(domainPosts)
-      .values({
-        siteId: site.id,
-        userId: session.user.id,
-        dataDomainId: domain.id,
-        slug: toSeoSlug(`${domain.key}-${nanoid()}`),
-        published: false,
-        ...(useRandomDefaultImages ? { image: pickRandomTootyImage() } : {}),
-      })
-      .returning();
+    const response = await createSiteScopedDomainPost({
+      siteId: site.id,
+      userId: session.user.id,
+      dataDomainId: domain.id,
+      dataDomainKey: domain.key,
+      slug: toSeoSlug(`${domain.key}-${nanoid()}`),
+      published: false,
+      image: useRandomDefaultImages ? pickRandomTootyImage() : "",
+    });
+    if (!response) {
+      return { error: "Failed to create content entry." };
+    }
 
     // Intentionally skip revalidateTag here: this action is invoked from a render-time
     // create-and-redirect page, and Next.js disallows render-phase revalidation calls.
@@ -1594,77 +1645,78 @@ export const updateDomainPost = async (
   }
 
   try {
-    const postRecord = await db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(domainPosts)
-        .set({
-          title: data.title,
-          description: data.description,
-          content: data.content,
-          password: data.password ?? "",
-          ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
-          layout: data.layout ?? null,
-        })
-        .where(eq(domainPosts.id, data.id))
-        .returning();
+    const postRecord = await updateSiteDomainPostById({
+      siteId: existing.siteId,
+      postId: data.id,
+      dataDomainKey: existing.dataDomainKey,
+      patch: {
+        title: data.title,
+        description: data.description,
+        content: data.content,
+        password: data.password ?? "",
+        ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
+        layout: data.layout ?? null,
+      },
+    });
+    if (!postRecord) {
+      return { error: "Post not found or not authorized" };
+    }
 
-      await tx.delete(termRelationships).where(eq(termRelationships.objectId, data.id));
-      const taxonomyIds = Array.from(
-        new Set(
-          Array.isArray(data.taxonomyIds)
-            ? data.taxonomyIds
-            : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
-        ),
-      );
-      if (taxonomyIds.length > 0) {
-        const validTaxonomyIds = (
-          await tx
-            .select({ id: termTaxonomies.id })
-            .from(termTaxonomies)
-            .where(and(eq(termTaxonomies.siteId, existing.siteId), inArray(termTaxonomies.id, taxonomyIds)))
-        ).map((row) => row.id);
-        if (validTaxonomyIds.length !== taxonomyIds.length) {
-          throw new Error("One or more taxonomy terms are invalid for this site.");
-        }
-        await tx.insert(termRelationships).values(
-          validTaxonomyIds.map((termTaxonomyId) => ({
-            objectId: data.id,
-            termTaxonomyId,
-          })),
+    await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) => {
+      await db.transaction(async (tx) => {
+        await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, data.id));
+        const taxonomyIds = Array.from(
+          new Set(
+            Array.isArray(data.taxonomyIds)
+              ? data.taxonomyIds
+              : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
+          ),
         );
-      }
-
-      await tx.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, data.id));
-      if (Array.isArray(data.metaEntries) && data.metaEntries.length > 0) {
-        const normalizedMeta = data.metaEntries
-          .map((entry) => ({
-            key: entry.key.trim(),
-            value: entry.value.trim(),
-          }))
-          .filter((entry) => entry.key.length > 0);
-
-        if (normalizedMeta.length > 0) {
-          await tx.insert(domainPostMeta).values(
-            normalizedMeta.map((entry) => ({
-              domainPostId: data.id,
-              key: entry.key,
-              value: entry.value,
+        if (taxonomyIds.length > 0) {
+          const validTaxonomyIds = (
+            await tx
+              .select({ id: termTaxonomiesTable.id })
+              .from(termTaxonomiesTable)
+              .where(inArray(termTaxonomiesTable.id, taxonomyIds))
+          ).map((row) => row.id);
+          if (validTaxonomyIds.length !== taxonomyIds.length) {
+            throw new Error("One or more taxonomy terms are invalid for this site.");
+          }
+          await tx.insert(termRelationshipsTable).values(
+            validTaxonomyIds.map((termTaxonomyId) => ({
+              objectId: data.id,
+              termTaxonomyId,
             })),
           );
         }
-      }
-
-      return updated;
+      });
     });
 
-    const taxonomyRows = await db
-      .select({
-        id: termTaxonomies.id,
-        taxonomy: termTaxonomies.taxonomy,
-      })
-      .from(termRelationships)
-      .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
-      .where(and(eq(termRelationships.objectId, data.id), eq(termTaxonomies.siteId, existing.siteId)));
+    if (Array.isArray(data.metaEntries)) {
+      const normalizedMeta = data.metaEntries
+        .map((entry) => ({
+          key: entry.key.trim(),
+          value: entry.value.trim(),
+        }))
+        .filter((entry) => entry.key.length > 0);
+      await replaceSiteDomainPostMeta({
+        siteId: existing.siteId,
+        dataDomainKey: existing.dataDomainKey,
+        postId: data.id,
+        entries: normalizedMeta,
+      });
+    }
+
+    const taxonomyRows = await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) =>
+      db
+        .select({
+          id: termTaxonomiesTable.id,
+          taxonomy: termTaxonomiesTable.taxonomy,
+        })
+        .from(termRelationshipsTable)
+        .innerJoin(termTaxonomiesTable, eq(termRelationshipsTable.termTaxonomyId, termTaxonomiesTable.id))
+        .where(eq(termRelationshipsTable.objectId, data.id)),
+    );
 
     const cats = taxonomyRows
       .filter((row) => row.taxonomy === "category")
@@ -1673,13 +1725,11 @@ export const updateDomainPost = async (
       .filter((row) => row.taxonomy === "tag")
       .map((row) => ({ tagId: row.id }));
 
-    const metaRows = await db
-      .select({
-        key: domainPostMeta.key,
-        value: domainPostMeta.value,
-      })
-      .from(domainPostMeta)
-      .where(eq(domainPostMeta.domainPostId, data.id));
+    const metaRows = await listSiteDomainPostMeta({
+      siteId: existing.siteId,
+      dataDomainKey: existing.dataDomainKey,
+      postId: data.id,
+    });
 
     const { siteId, slug } = existing;
     if (siteId) {
@@ -1744,27 +1794,27 @@ export const updateDomainPostMetadata = async (
         const { url } = await put(filename, maybeFile, { access: "public" });
         const blurhash = await getBlurDataURL(url);
 
-        response = await db
-          .update(domainPosts)
-          .set({
+        response = await updateSiteDomainPostById({
+          siteId: post.siteId,
+          postId: post.id,
+          dataDomainKey: post.dataDomainKey,
+          patch: {
             image: url,
             imageBlurhash: blurhash,
-          })
-          .where(eq(domainPosts.id, post.id))
-          .returning()
-          .then((res) => res[0]);
+          },
+        });
       } else if (finalUrl) {
         const blurhash = await getBlurDataURL(`${process.cwd()}/public${finalUrl}`);
 
-        response = await db
-          .update(domainPosts)
-          .set({
+        response = await updateSiteDomainPostById({
+          siteId: post.siteId,
+          postId: post.id,
+          dataDomainKey: post.dataDomainKey,
+          patch: {
             image: finalUrl,
             imageBlurhash: blurhash,
-          })
-          .where(eq(domainPosts.id, post.id))
-          .returning()
-          .then((res) => res[0]);
+          },
+        });
       } else {
         return { error: "No valid image upload or URL provided" };
       }
@@ -1813,14 +1863,14 @@ export const updateDomainPostMetadata = async (
         }
         response = result.post;
       } else {
-        response = await db
-          .update(domainPosts)
-          .set({
+        response = await updateSiteDomainPostById({
+          siteId: post.siteId,
+          postId: post.id,
+          dataDomainKey: post.dataDomainKey,
+          patch: {
             [key]: nextValue,
-          })
-          .where(eq(domainPosts.id, post.id))
-          .returning()
-          .then((res) => res[0]);
+          } as any,
+        });
       }
     }
 
@@ -1883,11 +1933,31 @@ export const deleteDomainPost = async (formData: FormData, postId: string) => {
   }
 
   try {
-    await db.transaction(async (tx) => {
-      await tx.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, post.id));
-      await tx.delete(termRelationships).where(eq(termRelationships.objectId, post.id));
-      await tx.delete(domainPosts).where(eq(domainPosts.id, post.id));
-    });
+    if (typeof db.transaction === "function") {
+      await withResolvedSiteTaxonomyTables(post.siteId, async ({ termRelationshipsTable }) => {
+        await db.transaction(async (tx: any) => {
+          if (typeof tx?.delete === "function") {
+            await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, post.id));
+          } else {
+            await db.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, post.id));
+          }
+          await deleteSiteDomainPostById({
+            siteId: post.siteId,
+            postId: post.id,
+            dataDomainKey: post.dataDomainKey,
+          });
+        });
+      });
+    } else {
+      await withResolvedSiteTaxonomyTables(post.siteId, async ({ termRelationshipsTable }) => {
+        await db.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, post.id));
+      });
+      await deleteSiteDomainPostById({
+        siteId: post.siteId,
+        postId: post.id,
+        dataDomainKey: post.dataDomainKey,
+      });
+    }
     await emitCmsLifecycleEvent({
       name: "content_deleted",
       siteId: post.siteId,
@@ -2166,18 +2236,7 @@ export const getProfile = async (siteId?: string) => {
     throw new Error("Not authenticated");
   }
 
-  const self = await db.query.users.findFirst({
-    where: eq(users.id, session.user.id),
-    columns: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      passwordHash: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
+  const self = await readCoreProfile(session.user.id);
   if (!self) {
     throw new Error("User not found");
   }
@@ -2189,23 +2248,26 @@ export const getProfile = async (siteId?: string) => {
   });
   const linkedSet = new Set(linkedAccounts.map((account) => String(account.provider || "").trim()).filter(Boolean));
   const forcePasswordChange = (await getUserMetaValue(self.id, "force_password_change")) === "true";
-  const displayName = (await getUserMetaValue(self.id, "display_name")) || self.name || "";
   const kernel = await createKernelForRequest(siteId);
   const extensionSectionsRaw = await kernel.applyFilters<ProfileSection[]>("admin:profile:sections", [], {
     siteId: siteId || null,
     userId: self.id,
     role: self.role,
   });
+  const uploadSiteId = siteId || (await resolvePrimaryAccessibleSiteIdForUser(self.id));
 
   return {
     user: {
       id: self.id,
-      name: self.name ?? "",
-      displayName,
+      name: self.name,
+      displayName: self.displayName,
+      profileImageUrl: self.profileImageUrl,
+      resolvedImageUrl: self.resolvedImageUrl,
       email: self.email,
       role: self.role,
-      hasNativePassword: Boolean(self.passwordHash),
+      hasNativePassword: self.hasNativePassword,
       forcePasswordChange,
+      uploadSiteId,
       createdAt: self.createdAt,
       updatedAt: self.updatedAt,
     },
@@ -2217,7 +2279,7 @@ export const getProfile = async (siteId?: string) => {
       })),
       native: {
         enabled: true,
-        linked: Boolean(self.passwordHash),
+        linked: self.hasNativePassword,
       },
     },
     extensionSections: normalizeProfileSections(extensionSectionsRaw),
@@ -2232,21 +2294,24 @@ export const updateProfile = async (formData: FormData) => {
 
   const name = normalizeOptionalString(formData.get("name"));
   const displayName = normalizeOptionalString(formData.get("displayName")) || "";
+  const profileImageInput = formData.get("profileImageUrl");
+  const profileImageUrl = normalizeProfileImageUrl(profileImageInput);
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
   if (!email || !validateEmail(email)) {
     return { error: "Valid email is required" };
   }
+  if (profileImageUrl === null) {
+    return { error: "Profile image must be an absolute http(s) URL or a root-relative path" };
+  }
 
   try {
-    await db
-      .update(users)
-      .set({
-        name,
-        email,
-      })
-      .where(eq(users.id, session.user.id));
-    await setUserMetaValue(session.user.id, "display_name", displayName);
+    await updateCoreProfile(session.user.id, {
+      name,
+      email,
+      displayName,
+      profileImageUrl: profileImageUrl || "",
+    });
   } catch (error: any) {
     if (error?.code === "23505") {
       return { error: "Another account already uses that email" };
@@ -2696,21 +2761,28 @@ export const resetCmsCache = async () => {
     }
   }
 
-  const allPosts = await db
+  const siteRows = await db
     .select({
-      slug: domainPosts.slug,
+      id: sites.id,
       subdomain: sites.subdomain,
       customDomain: sites.customDomain,
     })
-    .from(domainPosts)
-    .leftJoin(sites, eq(domainPosts.siteId, sites.id));
+    .from(sites);
+  const allPosts = await listNetworkDomainPosts({
+    siteIds: siteRows.map((site) => site.id),
+    includeContent: false,
+  });
+  const siteMap = new Map(
+    siteRows.map((site) => [site.id, { subdomain: site.subdomain, customDomain: site.customDomain }]),
+  );
 
   for (const post of allPosts) {
-    if (post.subdomain) {
-      revalidateTag(`${post.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${post.slug}`, "max");
+    const site = siteMap.get(post.siteId);
+    if (site?.subdomain) {
+      revalidateTag(`${site.subdomain}.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}-${post.slug}`, "max");
     }
-    if (post.customDomain) {
-      revalidateTag(`${post.customDomain}-${post.slug}`, "max");
+    if (site?.customDomain) {
+      revalidateTag(`${site.customDomain}-${post.slug}`, "max");
     }
   }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
-import { listPluginsWithSiteState, listPluginsWithState } from "@/lib/plugins";
+import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
 import {
   buildAdminPluginPageContext,
   getDefaultAdminUseTypes,
@@ -39,12 +39,7 @@ export async function GET(request: Request) {
   const environment = process.env.NODE_ENV === "development" ? "development" : "production";
   const kernel = await createKernelForRequest(siteId || undefined);
   const page = buildAdminPluginPageContext(path, siteId || null);
-  const pluginStates = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
-  const hasAnalyticsProviders = pluginStates.some((plugin: any) => {
-    const isAnalytics = String(plugin?.id || "").startsWith("analytics-");
-    if (!isAnalytics) return false;
-    return siteId ? Boolean(plugin?.enabled && plugin?.siteEnabled) : Boolean(plugin?.enabled);
-  });
+  const hasAnalyticsProviders = siteId ? await hasGraphAnalyticsProvider(siteId) : false;
 
   const useTypeContext = {
     siteId: siteId || null,

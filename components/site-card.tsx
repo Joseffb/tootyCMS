@@ -60,6 +60,11 @@ async function getDomainTrend(domain: string, siteId: string): Promise<TrendMetr
     }
 
     const json = await res.json();
+    const meta = (json && typeof json === "object" ? (json as any).meta : null) || null;
+    if (meta?.reason === "no_analytics_provider" || (!meta?.provider && meta?.fallback)) {
+      return null;
+    }
+
     const rows = Array.isArray(json?.data) ? json.data : [];
     if (rows.length === 0) return { deltaPct: 0, trend: "flat" };
 
@@ -115,6 +120,7 @@ export default async function SiteCard({
   const domain = isMainSite ? rootDomain : `${data.subdomain}.${rootDomain}`;
   const analyticsDomain = isMainSite ? rootDomainHost : `${data.subdomain}.${rootDomainHost}`;
   const trend = hasAnalytics ? await getDomainTrend(analyticsDomain, data.id) : null;
+  const showAnalytics = hasAnalytics && Boolean(trend);
 
   let publicUrl = getSitePublicUrl({
     subdomain: data.subdomain,
@@ -158,7 +164,7 @@ export default async function SiteCard({
       </Link>
 
       {/* Footer actions ------------------------------------------------------ */}
-      <div className={`absolute bottom-4 flex w-full px-4 ${hasAnalytics ? "justify-between space-x-4" : "justify-start"}`}>
+      <div className={`absolute bottom-4 flex w-full px-4 ${showAnalytics ? "justify-between space-x-4" : "justify-start"}`}>
         {/* Public link */}
         <a
           href={publicUrl}
@@ -170,7 +176,7 @@ export default async function SiteCard({
         </a>
 
         {/* Analytics link with live share % */}
-        {hasAnalytics ? (
+        {showAnalytics ? (
           <Link
             href={`/app/site/${data.id}/analytics`}
             className={`flex items-center rounded-md px-2 py-1 text-sm font-medium transition-colors ${

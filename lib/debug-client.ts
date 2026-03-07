@@ -18,9 +18,16 @@ function getTraceTier() {
   return "Dev";
 }
 
+function shouldEmitTraceToConsole(tier: string) {
+  if (tier !== "Test") return true;
+  const raw = String(process.env.TRACE_TEST_CONSOLE || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 export function traceClient(scope: string, message: string, payload?: unknown) {
   if (!isDebugModeClient()) return;
   const tier = getTraceTier();
+  if (!shouldEmitTraceToConsole(tier)) return;
   const level: "info" | "warn" | "error" = "info";
   if (payload === undefined) {
     console.info(`[trace:${tier}:${level}:${scope}] ${message}`);

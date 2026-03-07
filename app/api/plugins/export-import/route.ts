@@ -5,13 +5,16 @@ import { getSession } from "@/lib/auth";
 import { userCan } from "@/lib/authorization";
 import { createKernelForRequest, listPluginsWithSiteState, listPluginsWithState } from "@/lib/plugin-runtime";
 import db from "@/lib/db";
-import { dataDomains, domainPosts, media, users } from "@/lib/schema";
+import { sites, users } from "@/lib/schema";
 import { sendCommunication } from "@/lib/communications";
 import { listSiteUsers } from "@/lib/site-user-tables";
 import { NETWORK_ADMIN_ROLE } from "@/lib/rbac";
 import { eq, inArray, sql } from "drizzle-orm";
 import { trace } from "@/lib/debug";
 import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
+import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
+import { listSiteDomainPosts } from "@/lib/site-domain-post-store";
+import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
 
 type ActionName =
   | "providers"
@@ -94,14 +97,39 @@ async function estimateDryRunBands(input: {
 }) {
   const snapshotMode = isSnapshotFormat(input.format);
   const selectedDomains = toStringList(input.options?.domains);
-  const domainRows = await db.select({ id: dataDomains.id, key: dataDomains.key }).from(dataDomains);
-  const selectedDomainIds =
-    selectedDomains.length > 0
-      ? domainRows.filter((row) => selectedDomains.includes(String(row.key || ""))).map((row) => row.id)
-      : [];
-  const allDomainCount = domainRows.length;
+  const targetSiteIds = input.siteId
+    ? [input.siteId]
+    : (await db.select({ id: sites.id }).from(sites)).map((row) => String(row.id || "").trim()).filter(Boolean);
+  const selectedKeys = new Set(selectedDomains.map((value) => String(value || "").trim()).filter(Boolean));
 
+  let allDomainCount = 0;
   let articleCount = 0;
+  let mediaCount = 0;
+  let mediaBytes = 0;
+
+  for (const siteId of targetSiteIds) {
+    const domainRows = await listSiteDataDomains(siteId, { includeInactive: false });
+    allDomainCount += domainRows.length;
+
+    const posts = await listSiteDomainPosts({
+      siteId,
+      includeInactiveDomains: false,
+      includeContent: false,
+    });
+    articleCount += posts.filter((post) => selectedKeys.size === 0 || selectedKeys.has(post.dataDomainKey)).length;
+
+    if (String(input.options?.includeMedia || "references") !== "none") {
+      await ensureSiteMediaTable(siteId);
+      const mediaTable = getSiteMediaTable(siteId);
+      const mediaRows = await db.execute(sql`
+        SELECT count(*)::int AS total, COALESCE(sum(CASE WHEN "size" IS NULL THEN 0 ELSE "size" END), 0)::bigint AS bytes
+        FROM ${mediaTable}
+      `);
+      mediaCount += Number((mediaRows as any)?.rows?.[0]?.total ?? 0);
+      mediaBytes += Number((mediaRows as any)?.rows?.[0]?.bytes ?? 0);
+    }
+  }
+
   const includeUsersMode = String(input.options?.includeUsers || "site-users");
   const includeMediaMode = String(input.options?.includeMedia || "references");
   const includeEntries = snapshotMode ? input.options?.includeEntries !== false : true;
@@ -114,26 +142,14 @@ async function estimateDryRunBands(input: {
       const siteUsers = await listSiteUsers(input.siteId);
       userCount = siteUsers.length;
     }
-    let mediaCount = 0;
-    let mediaBytes = 0;
-    if (includeMediaMode !== "none") {
-      const mediaWhere = input.siteId ? sql`WHERE "siteId" = ${input.siteId}` : sql``;
-      const mediaRows = await db.execute(sql`
-        SELECT count(*)::int AS total, COALESCE(sum(CASE WHEN "size" IS NULL THEN 0 ELSE "size" END), 0)::bigint AS bytes
-        FROM ${media}
-        ${mediaWhere}
-      `);
-      mediaCount = Number((mediaRows as any)?.rows?.[0]?.total ?? 0);
-      mediaBytes = Number((mediaRows as any)?.rows?.[0]?.bytes ?? 0);
-    }
     return {
       selectedDomains,
       selectedDomainCountBand: snapshotMode
         ? input.options?.includeDomains === false
           ? "none"
-          : toEstimatedBand(domainRows.length)
-        : toEstimatedBand(selectedDomains.length || domainRows.length),
-      availableDomainsBand: toEstimatedBand(domainRows.length),
+          : toEstimatedBand(allDomainCount)
+        : toEstimatedBand(selectedDomains.length || allDomainCount),
+      availableDomainsBand: toEstimatedBand(allDomainCount),
       articlesBand: "none",
       usersBand: includeUsersMode === "none" ? "none" : toEstimatedBand(userCount),
       mediaItemsBand: includeMediaMode === "none" ? "none" : toEstimatedBand(mediaCount),
@@ -146,35 +162,6 @@ async function estimateDryRunBands(input: {
     };
   }
 
-  if (selectedDomainIds.length > 0) {
-    if (input.siteId) {
-      const rows = await db.execute(sql`
-        SELECT count(*)::int AS total
-        FROM ${domainPosts}
-        WHERE "siteId" = ${input.siteId}
-          AND "dataDomainId" IN (${sql.join(selectedDomainIds.map((id) => sql`${id}`), sql`,`)})
-      `);
-      articleCount = Number((rows as any)?.rows?.[0]?.total ?? 0);
-    } else {
-      const rows = await db.execute(sql`
-        SELECT count(*)::int AS total
-        FROM ${domainPosts}
-        WHERE "dataDomainId" IN (${sql.join(selectedDomainIds.map((id) => sql`${id}`), sql`,`)})
-      `);
-      articleCount = Number((rows as any)?.rows?.[0]?.total ?? 0);
-    }
-  } else if (input.siteId) {
-    const rows = await db.execute(sql`
-      SELECT count(*)::int AS total
-      FROM ${domainPosts}
-      WHERE "siteId" = ${input.siteId}
-    `);
-    articleCount = Number((rows as any)?.rows?.[0]?.total ?? 0);
-  } else {
-    const rows = await db.execute(sql`SELECT count(*)::int AS total FROM ${domainPosts}`);
-    articleCount = Number((rows as any)?.rows?.[0]?.total ?? 0);
-  }
-
   let userCount = 0;
   if (includeUsersMode === "all-users" || (!input.siteId && includeUsersMode === "site-users")) {
     const rows = await db.execute(sql`SELECT count(*)::int AS total FROM ${users}`);
@@ -182,18 +169,6 @@ async function estimateDryRunBands(input: {
   } else if (includeUsersMode === "site-users" && input.siteId) {
     const siteUsers = await listSiteUsers(input.siteId);
     userCount = siteUsers.length;
-  }
-  let mediaCount = 0;
-  let mediaBytes = 0;
-  if (includeMediaMode !== "none") {
-    const mediaWhere = input.siteId ? sql`WHERE "siteId" = ${input.siteId}` : sql``;
-    const mediaRows = await db.execute(sql`
-      SELECT count(*)::int AS total, COALESCE(sum(CASE WHEN "size" IS NULL THEN 0 ELSE "size" END), 0)::bigint AS bytes
-      FROM ${media}
-      ${mediaWhere}
-    `);
-    mediaCount = Number((mediaRows as any)?.rows?.[0]?.total ?? 0);
-    mediaBytes = Number((mediaRows as any)?.rows?.[0]?.bytes ?? 0);
   }
 
   return {
@@ -447,33 +422,6 @@ async function storeExportArtifactInMedia(input: {
     }),
   );
   const url = `s3://${process.env.AWS_S3_BUCKET}/${key}`;
-  await db
-    .insert(media)
-    .values({
-      siteId: input.siteId || null,
-      userId: input.userId,
-      provider: "s3",
-      bucket: process.env.AWS_S3_BUCKET!,
-      objectKey: key,
-      url,
-      label: input.fileName,
-      mimeType: input.contentType || "application/octet-stream",
-      size: input.bytes.byteLength,
-    })
-    .onConflictDoUpdate({
-      target: media.objectKey,
-      set: {
-        siteId: input.siteId || null,
-        userId: input.userId,
-        provider: "s3",
-        bucket: process.env.AWS_S3_BUCKET!,
-        url,
-        label: input.fileName,
-        mimeType: input.contentType || "application/octet-stream",
-        size: input.bytes.byteLength,
-        updatedAt: new Date(),
-      },
-    });
   return { key, url };
 }
 

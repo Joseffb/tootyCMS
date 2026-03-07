@@ -19,6 +19,75 @@ Core must remain platform-generic:
 - Plugins and themes must adapt to published core contracts and extension points.
 - If a request pressures core toward a one-off extension-specific behavior, the default answer is to reject it or solve it through existing generic contracts.
 
+## Tenant Storage Boundary Contract (MUST)
+
+Network and site storage are strict, separate persistence layers.
+
+### 1) Network-level tables (global scope)
+
+Network tables must be explicit and minimal. Naming is:
+
+- `<prefix>network_<entity>`
+
+Network/global tables are only for platform governance/orchestration and must not store site feature content.
+
+Examples include:
+
+- auth/session/account tables
+- network site lookup (`<prefix>network_sites`)
+- global system settings
+- RBAC role definitions
+- network-managed webhook/communication orchestration
+
+### 2) Site-level feature storage (site scope)
+
+All site feature data must live in physical site tables named with concrete site identity:
+
+- `<prefix>site_{id}_<entity>`
+
+Examples:
+
+- `<prefix>site_{id}_domain_posts`
+- `<prefix>site_{id}_domain_post_meta`
+- `<prefix>site_{id}_terms`
+- `<prefix>site_{id}_term_taxonomies`
+- `<prefix>site_{id}_media`
+- `<prefix>site_{id}_menus`
+
+### 3) Prohibited pattern for site feature storage
+
+Do not store tenant feature rows in shared multi-tenant feature tables that depend on a row-level `siteId` discriminator.
+
+Prohibited for feature storage:
+
+- shared `site_*` feature tables like `<prefix>site_domain_posts`, `<prefix>site_media`, `<prefix>site_terms` (table names without concrete `<siteId>` in the table name)
+
+### 4) Column rule
+
+Site-physical feature tables must not include a `siteId` column.
+
+- tenant isolation is encoded in table identity
+- cross-site joins for feature storage are not allowed through row-level site discriminators
+
+### 5) New feature rule
+
+Any new feature that persists tenant data must:
+
+- declare storage scope (network vs site-physical)
+- use site-physical table naming for tenant feature data
+- include automated tests that fail when:
+  - site feature data is written to shared global feature tables
+  - a site-physical feature table includes a `siteId` column
+  - a non-allowlisted network table stores site feature content
+
+### 6) Registry policy (pre-v1 hard mode)
+
+Deterministic site table naming is derived from `network_sites.id`.
+
+- Do not introduce registry tables for site feature table discovery.
+- Remove obsolete site/user/settings registry tables.
+- Table name derivation must be deterministic from `<prefix> + site id + entity`.
+
 ## Governance Exception: Spine Service Plugins (RARE, MUST)
 
 There is one narrow exception to the no-one-off-core-change rule:
@@ -46,6 +115,26 @@ Mandatory constraints:
 - Only the Tooty core team may approve and implement a new spine service plugin pattern.
 
 ## Naming Contracts (MUST)
+
+## Admin Scope Contract (MUST)
+
+Admin navigation and settings scope are core-owned runtime contracts.
+
+Core must publish a server-derived admin scope model that includes:
+
+- `adminMode`: `single-site` or `multi-site`
+- `activeScope`: `network`, `site`, or `merged-single-site`
+- `mainSiteId`
+- `effectiveSiteId`
+
+Rules:
+
+- Clients must not infer admin mode by recomputing `siteCount === 1`.
+- Single-site mode is user-relative and merges network/site settings into one canonical site-scoped settings model.
+- Canonical single-site settings routes are `/app/site/{mainSiteId}/settings/*`.
+- Compatibility network settings routes may exist, but the primary nav model in single-site mode must remain the merged site-scoped model.
+- Multi-site network nav must not inject site settings.
+- Multi-site site nav must not inject network settings.
 
 ### Data Domain Naming
 
@@ -246,6 +335,19 @@ Scope governance:
 - Site plugins are for tenant/site-owned behavior, integrations, and content features.
 - Analytics providers are typically `scope: "site"` plugins unless a network policy explicitly requires forced rollout.
 - Consent/GDPR UX may be packaged as a site plugin, but consent enforcement remains core-owned pre-v1 unless a future plugin contract replaces it.
+
+### Analytics Visibility Contract (MUST)
+
+Analytics UI surfaces (network dashboards, site dashboards, nav links, and analytics chips) must only render when both conditions are true:
+
+- An analytics plugin is enabled for the site (`enabled && siteEnabled`).
+- The active analytics provider can return graph/query data for the site.
+
+Hard rules:
+
+- RBAC permission (`site.analytics.read`) alone is not enough to show analytics UI.
+- Plugin enablement alone is not enough to show analytics UI.
+- If provider graph/query capability is unavailable, analytics UI must be hidden.
 
 ### Auth Provider Ownership (PRE-V1, MUST)
 

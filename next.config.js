@@ -58,6 +58,13 @@ const nextConfig = {
   ...(typeof process.env.NEXT_DIST_DIR === "string" && process.env.NEXT_DIST_DIR.trim()
     ? { distDir: process.env.NEXT_DIST_DIR.trim() }
     : {}),
+  ...(typeof process.env.NEXT_TSCONFIG_PATH === "string" && process.env.NEXT_TSCONFIG_PATH.trim()
+    ? {
+        typescript: {
+          tsconfigPath: process.env.NEXT_TSCONFIG_PATH.trim(),
+        },
+      }
+    : {}),
   allowedDevOrigins: collectAllowedOrigins(),
   turbopack: {
     root: __dirname,

@@ -144,8 +144,8 @@ async function readFirstExistingTemplate(baseDir: string, candidates: string[]) 
   return null;
 }
 
-async function readPluginFallbackTemplate(dataDomain: string, candidates: string[]) {
-  const pluginId = await getPluginOwnerForDataDomain(dataDomain);
+async function readPluginFallbackTemplate(siteId: string, dataDomain: string, candidates: string[]) {
+  const pluginId = await getPluginOwnerForDataDomain(siteId, dataDomain);
   if (!pluginId) return null;
   const plugin = await getPluginById(pluginId);
   if (!plugin) return null;
@@ -251,7 +251,7 @@ export async function getThemeTemplateFromCandidates(
   const pluginDataDomain = String(opts?.pluginDataDomain || "").trim().toLowerCase();
   const pluginCandidates = Array.isArray(opts?.pluginCandidates) ? opts?.pluginCandidates : [];
   if (pluginDataDomain && pluginCandidates.length > 0) {
-    const pluginTemplate = await readPluginFallbackTemplate(pluginDataDomain, pluginCandidates);
+    const pluginTemplate = await readPluginFallbackTemplate(siteId, pluginDataDomain, pluginCandidates);
     if (pluginTemplate) {
       return {
         template: pluginTemplate,
@@ -297,7 +297,7 @@ export async function getThemeDetailTemplateByHierarchy(
   const dataDomain = opts.dataDomain.trim().toLowerCase();
   const slug = opts.slug.trim().toLowerCase();
   const candidates = domainDetailTemplateCandidates(dataDomain, slug);
-  const pluginOwner = await getPluginOwnerForDataDomain(dataDomain);
+  const pluginOwner = await getPluginOwnerForDataDomain(siteId, dataDomain);
   const specificCandidates = candidates.filter((candidate) => candidate !== "single.html" && candidate !== "index.html");
   if (pluginOwner) {
     return getThemeTemplateFromCandidates(siteId, specificCandidates, {

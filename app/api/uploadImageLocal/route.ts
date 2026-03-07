@@ -86,7 +86,7 @@ export async function POST(req: Request) {
       );
     }
     try {
-      const existingRows = await findExistingMediaByKeys(expectedKeys);
+      const existingRows = await findExistingMediaByKeys(siteId, expectedKeys);
       for (const row of existingRows) {
         if (row?.objectKey && row?.url) {
           uploadedByKey.set(row.objectKey, row.url);

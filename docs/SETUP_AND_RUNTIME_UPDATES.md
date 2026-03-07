@@ -135,10 +135,18 @@ Database compatibility is a first-class operational concern:
   - add `applyDatabaseCompatibilityFixes()` DDL so admin "Apply Database Update" can repair drift
   - add/adjust `tests/db-health-versioning.test.ts` coverage
 
+Tenant table contract for this migration:
+- network tables are minimal and explicit: `<prefix>network_*`
+- site feature tables are physical and deterministic: `<prefix>site_{id}_*`
+- shared feature tables like `<prefix>site_*` (without `{id}`) are disallowed
+- site feature tables must not include `siteId` columns
+- registry tables for site feature table discovery are obsolete and must be removed
+
 Pre-v1 compatibility mode policy:
 - default runtime posture is **no-compat**
 - forward schema migration capability remains enabled
 - optional compatibility mode can be explicitly enabled with `CMS_COMPAT_MODE=1` only when a release gate requires it
+- hard cutover drop/recreate is allowed before v1 when enforcing storage-scope contracts
 
 Admin "Database Updates" page provides:
 - current vs target version display
@@ -155,6 +163,50 @@ Local behavior:
 
 Result:
 - site cards, settings badges, analytics links, and theme render context use canonical URLs instead of hardcoded localhost fallbacks.
+
+## Admin Scope + Settings Nav Modes (2026-03-05)
+
+Admin navigation scope is now a server-derived runtime contract.
+
+Authoritative admin payload fields:
+- `adminMode`: `single-site` or `multi-site`
+- `activeScope`: `network`, `site`, or `merged-single-site`
+- `mainSiteId`
+- `effectiveSiteId`
+
+Rules:
+- single-site mode is user-relative and means the current user has exactly one accessible site
+- multi-site mode means the current user has more than one accessible site
+- in single-site mode, admin navigation resolves to a merged site-centric workspace and `effectiveSiteId` is pinned to `mainSiteId`
+- client nav components must consume the server-provided mode/scope fields and must not recompute mode from `siteCount`
+
+Sidebar/settings contract:
+- multi-site network scope uses network nav only
+- multi-site site scope uses site nav only
+- single-site mode uses one merged settings model only
+- canonical single-site settings routes are `/app/site/{mainSiteId}/settings/*`
+- compatibility network settings routes may remain reachable, but they are not the canonical nav targets in single-site mode
+
+## Editorial Popularity Counter (2026-03-06)
+
+`Most Popular Articles` now uses a narrow editorial `view_count` signal in domain post meta.
+
+Contract:
+- storage key: `view_count`
+- storage location: site-physical `domain_post_meta`
+- purpose: coarse ranking only for editorial popularity lists
+
+Guardrails:
+- not an analytics replacement
+- no charts, visitor totals, geography, device reports, or referrer reporting
+- increment only from post-detail page views
+- known bot traffic is ignored with user-agent filtering
+- repeat increments are throttled with a short client/server window
+
+Ranking order:
+- `view_count`
+- approved comment count
+- recency
 
 ## Media Spine Baseline (2026-03-01)
 

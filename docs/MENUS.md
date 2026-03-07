@@ -35,21 +35,15 @@ type MenuItem = {
 
 ## Storage model
 
-Menu payloads are stored as JSON strings in `cms_settings`.
+Native menus are site-physical records, not shared JSON settings.
 
-Key format:
+Per-site physical tables:
 
-- `site_<siteId>_menu_<location>`
+- `<prefix>site_{siteId}_menus`
+- `<prefix>site_{siteId}_menu_items`
+- `<prefix>site_{siteId}_menu_item_meta`
 
-Example value:
-
-```json
-[
-  { "label": "Home", "href": "/", "order": 10 },
-  { "label": "About", "href": "/about", "order": 20 },
-  { "label": "Docs", "href": "/docs", "order": 30 }
-]
-```
+Themes and plugins should consume menus through the governed menu APIs and DTOs, not by reading raw tables or legacy settings keys directly.
 
 ## Resolution algorithm
 

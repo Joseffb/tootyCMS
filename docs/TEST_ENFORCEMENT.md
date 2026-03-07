@@ -133,6 +133,14 @@ npx playwright test
 E2E tests must be deterministic.
 No sleep-based timing hacks allowed.
 
+Developer qualification may use the local Playwright harness for fast iteration, but that harness is not the integration gate. The release gate remains the repository `npm run test:integration` workflow, which must continue to exercise the multi-browser matrix under load.
+
+The integration gate must not serialize browsers in a shell loop when running the default matrix. Browser projects should run together in one Playwright invocation so concurrency pressure can expose hidden runtime and isolation bugs.
+
+Test harnesses and integration wrappers must stay non-interactive. Do not depend on `drizzle-kit push` prompts or other CLI confirmation flows inside automated test bootstrap. Use deterministic core migration/bootstrap paths instead.
+
+If the same integration or E2E failure occurs twice in a row, do not continue stretching timeouts or broad reruns against the same symptom. Stop, isolate the owning component or subsystem, perform a root-cause audit there, and only resume the full gate after implementing that audited fix and adding regression coverage for the root cause.
+
 ⸻
 
 5. Build Integrity Checks

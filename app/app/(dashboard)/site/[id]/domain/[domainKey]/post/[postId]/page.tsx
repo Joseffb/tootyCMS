@@ -8,12 +8,14 @@ import {
   updateDomainPostMetadata,
 } from "@/lib/actions";
 import db from "@/lib/db";
-import { domainPostMeta, domainPosts, termRelationships, termTaxonomies, terms } from "@/lib/schema";
 import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { canUserMutateDomainPost, userCan } from "@/lib/authorization";
 import { getSiteWritingSettings } from "@/lib/cms-config";
 import { hasEnabledCommentProvider } from "@/lib/comments-spine";
+import { getSiteDomainPostById, listSiteDomainPostMeta } from "@/lib/site-domain-post-store";
+import { getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
+import { resolveAuthorizedSiteForAnyCapability } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -33,51 +35,62 @@ export default async function DomainPostPage({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
   const resolvedPostId = decodeURIComponent(postId);
+  const { site } = await resolveAuthorizedSiteForAnyCapability(session.user.id, siteId, [
+    "site.content.read",
+    "site.content.create",
+    "site.content.edit.own",
+    "site.content.edit.any",
+    "site.content.publish",
+  ]);
+  if (!site) {
+    notFound();
+  }
+  const effectiveSiteId = site.id;
 
-  const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
+  const domainPromise = getSiteDataDomainByKey(effectiveSiteId, resolvedDomainKey);
+  const postPromise = getSiteDomainPostById({
+    siteId: effectiveSiteId,
+    postId: resolvedPostId,
+    dataDomainKey: resolvedDomainKey,
+  });
+  const canEditPromise = canUserMutateDomainPost(session.user.id, resolvedPostId, "edit");
+
+  const [domain, data, canEdit] = await Promise.all([domainPromise, postPromise, canEditPromise]);
   if (!domain) {
     notFound();
   }
-
-  const data = await db.query.domainPosts.findFirst({
-    where: (table, { and, eq }) =>
-      and(
-        eq(table.id, resolvedPostId),
-        eq(table.siteId, siteId),
-        eq(table.dataDomainId, domain.id),
-      ),
-    with: {
-      site: {
-        columns: {
-          subdomain: true,
-        },
-      },
-    },
-  });
   if (!data) {
     notFound();
   }
-  const canEdit = await canUserMutateDomainPost(session.user.id, resolvedPostId, "edit");
-  const canRead = data.siteId
-    ? await userCan("site.content.read", session.user.id, { siteId: data.siteId })
-    : false;
-  const canPublish = data.siteId
-    ? await userCan("site.content.publish", session.user.id, { siteId: data.siteId })
-    : false;
+
+  const [canRead, canPublish, taxonomyRows, metaRows, writingSettings, commentsPluginEnabled] = await Promise.all([
+    data.siteId ? userCan("site.content.read", session.user.id, { siteId: data.siteId }) : Promise.resolve(false),
+    data.siteId ? userCan("site.content.publish", session.user.id, { siteId: data.siteId }) : Promise.resolve(false),
+    withSiteTaxonomyTableRecovery(effectiveSiteId, async () => {
+      const { termsTable, termTaxonomiesTable, termRelationshipsTable } = getSiteTaxonomyTables(effectiveSiteId);
+      return db
+        .select({
+          id: termTaxonomiesTable.id,
+          taxonomy: termTaxonomiesTable.taxonomy,
+          name: termsTable.name,
+        })
+        .from(termRelationshipsTable)
+        .innerJoin(termTaxonomiesTable, eq(termRelationshipsTable.termTaxonomyId, termTaxonomiesTable.id))
+        .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+        .where(eq(termRelationshipsTable.objectId, data.id));
+    }),
+    listSiteDomainPostMeta({
+      siteId: effectiveSiteId,
+      dataDomainKey: resolvedDomainKey,
+      postId: data.id,
+    }),
+    getSiteWritingSettings(effectiveSiteId),
+    hasEnabledCommentProvider(effectiveSiteId),
+  ]);
+
   if (!canEdit.allowed && !canRead) {
     notFound();
   }
-
-  const taxonomyRows = await db
-    .select({
-      id: termTaxonomies.id,
-      taxonomy: termTaxonomies.taxonomy,
-      name: terms.name,
-    })
-    .from(termRelationships)
-    .innerJoin(termTaxonomies, eq(termRelationships.termTaxonomyId, termTaxonomies.id))
-    .innerJoin(terms, eq(termTaxonomies.termId, terms.id))
-    .where(and(eq(termRelationships.objectId, data.id), eq(termTaxonomies.siteId, siteId)));
 
   const categoryRows = taxonomyRows
     .filter((row) => row.taxonomy === "category")
@@ -85,14 +98,6 @@ export default async function DomainPostPage({ params }: Props) {
   const tagRows = taxonomyRows
     .filter((row) => row.taxonomy === "tag")
     .map((row) => ({ tagId: row.id }));
-
-  const metaRows = await db
-    .select({
-      key: domainPostMeta.key,
-      value: domainPostMeta.value,
-    })
-    .from(domainPostMeta)
-    .where(eq(domainPostMeta.domainPostId, data.id));
 
   const hydratedPost = {
     ...data,
@@ -105,8 +110,6 @@ export default async function DomainPostPage({ params }: Props) {
       name: row.name,
     })),
   };
-  const writingSettings = await getSiteWritingSettings(siteId);
-  const commentsPluginEnabled = await hasEnabledCommentProvider(siteId);
   const commentsGateEnabled = commentsPluginEnabled && writingSettings.enableComments;
 
   return (

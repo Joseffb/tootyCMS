@@ -1,13 +1,14 @@
 import { createId } from "@paralleldrive/cuid2";
 import { and, eq, sql } from "drizzle-orm";
 import db from "@/lib/db";
-import { communicationMessages, domainPosts } from "@/lib/schema";
+import { communicationMessages } from "@/lib/schema";
 import { userCan } from "@/lib/authorization";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { emitDomainEvent } from "@/lib/domain-dispatch";
 import { ensureSiteCommentTables } from "@/lib/site-comment-tables";
 import { listPluginsWithSiteState } from "@/lib/plugins";
 import { getSiteBooleanSetting } from "@/lib/cms-config";
+import { getSiteDomainPostById } from "@/lib/site-domain-post-store";
 import type {
   CommentContextType,
   CommentCreateInput,
@@ -155,10 +156,7 @@ async function loadCommentMeta(metaTable: string, commentId: string) {
 
 async function validateContext(siteId: string, contextType: CommentContextType, contextId: string) {
   if (contextType === "entry") {
-    const row = await db.query.domainPosts.findFirst({
-      where: and(eq(domainPosts.siteId, siteId), eq(domainPosts.id, contextId)),
-      columns: { id: true },
-    });
+    const row = await getSiteDomainPostById({ siteId, postId: contextId });
     if (!row) throw new Error("Comment context entry was not found for this site.");
     return;
   }

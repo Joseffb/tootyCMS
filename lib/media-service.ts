@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { del, put } from "@vercel/blob";
 import { DeleteObjectCommand, S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import db from "@/lib/db";
-import { media, sites } from "@/lib/schema";
+import { sites } from "@/lib/schema";
 import { userCan } from "@/lib/authorization";
 import { assertSiteMediaQuotaAvailable } from "@/lib/media-governance";
 import { trace } from "@/lib/debug";
+import {
+  ensureSiteMediaTable,
+  getSiteMediaTable,
+  isMissingSiteMediaRelationError,
+  resetSiteMediaTableCache,
+} from "@/lib/site-media-tables";
 
 export type MediaUploadProvider = "blob" | "s3" | "dbblob";
 export type MediaUploadMode = MediaUploadProvider | "auto";
@@ -169,67 +175,87 @@ export async function upsertMediaRecord(input: {
   mimeType: string;
   size: number;
 }) {
-  const query = db
-    .insert(media)
-    .values({
-      siteId: input.siteId,
-      userId: input.userId,
-      provider: input.provider,
-      bucket: input.bucket,
-      objectKey: input.objectKey,
-      url: input.url,
-      label: input.label,
-      mimeType: input.mimeType,
-      size: input.size,
-    })
-    .onConflictDoUpdate({
-      target: media.objectKey,
-      set: {
-        siteId: input.siteId,
+  const normalizedSiteId = String(input.siteId || "").trim();
+  if (!normalizedSiteId) return null;
+  return withSiteMediaRecovery(normalizedSiteId, async () => {
+    const media = getSiteMediaTable(normalizedSiteId);
+    const query = db
+      .insert(media)
+      .values({
         userId: input.userId,
         provider: input.provider,
         bucket: input.bucket,
+        objectKey: input.objectKey,
         url: input.url,
         label: input.label,
         mimeType: input.mimeType,
         size: input.size,
-        updatedAt: new Date(),
-      },
-    });
-  const withReturning = query as typeof query & {
-    returning?: (selection: {
-      id: typeof media.id;
-      url: typeof media.url;
-      mimeType: typeof media.mimeType;
-      label: typeof media.label;
-    }) => Promise<Array<{ id: number; url: string; mimeType: string | null; label: string | null }>>;
-  };
-  if (typeof withReturning.returning === "function") {
-    const rows = await withReturning.returning({
-      id: media.id,
-      url: media.url,
-      mimeType: media.mimeType,
-      label: media.label,
-    });
-    return rows[0] || null;
-  }
+      })
+      .onConflictDoUpdate({
+        target: media.objectKey,
+        set: {
+          userId: input.userId,
+          provider: input.provider,
+          bucket: input.bucket,
+          url: input.url,
+          label: input.label,
+          mimeType: input.mimeType,
+          size: input.size,
+          updatedAt: new Date(),
+        },
+      });
+    const withReturning = query as typeof query & {
+      returning?: (selection: {
+        id: typeof media.id;
+        url: typeof media.url;
+        mimeType: typeof media.mimeType;
+        label: typeof media.label;
+      }) => Promise<Array<{ id: number; url: string; mimeType: string | null; label: string | null }>>;
+    };
+    if (typeof withReturning.returning === "function") {
+      const rows = await withReturning.returning({
+        id: media.id,
+        url: media.url,
+        mimeType: media.mimeType,
+        label: media.label,
+      });
+      return rows[0] || null;
+    }
 
-  await query;
-  return null;
+    await query;
+    return null;
+  });
 }
 
 export async function findExistingMediaByKeys(
+  siteId: string,
   objectKeys: string[],
 ): Promise<Array<{ objectKey: string; url: string }>> {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return [];
   if (!Array.isArray(objectKeys) || objectKeys.length === 0) return [];
-  const rows = await db
-    .select({
-      objectKey: media.objectKey,
-      url: media.url,
-    })
-    .from(media)
-    .where(inArray(media.objectKey, objectKeys));
-  return rows;
+  return withSiteMediaRecovery(normalizedSiteId, async () => {
+    const media = getSiteMediaTable(normalizedSiteId);
+    return db
+      .select({
+        objectKey: media.objectKey,
+        url: media.url,
+      })
+      .from(media)
+      .where(inArray(media.objectKey, objectKeys));
+  });
+}
+
+async function withSiteMediaRecovery<T>(siteId: string, run: () => Promise<T>): Promise<T> {
+  await ensureSiteMediaTable(siteId);
+  try {
+    return await run();
+  } catch (error) {
+    if (!isMissingSiteMediaRelationError(error)) throw error;
+    resetSiteMediaTableCache(siteId);
+    await ensureSiteMediaTable(siteId);
+    return run();
+  }
 }
 
 export function createMediaUploadTraceId(req: Request) {
@@ -278,26 +304,39 @@ export async function deleteMediaTransportObject(input: {
 }
 
 export async function getMediaRecordById(id: number) {
-  const rows = await db
-    .select({
-      id: media.id,
-      siteId: media.siteId,
-      userId: media.userId,
-      provider: media.provider,
-      bucket: media.bucket,
-      objectKey: media.objectKey,
-      url: media.url,
-      label: media.label,
-      altText: media.altText,
-      caption: media.caption,
-      description: media.description,
-      mimeType: media.mimeType,
-      size: media.size,
-    })
-    .from(media)
-    .where(eq(media.id, id))
-    .limit(1);
-  return rows[0] || null;
+  const siteRows = await db.select({ id: sites.id }).from(sites);
+  for (const site of siteRows) {
+    const siteId = String(site.id || "").trim();
+    if (!siteId) continue;
+    const rows = await withSiteMediaRecovery(siteId, async () => {
+      const media = getSiteMediaTable(siteId);
+      return db
+        .select({
+          id: media.id,
+          userId: media.userId,
+          provider: media.provider,
+          bucket: media.bucket,
+          objectKey: media.objectKey,
+          url: media.url,
+          label: media.label,
+          altText: media.altText,
+          caption: media.caption,
+          description: media.description,
+          mimeType: media.mimeType,
+          size: media.size,
+        })
+        .from(media)
+        .where(eq(media.id, id))
+        .limit(1);
+    });
+    if (rows[0]) {
+      return {
+        ...rows[0],
+        siteId,
+      };
+    }
+  }
+  return null;
 }
 
 export async function updateMediaRecord(input: {
@@ -308,19 +347,25 @@ export async function updateMediaRecord(input: {
   caption: string;
   description: string;
 }) {
-  await db
-    .update(media)
-    .set({
-      label: input.label,
-      altText: input.altText,
-      caption: input.caption,
-      description: input.description,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(media.id, input.id), eq(media.siteId, input.siteId)));
+  await withSiteMediaRecovery(input.siteId, async () => {
+    const media = getSiteMediaTable(input.siteId);
+    await db
+      .update(media)
+      .set({
+        label: input.label,
+        altText: input.altText,
+        caption: input.caption,
+        description: input.description,
+        updatedAt: new Date(),
+      })
+      .where(eq(media.id, input.id));
+  });
   return getMediaRecordById(input.id);
 }
 
 export async function deleteMediaRecord(input: { id: number; siteId: string }) {
-  await db.delete(media).where(and(eq(media.id, input.id), eq(media.siteId, input.siteId)));
+  await withSiteMediaRecovery(input.siteId, async () => {
+    const media = getSiteMediaTable(input.siteId);
+    await db.delete(media).where(eq(media.id, input.id));
+  });
 }

@@ -1,8 +1,6 @@
-import { eq } from "drizzle-orm";
-import db from "@/lib/db";
-import { domainPosts } from "@/lib/schema";
 import { canTransitionContentState, stateFromPublishedFlag } from "@/lib/content-state-engine";
 import { emitDomainEvent } from "@/lib/domain-dispatch";
+import { findDomainPostForMutation, updateSiteDomainPostById } from "@/lib/site-domain-post-store";
 
 export async function setDomainPostPublishedState(input: {
   postId: string;
@@ -11,15 +9,7 @@ export async function setDomainPostPublishedState(input: {
   actorId?: string;
   userId?: string;
 }) {
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, input.postId),
-    columns: {
-      id: true,
-      siteId: true,
-      published: true,
-      dataDomainId: true,
-    },
-  });
+  const post = await findDomainPostForMutation(input.postId);
   if (!post) return { ok: false as const, reason: "not_found" as const };
 
   const from = stateFromPublishedFlag(Boolean(post.published));
@@ -35,14 +25,14 @@ export async function setDomainPostPublishedState(input: {
   if (!allowed) return { ok: false as const, reason: "transition_blocked" as const, from, to };
   if (from === to) return { ok: true as const, unchanged: true as const, post };
 
-  const updated = await db
-    .update(domainPosts)
-    .set({
+  const updated = await updateSiteDomainPostById({
+    siteId: post.siteId,
+    postId: post.id,
+    dataDomainKey: post.dataDomainKey,
+    patch: {
       published: Boolean(input.nextPublished),
-    })
-    .where(eq(domainPosts.id, post.id))
-    .returning()
-    .then((rows) => rows[0] ?? null);
+    },
+  });
   if (!updated) return { ok: false as const, reason: "not_found" as const };
 
   if (!post.published && input.nextPublished) {
@@ -62,4 +52,3 @@ export async function setDomainPostPublishedState(input: {
   }
   return { ok: true as const, post: updated };
 }
-

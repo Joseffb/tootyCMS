@@ -35,6 +35,7 @@ describe("theme render context", () => {
         id: "user-1",
         displayName: "Test User",
         username: "test-user",
+        image: "https://cdn.example.com/profile.png",
       },
     });
     mocks.getThemeContextApi.mockResolvedValue({
@@ -75,6 +76,14 @@ describe("theme render context", () => {
     expect(result.auth).toMatchObject({
       logged_in: true,
       display_name: "Test User",
+      profile_image_url: "https://cdn.example.com/profile.png",
+    });
+    expect(result.core).toMatchObject({
+      profile: {
+        logged_in: true,
+        display_name: "Test User",
+        image_url: "https://cdn.example.com/profile.png",
+      },
     });
   });
 });

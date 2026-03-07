@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import SiteCard from "./site-card";
 import { getSiteUrlSetting } from "@/lib/cms-config";
 import { getRootSiteUrl } from "@/lib/site-url";
-import { listPluginsWithSiteState } from "@/lib/plugins";
+import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
 
 export default async function Sites({ limit }: { limit?: number }) {
   const session = await getSession();
@@ -27,8 +27,7 @@ export default async function Sites({ limit }: { limit?: number }) {
   const rootUrl = siteUrlSetting.value.trim() || getRootSiteUrl();
   const siteCards = await Promise.all(
     sites.map(async (site) => {
-      const plugins = await listPluginsWithSiteState(site.id);
-      const hasAnalytics = plugins.some((plugin) => String(plugin.id || "").startsWith("analytics-") && plugin.enabled && plugin.siteEnabled);
+      const hasAnalytics = await hasGraphAnalyticsProvider(site.id);
       return { site, hasAnalytics };
     }),
   );

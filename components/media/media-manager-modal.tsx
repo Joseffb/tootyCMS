@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+const EMPTY_SELECTED_IDS: string[] = [];
+
 export type MediaSelection = {
   mediaId: string;
   url?: string;
@@ -262,13 +264,17 @@ export default function MediaManagerModal({
   siteId,
   mode = "pick",
   title = "Media Manager",
-  selectedIds = [],
+  selectedIds,
   multiSelect = false,
   allowedMimePrefixes = [],
   allowUpload = true,
   onSelect,
 }: Props) {
   const topLayerClass = "z-[2147483000]";
+  const normalizedSelectedIds = useMemo(
+    () => (Array.isArray(selectedIds) ? selectedIds.map((value) => String(value || "")) : EMPTY_SELECTED_IDS),
+    [selectedIds],
+  );
   const [items, setItems] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -277,8 +283,8 @@ export default function MediaManagerModal({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [selected, setSelected] = useState<string[]>(selectedIds);
-  const [focusedId, setFocusedId] = useState<string>(selectedIds[0] || "");
+  const [selected, setSelected] = useState<string[]>(normalizedSelectedIds);
+  const [focusedId, setFocusedId] = useState<string>(normalizedSelectedIds[0] || "");
   const [status, setStatus] = useState("");
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [editorLabel, setEditorLabel] = useState("");
@@ -308,9 +314,9 @@ export default function MediaManagerModal({
 
   useEffect(() => {
     if (!open) return;
-    setSelected(selectedIds);
-    setFocusedId(selectedIds[0] || "");
-  }, [open, selectedIds]);
+    setSelected(normalizedSelectedIds);
+    setFocusedId(normalizedSelectedIds[0] || "");
+  }, [open, normalizedSelectedIds]);
 
   useEffect(() => {
     if (!contextMenu) return;

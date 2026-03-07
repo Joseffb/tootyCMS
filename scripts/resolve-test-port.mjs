@@ -1,4 +1,5 @@
 import net from "node:net";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 function normalizePort(input) {
@@ -22,11 +23,20 @@ function canListenOnPort(port) {
   });
 }
 
+function hasActiveTestSlotLock(port) {
+  const normalized = normalizePort(port);
+  const candidateLocks = [
+    `.next-test-${normalized}/lock`,
+    `.next-playwright-harness-${normalized}/lock`,
+  ];
+  return candidateLocks.some((candidate) => fs.existsSync(candidate));
+}
+
 export async function resolveTestPort(preferredPort = 3000, maxAttempts = 50) {
   let port = normalizePort(preferredPort);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop
-    if (await canListenOnPort(port)) return port;
+    if (!hasActiveTestSlotLock(port) && (await canListenOnPort(port))) return port;
     port += 1;
   }
   throw new Error(`Unable to find an open test port after ${maxAttempts} attempts starting at ${preferredPort}.`);

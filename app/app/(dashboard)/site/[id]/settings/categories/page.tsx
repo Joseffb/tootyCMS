@@ -13,7 +13,7 @@ import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Fragment } from "react";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -30,7 +30,11 @@ export default async function SiteSettingsCategories({ params, searchParams }: P
     redirect("/login");
   }
   const id = (await params).id;
-  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  const { site } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    decodeURIComponent(id),
+    "site.settings.write",
+  );
   if (!site) {
     notFound();
   }

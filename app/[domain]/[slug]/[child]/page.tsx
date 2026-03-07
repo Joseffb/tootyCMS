@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
-import { getDomainPostData, getPostData, getSiteData } from "@/lib/fetchers";
+import { getDomainPostData, getMdxSource, getPostData, getSiteData } from "@/lib/fetchers";
 import SitePostContent from "../page-content";
 import { getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
 import { renderThemeTemplate } from "@/lib/theme-template";
@@ -17,6 +17,9 @@ import { trace } from "@/lib/debug";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
+import PostViewTracker from "@/components/post-view-tracker";
+import { getPublicCommentCapabilities } from "@/lib/comments-spine";
+import { hydrateCommentsSlotMarkup } from "@/lib/comments-slot-bootstrap";
 
 type Params = Promise<{ domain: string; slug: string; child: string }>;
 
@@ -55,7 +58,10 @@ export default async function DomainPostPage({
   });
 
   const data = isCorePostDomain
-    ? await getPostData(decodedDomain, decodedSlug)
+    ? await getPostData(decodedDomain, decodedSlug, {
+        includeMdxSource: false,
+        includeAdjacentPosts: false,
+      })
     : await getDomainPostData(decodedDomain, decodedDataDomain, decodedSlug);
   if (!data) {
     notFound();
@@ -235,12 +241,26 @@ export default async function DomainPostPage({
         route_kind: "domain_detail",
         data_domain: decodedDataDomain,
       });
-      return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
+      const hydratedHtml = hydrateCommentsSlotMarkup(
+        html,
+        await getPublicCommentCapabilities(siteId),
+      );
+      return (
+        <>
+          <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: hydratedHtml }} />
+          <PostViewTracker
+            postId={String((data as any)?.id || "")}
+            siteId={siteId || ""}
+            dataDomainKey={decodedDataDomain}
+          />
+        </>
+      );
     }
   }
 
   const postData = {
     ...(data as any),
+    mdxSource: (data as any)?.mdxSource ?? (await getMdxSource((data as any)?.content || "")),
     layout,
     menuItems,
     primals: {
@@ -263,5 +283,14 @@ export default async function DomainPostPage({
     });
     postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};
   }
-  return <SitePostContent postData={postData} />;
+  return (
+    <>
+      <SitePostContent postData={postData} />
+      <PostViewTracker
+        postId={String((data as any)?.id || "")}
+        siteId={siteId || ""}
+        dataDomainKey={decodedDataDomain}
+      />
+    </>
+  );
 }

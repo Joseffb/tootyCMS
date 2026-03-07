@@ -1,12 +1,17 @@
-import db from "@/lib/db";
-import { dataDomains, siteDataDomains } from "@/lib/schema";
 import type { PluginContentTypeRegistration } from "@/lib/kernel";
-import { and, eq, sql } from "drizzle-orm";
+import {
+  ensureSiteDomainTypeTables,
+  siteDomainTypeMetaTableTemplate,
+  siteDomainTypeTableTemplate,
+} from "@/lib/site-domain-type-tables";
+import {
+  findSiteDataDomainByKey,
+  setSiteDataDomainActivation,
+  upsertSiteDataDomain,
+} from "@/lib/site-data-domain-registry";
 
-function normalizePrefix() {
-  const raw = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
-  return raw.endsWith("_") ? raw : `${raw}_`;
-}
+const pluginContentTypeSyncCache = new Map<string, string>();
+const pluginContentTypeSyncInFlight = new Map<string, Promise<void>>();
 
 function normalizeDomainKey(raw: string) {
   return raw
@@ -58,11 +63,32 @@ function normalizeMediaFieldKeys(value: unknown) {
   );
 }
 
+function buildRegistrationSignature(registrations: PluginContentTypeRegistration[]) {
+  return JSON.stringify(
+    (registrations || []).map((registration) => ({
+      key: normalizeDomainKey(registration.key),
+      label: normalizeLabel(registration.label || "", normalizeDomainKey(registration.key)),
+      description: String(registration.description || "").trim(),
+      showInMenu: normalizeShowInMenu(registration.showInMenu),
+      parentKey: normalizeDomainKey(registration.parentKey || ""),
+      parentMetaKey: normalizeMetaKey(registration.parentMetaKey),
+      embedHandleMetaKey: normalizeMetaKey(registration.embedHandleMetaKey),
+      workflowStates: normalizeWorkflowStates(registration.workflowStates),
+      mediaFieldKeys: normalizeMediaFieldKeys(registration.mediaFieldKeys),
+    })),
+  );
+}
+
 async function ensurePluginContentType(
   pluginId: string,
   registration: PluginContentTypeRegistration,
   siteId?: string,
 ) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) {
+    // Domain registration is site-scoped in strict tenant table mode.
+    return;
+  }
   const key = normalizeDomainKey(registration.key);
   if (!key) return;
 
@@ -73,120 +99,37 @@ async function ensurePluginContentType(
   const embedHandleMetaKey = normalizeMetaKey(registration.embedHandleMetaKey);
   const workflowStates = normalizeWorkflowStates(registration.workflowStates);
   const mediaFieldKeys = normalizeMediaFieldKeys(registration.mediaFieldKeys);
-  let existing = await db.query.dataDomains.findFirst({
-    where: eq(dataDomains.key, key),
-    columns: {
-      id: true,
-      key: true,
-      contentTable: true,
-      metaTable: true,
-      settings: true,
+  const existing = await findSiteDataDomainByKey(normalizedSiteId, key);
+  const currentSettings =
+    existing?.settings && typeof existing.settings === "object"
+      ? (existing.settings as Record<string, unknown>)
+      : {};
+  const contentTable = siteDomainTypeTableTemplate(key);
+  const metaTable = siteDomainTypeMetaTableTemplate(key);
+
+  await upsertSiteDataDomain(normalizedSiteId, {
+    key,
+    label,
+    contentTable,
+    metaTable,
+    description: String(registration.description || "").trim(),
+    settings: {
+      ...currentSettings,
+      pluginOwner: pluginId,
+      pluginManaged: true,
+      storageModel: "site_domain_type_table",
+      showInMenu,
+      ...(parentKey ? { parentKey } : {}),
+      ...(parentMetaKey ? { parentMetaKey } : {}),
+      ...(embedHandleMetaKey ? { embedHandleMetaKey } : {}),
+      ...(workflowStates.length ? { workflowStates } : {}),
+      ...(mediaFieldKeys.length ? { mediaFieldKeys } : {}),
     },
+    isActive: true,
   });
 
-  if (!existing) {
-    const prefix = normalizePrefix();
-    const contentTable = `${prefix}site_domain_posts`;
-    const metaTable = `${prefix}site_domain_post_meta`;
-
-    await db.transaction(async (tx) => {
-      const createdRows = await tx
-        .insert(dataDomains)
-        .values({
-          key,
-          label,
-          contentTable,
-          metaTable,
-          description: String(registration.description || "").trim(),
-          settings: {
-            pluginOwner: pluginId,
-            pluginManaged: true,
-            storageModel: "shared_site_domain_posts",
-            showInMenu,
-            ...(parentKey ? { parentKey } : {}),
-            ...(parentMetaKey ? { parentMetaKey } : {}),
-            ...(embedHandleMetaKey ? { embedHandleMetaKey } : {}),
-            ...(workflowStates.length ? { workflowStates } : {}),
-            ...(mediaFieldKeys.length ? { mediaFieldKeys } : {}),
-          },
-        })
-        .onConflictDoNothing()
-        .returning({
-          id: dataDomains.id,
-          key: dataDomains.key,
-          contentTable: dataDomains.contentTable,
-          metaTable: dataDomains.metaTable,
-          settings: dataDomains.settings,
-        });
-
-      existing =
-        createdRows[0] ||
-        (await tx.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, key),
-          columns: {
-            id: true,
-            key: true,
-            contentTable: true,
-            metaTable: true,
-            settings: true,
-          },
-        })) ||
-        null;
-    });
-  } else {
-    const currentSettings =
-      existing.settings && typeof existing.settings === "object" ? (existing.settings as Record<string, unknown>) : {};
-    if (
-      currentSettings.pluginOwner !== pluginId ||
-      currentSettings.pluginManaged !== true ||
-      currentSettings.showInMenu !== showInMenu
-    ) {
-      await db
-        .update(dataDomains)
-        .set({
-          contentTable: `${normalizePrefix()}site_domain_posts`,
-          metaTable: `${normalizePrefix()}site_domain_post_meta`,
-          settings: {
-            ...currentSettings,
-            pluginOwner: pluginId,
-            pluginManaged: true,
-            storageModel: "shared_site_domain_posts",
-            showInMenu,
-            ...(parentKey ? { parentKey } : {}),
-            ...(parentMetaKey ? { parentMetaKey } : {}),
-            ...(embedHandleMetaKey ? { embedHandleMetaKey } : {}),
-            ...(workflowStates.length ? { workflowStates } : {}),
-            ...(mediaFieldKeys.length ? { mediaFieldKeys } : {}),
-          },
-          description: String(registration.description || "").trim(),
-        })
-        .where(eq(dataDomains.id, existing.id));
-    }
-  }
-
-  if (siteId && existing?.id) {
-    const currentAssignment = await db.query.siteDataDomains.findFirst({
-      where: and(eq(siteDataDomains.siteId, siteId), eq(siteDataDomains.dataDomainId, existing.id)),
-      columns: {
-        isActive: true,
-      },
-    });
-    if (!currentAssignment) {
-      await db.insert(siteDataDomains).values({
-        siteId,
-        dataDomainId: existing.id,
-        isActive: true,
-      });
-    } else if (!currentAssignment.isActive) {
-      await db
-        .update(siteDataDomains)
-        .set({
-          isActive: true,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(siteDataDomains.siteId, siteId), eq(siteDataDomains.dataDomainId, existing.id)));
-    }
-  }
+  await setSiteDataDomainActivation(normalizedSiteId, key, true);
+  await ensureSiteDomainTypeTables(normalizedSiteId, key);
 }
 
 export async function syncPluginContentTypes(
@@ -194,41 +137,50 @@ export async function syncPluginContentTypes(
   registrations: PluginContentTypeRegistration[],
   siteId?: string,
 ) {
-  for (const registration of registrations) {
-    await ensurePluginContentType(pluginId, registration, siteId);
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return;
+  const syncKey = `${normalizedSiteId}:${pluginId}`;
+  const nextSignature = buildRegistrationSignature(registrations);
+  if (pluginContentTypeSyncCache.get(syncKey) === nextSignature) return;
+
+  const pending = pluginContentTypeSyncInFlight.get(syncKey);
+  if (pending) {
+    await pending;
+    if (pluginContentTypeSyncCache.get(syncKey) === nextSignature) return;
+  }
+
+  const run = (async () => {
+    for (const registration of registrations) {
+      await ensurePluginContentType(pluginId, registration, normalizedSiteId);
+    }
+    pluginContentTypeSyncCache.set(syncKey, nextSignature);
+  })();
+
+  pluginContentTypeSyncInFlight.set(syncKey, run);
+  try {
+    await run;
+  } finally {
+    pluginContentTypeSyncInFlight.delete(syncKey);
   }
 }
 
-export async function getPluginOwnerForDataDomain(dataDomainKey: string) {
+export async function getPluginOwnerForDataDomain(siteId: string | undefined, dataDomainKey: string) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return "";
   const key = normalizeDomainKey(dataDomainKey);
   if (!key) return "";
-  const row = await db.query.dataDomains.findFirst({
-    where: eq(dataDomains.key, key),
-    columns: {
-      settings: true,
-    },
-  });
+  const row = await findSiteDataDomainByKey(normalizedSiteId, key);
   const settings = row?.settings && typeof row.settings === "object" ? (row.settings as Record<string, unknown>) : {};
   return String(settings.pluginOwner || "").trim().toLowerCase();
 }
 
 export async function isPluginManagedDataDomain(siteId: string, dataDomainKey: string) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return false;
   const key = normalizeDomainKey(dataDomainKey);
   if (!key) return false;
-  const row = await db
-    .select({
-      id: dataDomains.id,
-      pluginOwner: sql<string>`coalesce(${dataDomains.settings}->>'pluginOwner', '')`,
-      siteId: siteDataDomains.siteId,
-    })
-    .from(dataDomains)
-    .leftJoin(
-      siteDataDomains,
-      and(eq(siteDataDomains.dataDomainId, dataDomains.id), eq(siteDataDomains.siteId, siteId)),
-    )
-    .where(eq(dataDomains.key, key))
-    .limit(1);
-
-  if (!row[0]) return false;
-  return Boolean(String(row[0].pluginOwner || "").trim()) && Boolean(row[0].siteId);
+  const row = await findSiteDataDomainByKey(normalizedSiteId, key);
+  if (!row) return false;
+  const settings = row.settings && typeof row.settings === "object" ? (row.settings as Record<string, unknown>) : {};
+  return Boolean(String(settings.pluginOwner || "").trim()) && row.isActive !== false;
 }

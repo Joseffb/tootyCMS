@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import SiteSettingsNav from "./nav";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSettingForSite } from "@/lib/cms-config";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -19,7 +19,11 @@ export default async function SiteAnalyticsLayout({ params, children }: Props) {
   if (!session) {
     redirect("/login");
   }
-  const data = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  const { site: data } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    decodeURIComponent(id),
+    "site.settings.write",
+  );
   if (!data) {
     notFound();
   }
@@ -62,7 +66,7 @@ export default async function SiteAnalyticsLayout({ params, children }: Props) {
           {publicHost} ↗
         </a>
       </div>
-      <SiteSettingsNav />
+      <SiteSettingsNav siteId={data.id} />
       {/* This renders the children passed to this layout */}
       {children}
     </>

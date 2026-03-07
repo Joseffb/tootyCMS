@@ -12,12 +12,14 @@ import {
   updateSiteMenu,
   updateSiteMenuItem,
 } from "@/lib/menu-system";
-import { applyPendingDatabaseMigrations, getDatabaseHealthReport } from "@/lib/db-health";
 import { notFound, redirect } from "next/navigation";
-import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
+import { userCan } from "@/lib/authorization";
 import { revalidatePath } from "next/cache";
 import MediaPickerField from "@/components/media/media-picker-field";
 import Link from "next/link";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
+import { ensureSiteMenuTables } from "@/lib/site-menu-tables";
+import { ensureSiteMediaTable } from "@/lib/site-media-tables";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -109,24 +111,18 @@ function revalidateMenuPaths(siteId: string) {
   revalidatePath("/[domain]/t/[slug]", "page");
 }
 
-function nativeMenuTablesMissing(report: Awaited<ReturnType<typeof getDatabaseHealthReport>>) {
-  return report.missingTables.some((table) =>
-    ["site_menus", "site_menu_items", "site_menu_item_meta"].some((suffix) => table.endsWith(suffix)),
-  );
-}
-
 export default async function SiteMenuSettingsPage({ params, searchParams }: Props) {
   const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session) redirect("/login");
 
   const id = decodeURIComponent((await params).id);
-  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.menus.manage");
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, id, "site.menus.manage");
   if (!site) notFound();
   const siteData = site;
 
-  const dbHealth = await getDatabaseHealthReport();
-  const menusReady = !nativeMenuTablesMissing(dbHealth);
+  await ensureSiteMenuTables(siteData.id);
+  await ensureSiteMediaTable(siteData.id);
   const query = searchParams ? await searchParams : {};
   const menus = await listSiteMenus(siteData.id);
   const createMenuRequested = stringParam(query.createMenu) === "1";
@@ -156,19 +152,16 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     if (!allowed) redirect(adminBasePath);
   }
 
-  async function ensureNativeMenuTablesAvailable() {
+  async function ensureCurrentSiteMenuWorkspaceAvailable() {
     "use server";
-    let report = await getDatabaseHealthReport();
-    if (!nativeMenuTablesMissing(report)) return;
-    await applyPendingDatabaseMigrations();
-    report = await getDatabaseHealthReport();
-    if (nativeMenuTablesMissing(report)) redirect(`${adminBasePath}/settings/database`);
+    await ensureSiteMenuTables(siteData.id);
+    await ensureSiteMediaTable(siteData.id);
   }
 
   async function saveMenuAction(formData: FormData) {
     "use server";
     await ensureAllowed();
-    await ensureNativeMenuTablesAvailable();
+    await ensureCurrentSiteMenuWorkspaceAvailable();
     const menuId = String(formData.get("menu_id") || "").trim();
     const editingRecord = menuId ? await getSiteMenuDefinition(siteData.id, menuId) : null;
     const title = String(formData.get("title") || "").trim();
@@ -195,7 +188,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
   async function deleteMenuAction(formData: FormData) {
     "use server";
     await ensureAllowed();
-    await ensureNativeMenuTablesAvailable();
+    await ensureCurrentSiteMenuWorkspaceAvailable();
     const menuId = String(formData.get("menu_id") || "").trim();
     const expected = String(formData.get("confirm_expected") || "").trim();
     const received = String(formData.get("confirm_value") || "").trim();
@@ -209,7 +202,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
   async function saveItemAction(formData: FormData) {
     "use server";
     await ensureAllowed();
-    await ensureNativeMenuTablesAvailable();
+    await ensureCurrentSiteMenuWorkspaceAvailable();
     const menuId = String(formData.get("menu_id") || "").trim();
     if (!menuId) redirect(menuSettingsHref(adminBasePath, siteData.id));
     const itemId = String(formData.get("item_id") || "").trim();
@@ -238,7 +231,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
   async function deleteItemAction(formData: FormData) {
     "use server";
     await ensureAllowed();
-    await ensureNativeMenuTablesAvailable();
+    await ensureCurrentSiteMenuWorkspaceAvailable();
     const menuId = String(formData.get("menu_id") || "").trim();
     const itemId = String(formData.get("item_id") || "").trim();
     const expected = String(formData.get("confirm_expected") || "").trim();
@@ -254,7 +247,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     ? menuSettingsHref(adminBasePath, siteData.id, selectedMenu.id)
     : menuSettingsHref(adminBasePath, siteData.id);
   const showDetailView = Boolean(selectedMenu);
-  const showListWorkspace = menusReady && !showDetailView;
+  const showListWorkspace = !showDetailView;
   const showDetailMissingNotice = Boolean(selectedMenuId) && !selectedMenu;
   const renderMenuForm = showMenuForm ? (
     <section className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
@@ -379,23 +372,12 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
               >
                 Back to Menus
               </Link>
-              {menusReady ? (
-                <>
-                  <Link
-                    href={buildMenuSettingsHref(adminBasePath, siteData.id, { menu: selectedMenu?.id, editMenu: selectedMenu?.id })}
-                    className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
-                  >
-                    Edit Menu
-                  </Link>
-                </>
-              ) : (
-                <Link
-                  href={`${adminBasePath}/settings/database`}
-                  className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900"
-                >
-                  Open Database Updates
-                </Link>
-              )}
+              <Link
+                href={buildMenuSettingsHref(adminBasePath, siteData.id, { menu: selectedMenu?.id, editMenu: selectedMenu?.id })}
+                className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
+              >
+                Edit Menu
+              </Link>
             </div>
           </div>
         </section>
@@ -408,26 +390,6 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
           </p>
         </div>
       )}
-
-      {!menusReady ? (
-        <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/50 dark:bg-amber-950/20">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="font-cal text-xl text-amber-950 dark:text-amber-200">Native Menus Need a Database Update</h2>
-              <p className="mt-1 max-w-3xl text-sm text-amber-900/80 dark:text-amber-200/80">
-                The native menu spine tables are not installed yet, so menu reads are falling back to legacy settings.
-                Apply the database update before creating or editing menus.
-              </p>
-            </div>
-            <Link
-              href={`${adminBasePath}/settings/database`}
-              className="rounded-md border border-amber-900 bg-amber-900 px-3 py-2 text-xs font-semibold text-white"
-            >
-              Open Database Updates
-            </Link>
-          </div>
-        </section>
-      ) : null}
 
       {showDetailMissingNotice ? (
         <section className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
@@ -462,14 +424,12 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
               </div>
               <div className="flex items-center gap-3">
                 <div className="text-xs text-stone-500 dark:text-stone-400">{menus.length} total</div>
-                {menusReady ? (
-                  <Link
-                    href={buildMenuSettingsHref(adminBasePath, siteData.id, { createMenu: true })}
-                    className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-white hover:text-black"
-                  >
-                    Add Menu
-                  </Link>
-                ) : null}
+                <Link
+                  href={buildMenuSettingsHref(adminBasePath, siteData.id, { createMenu: true })}
+                  className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-white hover:text-black"
+                >
+                  Add Menu
+                </Link>
               </div>
             </div>
             <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
@@ -520,7 +480,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                   {menus.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-3 py-6 text-center text-stone-500 dark:text-stone-400">
-                        {menusReady ? "No native menus yet." : "Native menu tables are not installed yet."}
+                        No native menus yet.
                       </td>
                     </tr>
                   ) : null}
@@ -547,7 +507,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 <div className="text-xs text-stone-500 dark:text-stone-400">
                   {selectedMenu ? `${selectedMenu.items.length} items` : "Select a menu"}
                 </div>
-                {selectedMenu && menusReady ? (
+                {selectedMenu ? (
                   <Link
                     href={buildMenuSettingsHref(adminBasePath, siteData.id, {
                       menu: selectedMenu.id,

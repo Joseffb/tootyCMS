@@ -1,46 +1,36 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { drizzle } from "drizzle-orm/vercel-postgres";
 import { sql } from "@vercel/postgres";
-import { and, eq } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
-import {
-  dataDomains,
-  domainPosts,
-  siteDataDomains,
-  sites,
-  termRelationships,
-  termTaxonomies,
-  terms,
-  users,
-} from "../../lib/schema";
-import { deleteSettingsByKeys, setSettingByKey } from "../../lib/settings-store";
+import { eq } from "drizzle-orm";
+import { setSettingByKey } from "../../lib/settings-store";
+import { ensureSiteTaxonomyTables, getSiteTaxonomyTables } from "../../lib/site-taxonomy-tables";
 import { buildPublicOriginForSubdomain } from "./helpers/env";
+import { buildProjectRunId, getProjectToken } from "./helpers/project-scope";
+import {
+  ensureCoreSiteDomain,
+  ensureCustomSiteDomain,
+  ensureNetworkSite,
+  ensureNetworkUser,
+  ensureSitePost,
+} from "./helpers/storage";
 
 const db = drizzle(sql);
-const runId = `e2e-url-${randomUUID()}`;
-const postSlug = `${runId}-post`;
-const showcaseSlug = `${runId}-showcase`;
-const categorySlug = `${runId}-category`;
-const siteSubdomain = `${runId}-site`;
+let runId = "";
+let postSlug = "";
+let showcaseSlug = "";
+let categorySlug = "";
+let siteSubdomain = "";
 
 let siteId = "";
 let userId = "";
 let postId = "";
 let postDomainId = 0;
 let categoryTaxonomyId = 0;
-const siteOrigin = buildPublicOriginForSubdomain(siteSubdomain);
+let siteOrigin = "";
 let hasShowcaseDomain = false;
 
 const settingKey = (siteId: string, key: string) => `site_${siteId}_${key}`;
-const PERMALINK_KEYS = [
-  "writing_permalink_mode",
-  "writing_single_pattern",
-  "writing_list_pattern",
-  "writing_no_domain_prefix",
-  "writing_no_domain_data_domain",
-];
-
-test.setTimeout(60_000);
+test.setTimeout(150_000);
 
 function tiptapDoc(text: string) {
   return JSON.stringify({
@@ -54,15 +44,35 @@ function tiptapDoc(text: string) {
   });
 }
 
+async function withLockRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const code =
+        typeof error === "object" && error && "code" in error
+          ? String((error as { code?: unknown }).code || "")
+          : "";
+      if ((code !== "40P01" && code !== "55P03") || attempt === attempts) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+  throw lastError;
+}
+
 async function getWithRetry(
   request: APIRequestContext,
   url: string,
   expectedStatus: number,
-  timeoutMs = 20_000,
-  intervalMs = 300,
+  timeoutMs = 90_000,
+  intervalMs = 350,
 ) {
   const started = Date.now();
-  const requestTimeoutMs = Math.max(6_000, Math.min(12_000, Math.ceil(timeoutMs * 0.5)));
+  const requestTimeoutMs = Math.max(10_000, Math.min(20_000, Math.ceil(timeoutMs * 0.35)));
   let lastResponse: Awaited<ReturnType<APIRequestContext["get"]>> | null = null;
   let lastError: unknown = null;
 
@@ -76,12 +86,78 @@ async function getWithRetry(
       // Route flips during settings propagation can briefly hang; keep retrying within the caller's budget.
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs * 2, 1_000)));
   }
 
   if (lastResponse) return lastResponse;
   if (lastError) throw lastError;
   return request.get(url, { timeout: requestTimeoutMs });
+}
+
+async function getWithBodyRetry(
+  request: APIRequestContext,
+  url: string,
+  expectedStatus: number,
+  expectedText: string,
+  timeoutMs = 45_000,
+  intervalMs = 500,
+) {
+  const started = Date.now();
+  const requestTimeoutMs = Math.max(10_000, Math.min(20_000, Math.ceil(timeoutMs * 0.35)));
+  let lastResponse: Awaited<ReturnType<APIRequestContext["get"]>> | null = null;
+  let lastError: unknown = null;
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await request.get(url, { timeout: requestTimeoutMs });
+      lastResponse = response;
+      if (response.status() === expectedStatus) {
+        const body = await response.text();
+        if (body.includes(expectedText)) return { response, body };
+      }
+      lastError = null;
+    } catch (error) {
+      // Routing settings propagate asynchronously under shared 4-browser load.
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs * 2, 1_000)));
+  }
+
+  if (lastResponse) {
+    return { response: lastResponse, body: await lastResponse.text().catch(() => "") };
+  }
+  if (lastError) throw lastError;
+  const response = await request.get(url, { timeout: requestTimeoutMs });
+  return { response, body: await response.text().catch(() => "") };
+}
+
+async function getAnyStatusWithRetry(
+  request: APIRequestContext,
+  url: string,
+  expectedStatuses: number[],
+  timeoutMs = 45_000,
+  intervalMs = 350,
+) {
+  const started = Date.now();
+  const requestTimeoutMs = Math.max(10_000, Math.min(20_000, Math.ceil(timeoutMs * 0.35)));
+  let lastResponse: Awaited<ReturnType<APIRequestContext["get"]>> | null = null;
+  let lastError: unknown = null;
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await request.get(url, { maxRedirects: 0, timeout: requestTimeoutMs });
+      lastResponse = response;
+      if (expectedStatuses.includes(response.status())) return response;
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  if (lastResponse) return lastResponse;
+  if (lastError) throw lastError;
+  return request.get(url, { maxRedirects: 0, timeout: requestTimeoutMs });
 }
 
 async function gotoWithBodyTextRetry(
@@ -102,143 +178,109 @@ async function gotoWithBodyTextRetry(
 
 async function setSiteSetting(siteId: string, key: string, value: string) {
   const scopedKey = settingKey(siteId, key);
-  await setSettingByKey(scopedKey, value);
+  await withLockRetry(() => setSettingByKey(scopedKey, value));
+}
+
+async function getEnsuredTaxonomyTables(siteId: string) {
+  await ensureSiteTaxonomyTables(siteId);
+  return getSiteTaxonomyTables(siteId);
 }
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
+  testInfo.setTimeout(120_000);
+  runId = buildProjectRunId("e2e-url", testInfo.project.name);
+  postSlug = `${runId}-post`;
+  showcaseSlug = `${runId}-showcase`;
+  categorySlug = `${runId}-category`;
+  siteSubdomain = `${getProjectToken(testInfo.project.name, 4)}-${runId.split("-").at(-1)?.slice(0, 10) || "site"}`;
+  siteOrigin = buildPublicOriginForSubdomain(siteSubdomain);
   userId = `${runId}-user`;
   siteId = `${runId}-site`;
-  await db
-    .insert(users)
-    .values({
+  await withLockRetry(async () => {
+    await ensureNetworkUser({
       id: userId,
       email: `${runId}@example.com`,
       name: "E2E URL User",
       role: "administrator",
-    })
-    .onConflictDoNothing();
-  await db
-    .insert(sites)
-    .values({
+      authProvider: "native",
+    });
+    await ensureNetworkSite({
       id: siteId,
       userId,
       name: "URL Pattern Site",
       subdomain: siteSubdomain,
       isPrimary: false,
-    })
-    .onConflictDoNothing();
-
-  const showcaseDomainRows = await db
-    .select({ id: dataDomains.id })
-    .from(dataDomains)
-    .where(eq(dataDomains.key, "showcase"))
-    .limit(1);
-  hasShowcaseDomain = Boolean(showcaseDomainRows[0]?.id);
-  let postDomainRows = await db
-    .select({ id: dataDomains.id })
-    .from(dataDomains)
-    .where(eq(dataDomains.key, "post"))
-    .limit(1);
-
-  if (!postDomainRows[0]) {
-    await db
-      .insert(dataDomains)
-      .values({
-        key: "post",
-        label: "Posts",
-        contentTable: "domain_posts",
-        metaTable: "domain_post_meta",
-        description: "Default core post type",
-        settings: { builtin: true },
-      })
-      .onConflictDoNothing();
-
-    postDomainRows = await db
-      .select({ id: dataDomains.id })
-      .from(dataDomains)
-      .where(eq(dataDomains.key, "post"))
-      .limit(1);
-  }
-
-  if (!postDomainRows[0]) throw new Error("Data domain `post` not found.");
-  postDomainId = postDomainRows[0].id;
-
-  await db
-    .insert(siteDataDomains)
-    .values({ siteId, dataDomainId: postDomainId, isActive: true })
-    .onConflictDoUpdate({
-      target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-      set: { isActive: true },
     });
 
-  if (showcaseDomainRows[0]?.id) {
-    await db
-      .insert(siteDataDomains)
-      .values({ siteId, dataDomainId: showcaseDomainRows[0].id, isActive: true })
-      .onConflictDoUpdate({
-        target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-        set: { isActive: true },
-      });
-  }
+    const postDomain = await ensureCoreSiteDomain(siteId, "post");
+    postDomainId = postDomain.id;
+    const showcaseDomain = await ensureCustomSiteDomain(siteId, {
+      key: "showcase",
+      label: "Showcase",
+      description: "Showcase content",
+      settings: {},
+    }).catch(() => null);
+    hasShowcaseDomain = Boolean(showcaseDomain?.id);
 
-  const postRows = await db
-    .insert(domainPosts)
-    .values({
-      dataDomainId: postDomainId,
+    const postRecord = await ensureSitePost({
+      id: `${runId}-post-id`,
+      siteId,
+      domainKey: "post",
+      userId,
       title: `URL Pattern Post ${runId}`,
       slug: postSlug,
       content: tiptapDoc(`URL Pattern Post ${runId}`),
       published: true,
-      siteId,
-      userId,
-    })
-    .returning({ id: domainPosts.id });
-  postId = postRows[0].id;
-
-  if (showcaseDomainRows[0]?.id) {
-    await db.insert(domainPosts).values({
-      dataDomainId: showcaseDomainRows[0].id,
-      title: `URL Pattern Showcase ${runId}`,
-      slug: showcaseSlug,
-      content: tiptapDoc(`URL Pattern Showcase ${runId}`),
-      published: true,
-      siteId,
-      userId,
     });
-  }
+    postId = postRecord.id;
 
+    if (showcaseDomain?.id) {
+      await ensureSitePost({
+        id: `${runId}-showcase-id`,
+        siteId,
+        domainKey: "showcase",
+        userId,
+        title: `URL Pattern Showcase ${runId}`,
+        slug: showcaseSlug,
+        content: tiptapDoc(`URL Pattern Showcase ${runId}`),
+        published: true,
+      });
+    }
+
+    await ensureSiteTaxonomyTables(siteId);
+  });
+  const { termsTable, termTaxonomiesTable, termRelationshipsTable } =
+    await getEnsuredTaxonomyTables(siteId);
   const termRows = await db
-    .insert(terms)
+    .insert(termsTable)
     .values({ name: `URL Category ${runId}`, slug: categorySlug })
     .onConflictDoNothing()
-    .returning({ id: terms.id });
+    .returning({ id: termsTable.id });
   const termId =
     termRows[0]?.id ??
-    (
-      await db.select({ id: terms.id }).from(terms).where(eq(terms.slug, categorySlug)).limit(1)
-    )[0]?.id;
+    (await db.select({ id: termsTable.id }).from(termsTable).where(eq(termsTable.slug, categorySlug)).limit(1))[0]?.id;
   if (!termId) throw new Error("Failed to create test category term.");
 
   const taxRows = await db
-    .insert(termTaxonomies)
-    .values({ siteId, termId, taxonomy: "category" })
+    .insert(termTaxonomiesTable)
+    .values({ termId, taxonomy: "category" })
     .onConflictDoNothing()
-    .returning({ id: termTaxonomies.id });
+    .returning({ id: termTaxonomiesTable.id });
   categoryTaxonomyId =
     taxRows[0]?.id ??
     (
       await db
-        .select({ id: termTaxonomies.id })
-        .from(termTaxonomies)
-        .where(and(eq(termTaxonomies.siteId, siteId), eq(termTaxonomies.termId, termId), eq(termTaxonomies.taxonomy, "category")))
+        .select({ id: termTaxonomiesTable.id })
+        .from(termTaxonomiesTable)
+        .where(eq(termTaxonomiesTable.termId, termId))
         .limit(1)
     )[0]?.id;
   if (!categoryTaxonomyId) throw new Error("Failed to create test category taxonomy.");
 
   await db
-    .insert(termRelationships)
+    .insert(termRelationshipsTable)
     .values({ objectId: postId, termTaxonomyId: categoryTaxonomyId })
     .onConflictDoNothing();
 
@@ -249,29 +291,9 @@ test.beforeAll(async () => {
   await setSiteSetting(siteId, "writing_no_domain_data_domain", "post");
 });
 
-test.afterAll(async ({}, testInfo) => {
-  testInfo.setTimeout(60_000);
-  await Promise.all([
-    deleteSettingsByKeys(PERMALINK_KEYS.map((key) => settingKey(siteId, key))),
-    db
-      .delete(termRelationships)
-      .where(and(eq(termRelationships.objectId, postId), eq(termRelationships.termTaxonomyId, categoryTaxonomyId))),
-    hasShowcaseDomain
-      ? db
-          .delete(domainPosts)
-          .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.slug, showcaseSlug)))
-      : Promise.resolve(),
-    db
-      .delete(domainPosts)
-      .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug))),
-  ]);
-  await Promise.all([
-    db.delete(termTaxonomies).where(eq(termTaxonomies.id, categoryTaxonomyId)),
-    db.delete(siteDataDomains).where(eq(siteDataDomains.siteId, siteId)),
-  ]);
-  await db.delete(terms).where(eq(terms.slug, categorySlug));
-  await db.delete(sites).where(eq(sites.id, siteId));
-  await db.delete(users).where(eq(users.id, userId));
+test.afterAll(async () => {
+  // The integration wrapper resets the slot DB before each run. Keeping teardown
+  // lightweight avoids cross-worker lock contention in the shared 4-browser matrix.
 });
 
 test("default mode: canonical post/domain routes resolve and taxonomy shortcuts are blocked", async ({ request }) => {
@@ -308,7 +330,7 @@ test("default mode: canonical post/domain routes resolve and taxonomy shortcuts 
     expect(showcaseArchive.status()).toBe(200);
   }
 
-  const legacyFlat = await request.get(`${origin}/${postSlug}`, { maxRedirects: 0 });
+  const legacyFlat = await getAnyStatusWithRetry(request, `${origin}/${postSlug}`, [307, 308, 404]);
   expect([307, 308, 404]).toContain(legacyFlat.status());
   if (legacyFlat.status() !== 404) {
     const location = legacyFlat.headers()["location"] || "";
@@ -332,7 +354,7 @@ test("custom mode: no-domain prefix routes become canonical for configured Data 
     setSiteSetting(siteId, "writing_no_domain_data_domain", "post"),
   ]);
 
-  const canonicalArchive = await getWithRetry(request, `${origin}/content`, 200, 10_000, 250);
+  const canonicalArchive = await getWithRetry(request, `${origin}/content`, 200, 30_000, 350);
   if (canonicalArchive.status() !== 200) {
     test.skip(
       true,
@@ -341,16 +363,30 @@ test("custom mode: no-domain prefix routes become canonical for configured Data 
   }
   expect(canonicalArchive.status()).toBe(200);
 
-  const canonicalDetail = await getWithRetry(request, `${origin}/content/${postSlug}`, 200, 10_000, 250);
-  expect(canonicalDetail.status()).toBe(200);
+  const canonicalDetail = await getWithBodyRetry(
+    request,
+    `${origin}/content/${postSlug}`,
+    200,
+    `URL Pattern Post ${runId}`,
+    45_000,
+    500,
+  );
+  expect(canonicalDetail.response.status()).toBe(200);
+  expect(canonicalDetail.body).toContain(`URL Pattern Post ${runId}`);
 
-  const oldArchive = await request.get(`${origin}/posts`, { maxRedirects: 0 });
+  const oldArchive = await getAnyStatusWithRetry(request, `${origin}/posts`, [307, 308], 45_000, 500);
   expect([307, 308]).toContain(oldArchive.status());
   expect(oldArchive.headers()["location"] || "").toContain("/content");
 
-  let oldDetail = await request.get(`${origin}/post/${postSlug}`, { maxRedirects: 0 });
+  let oldDetail = await getAnyStatusWithRetry(request, `${origin}/post/${postSlug}`, [307, 308, 404], 45_000, 500);
   if (![307, 308].includes(oldDetail.status())) {
-    oldDetail = await request.get(`${origin}/posts/${postSlug}`, { maxRedirects: 0 });
+    oldDetail = await getAnyStatusWithRetry(
+      request,
+      `${origin}/posts/${postSlug}`,
+      [307, 308, 404],
+      45_000,
+      500,
+    );
   }
   expect([307, 308]).toContain(oldDetail.status());
   expect(oldDetail.headers()["location"] || "").toContain(`/content/${postSlug}`);

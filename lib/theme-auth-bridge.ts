@@ -1,4 +1,5 @@
 import { decode, encode } from "next-auth/jwt";
+import { traceInfo } from "@/lib/debug";
 
 const THEME_BRIDGE_AUDIENCE = "theme-bridge";
 const ONE_HOUR_SECONDS = 60 * 60;
@@ -55,7 +56,7 @@ export async function verifyThemeBridgeToken(rawToken: string) {
         error && typeof error === "object" && "code" in error
           ? String((error as { code?: unknown }).code || "")
           : "";
-      console.info("[trace:Test:theme-bridge] token rejected", {
+      traceInfo("theme-bridge", "token rejected", {
         reason: code || "decode_error",
       });
     }

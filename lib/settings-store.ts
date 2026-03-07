@@ -6,6 +6,30 @@ import { ensureSiteSettingsTable, listSiteSettingsRegistries } from "@/lib/site-
 let ensured = false;
 let ensurePromise: Promise<void> | null = null;
 
+function isTransientWriteError(error: unknown) {
+  const code =
+    typeof error === "object" && error && "code" in error
+      ? String((error as { code?: unknown }).code || "")
+      : "";
+  return code === "40P01" || code === "55P03";
+}
+
+async function withWriteRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isTransientWriteError(error) || attempt === attempts) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 125 * attempt));
+    }
+  }
+  throw lastError;
+}
+
 function normalize(value: unknown) {
   return String(value || "").trim();
 }
@@ -45,8 +69,8 @@ async function ensureSettingsTables() {
   if (ensurePromise) return ensurePromise;
   ensurePromise = (async () => {
   const p = prefix();
-  const system = `${p}system_settings`;
-  const sites = `${p}sites`;
+  const system = `${p}network_system_settings`;
+  const sites = `${p}network_sites`;
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoted(system)} (
       "key" TEXT PRIMARY KEY,
@@ -135,21 +159,25 @@ export async function setSettingByKey(key: string, value: string) {
     const parts = parseSiteScopedKeyParts(normalized);
     if (!parts) throw new Error("Invalid site-scoped setting key.");
     const info = await ensureSiteSettingsTable(parts.siteId);
-    await db.execute(sql`
-      INSERT INTO ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} ("key", "value")
-      VALUES (${parts.localKey}, ${value})
-      ON CONFLICT ("key")
-      DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
-    `);
+    await withWriteRetry(() =>
+      db.execute(sql`
+        INSERT INTO ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} ("key", "value")
+        VALUES (${parts.localKey}, ${value})
+        ON CONFLICT ("key")
+        DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
+      `),
+    );
     return;
   }
-  await db
-    .insert(systemSettings)
-    .values({ key: normalized, value })
-    .onConflictDoUpdate({
-      target: systemSettings.key,
-      set: { value },
-    });
+  await withWriteRetry(() =>
+    db
+      .insert(systemSettings)
+      .values({ key: normalized, value })
+      .onConflictDoUpdate({
+        target: systemSettings.key,
+        set: { value },
+      }),
+  );
 }
 
 export async function deleteSettingsByKeys(keys: string[]) {
@@ -158,7 +186,9 @@ export async function deleteSettingsByKeys(keys: string[]) {
   const siteKeys = normalized.filter((key) => isSiteScopedKey(key));
   const systemKeys = normalized.filter((key) => !isSiteScopedKey(key));
   if (systemKeys.length > 0) {
-    await db.delete(systemSettings).where(inArray(systemSettings.key, systemKeys));
+    await withWriteRetry(() =>
+      db.delete(systemSettings).where(inArray(systemSettings.key, systemKeys)),
+    );
   }
   if (siteKeys.length > 0) {
     const bySite = new Map<string, string[]>();
@@ -171,10 +201,12 @@ export async function deleteSettingsByKeys(keys: string[]) {
     }
     for (const [siteId, localKeys] of bySite.entries()) {
       const info = await ensureSiteSettingsTable(siteId);
-      await db.execute(sql`
-        DELETE FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)}
-        WHERE "key" IN (${sql.join(localKeys.map((k) => sql`${k}`), sql`,`)})
-      `);
+      await withWriteRetry(() =>
+        db.execute(sql`
+          DELETE FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)}
+          WHERE "key" IN (${sql.join(localKeys.map((k) => sql`${k}`), sql`,`)})
+        `),
+      );
     }
   }
 }

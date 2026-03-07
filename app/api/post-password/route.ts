@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import db from "@/lib/db";
-import { domainPosts } from "@/lib/schema";
 import { grantPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
+import { findDomainPostForMutation } from "@/lib/site-domain-post-store";
 
 function sanitizeReturnTo(raw: string) {
   const value = String(raw || "").trim();
@@ -26,15 +24,7 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL(returnTo, request.url));
   }
 
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, postId),
-    columns: {
-      id: true,
-      password: true,
-      usePassword: true,
-      published: true,
-    },
-  });
+  const post = await findDomainPostForMutation(postId);
 
   if (!post?.id || post.published !== true || !requiresPostPasswordGate(post)) {
     return NextResponse.redirect(new URL(returnTo, request.url));

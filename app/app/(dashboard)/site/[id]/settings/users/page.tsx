@@ -2,9 +2,9 @@ import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
 import { users } from "@/lib/schema";
 import { listSiteUsers } from "@/lib/site-user-tables";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
 import { inArray } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -16,10 +16,10 @@ export default async function SiteUsersSettingsPage({ params }: Props) {
 
   const { id } = await params;
   const siteId = decodeURIComponent(id);
-  const site = await getAuthorizedSiteForUser(session.user.id, siteId, "site.users.manage");
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, siteId, "site.users.manage");
   if (!site) notFound();
 
-  const siteUsers = await listSiteUsers(siteId);
+  const siteUsers = await listSiteUsers(site.id);
   const userIds = Array.from(new Set(siteUsers.map((entry) => entry.user_id))).filter(Boolean);
   const globalUsers = userIds.length
     ? await db.query.users.findMany({

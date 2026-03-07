@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   createKernelForRequest: vi.fn(),
   ensureSiteCommentTables: vi.fn(),
   getSiteBooleanSetting: vi.fn(),
+  getSiteDomainPostById: vi.fn(),
   emitDomainEvent: vi.fn(),
   createId: vi.fn(),
   dbExecute: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("@/lib/site-comment-tables", () => ({
 
 vi.mock("@/lib/cms-config", () => ({
   getSiteBooleanSetting: mocks.getSiteBooleanSetting,
+}));
+
+vi.mock("@/lib/site-domain-post-store", () => ({
+  getSiteDomainPostById: mocks.getSiteDomainPostById,
 }));
 
 vi.mock("@/lib/domain-dispatch", () => ({
@@ -58,11 +63,13 @@ describe("comments spine invariants", () => {
     mocks.createKernelForRequest.mockReset();
     mocks.ensureSiteCommentTables.mockReset();
     mocks.getSiteBooleanSetting.mockReset();
+    mocks.getSiteDomainPostById.mockReset();
     mocks.emitDomainEvent.mockReset();
     mocks.createId.mockReset();
     mocks.dbExecute.mockReset();
     mocks.communicationInsertValues.mockReset();
     mocks.createId.mockReturnValue("comment-new-1");
+    mocks.getSiteDomainPostById.mockResolvedValue({ id: "entry-1" });
     mocks.getSiteBooleanSetting.mockImplementation(async (_siteId: string, key: string, fallback: boolean) => {
       if (String(key).includes("allow_anonymous_comments")) return true;
       if (String(key).includes("allow_authenticated_comments")) return true;
@@ -187,8 +194,7 @@ describe("comments spine invariants", () => {
       applyFilters: vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
       doAction: vi.fn(),
     });
-    const dbModule = await import("@/lib/db");
-    (dbModule.default.query.domainPosts.findFirst as any).mockResolvedValueOnce(null);
+    mocks.getSiteDomainPostById.mockResolvedValueOnce(null);
 
     await expect(
       createComment({

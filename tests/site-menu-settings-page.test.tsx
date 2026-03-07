@@ -4,7 +4,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SiteMenuSettingsPage from "@/app/app/(dashboard)/site/[id]/settings/menus/page";
 import { listSiteMenus } from "@/lib/menu-system";
-import { getDatabaseHealthReport } from "@/lib/db-health";
 
 vi.mock("@/lib/auth", () => ({
   getSession: vi.fn(async () => ({ user: { id: "user-1" } })),
@@ -56,16 +55,12 @@ vi.mock("@/lib/menu-system", () => ({
   updateSiteMenuItem: vi.fn(),
 }));
 
-vi.mock("@/lib/db-health", () => ({
-  getDatabaseHealthReport: vi.fn(async () => ({
-    ok: true,
-    currentVersion: "2026.03.02.1",
-    targetVersion: "2026.03.02.1",
-    pending: [],
-    missingTables: [],
-    missingColumns: [],
-    migrationRequired: false,
-  })),
+vi.mock("@/lib/site-menu-tables", () => ({
+  ensureSiteMenuTables: vi.fn(async () => undefined),
+}));
+
+vi.mock("@/lib/site-media-tables", () => ({
+  ensureSiteMediaTable: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/components/media/media-picker-field", () => ({
@@ -179,16 +174,7 @@ describe("SiteMenuSettingsPage", () => {
     expect(screen.queryByRole("button", { name: "Import Current Header Menu" })).toBeNull();
   });
 
-  it("shows the database update guard when native menu tables are unavailable", async () => {
-    vi.mocked(getDatabaseHealthReport).mockResolvedValueOnce({
-      ok: false,
-      currentVersion: "2026.02.26.3",
-      targetVersion: "2026.03.02.1",
-      pending: ["2026.03.02.1-native-menus"],
-      missingTables: ["tooty_site_menus", "tooty_site_menu_items", "tooty_site_menu_item_meta"],
-      missingColumns: [],
-      migrationRequired: true,
-    });
+  it("keeps the site-native menu workspace available without consulting legacy shared-table health state", async () => {
     vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
 
     const ui = await SiteMenuSettingsPage({
@@ -198,9 +184,8 @@ describe("SiteMenuSettingsPage", () => {
 
     render(ui);
 
-    expect(screen.getByRole("heading", { name: "Native Menus Need a Database Update" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open Database Updates" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Menus" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Add Menu" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Site Menus" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Add Menu" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Native Menus Need a Database Update" })).toBeNull();
   });
 });

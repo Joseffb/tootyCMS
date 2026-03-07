@@ -59,6 +59,12 @@ function normalizedTraceLevel(level: unknown): TraceLevel {
   return "info";
 }
 
+function shouldEmitTraceToConsole(tier: TraceTier) {
+  if (tier !== "Test") return true;
+  const raw = String(process.env.TRACE_TEST_CONSOLE || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function safeRetentionDays() {
   if (!Number.isFinite(TRACE_RETENTION_DAYS)) return 14;
   return Math.max(1, Math.min(365, Math.trunc(TRACE_RETENTION_DAYS)));
@@ -114,14 +120,16 @@ export function trace(scope: string, message: string, payload?: unknown, levelIn
   const tier = getTraceTier();
   const level = normalizedTraceLevel(levelInput);
   const safePayload = payload === undefined ? undefined : redact(payload);
-  if (payload === undefined) {
-    if (level === "error") console.error(`[trace:${tier}:${level}:${scope}] ${message}`);
-    else if (level === "warn") console.warn(`[trace:${tier}:${level}:${scope}] ${message}`);
-    else console.info(`[trace:${tier}:${level}:${scope}] ${message}`);
-  } else {
-    if (level === "error") console.error(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
-    else if (level === "warn") console.warn(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
-    else console.info(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
+  if (shouldEmitTraceToConsole(tier)) {
+    if (payload === undefined) {
+      if (level === "error") console.error(`[trace:${tier}:${level}:${scope}] ${message}`);
+      else if (level === "warn") console.warn(`[trace:${tier}:${level}:${scope}] ${message}`);
+      else console.info(`[trace:${tier}:${level}:${scope}] ${message}`);
+    } else {
+      if (level === "error") console.error(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
+      else if (level === "warn") console.warn(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
+      else console.info(`[trace:${tier}:${level}:${scope}] ${message}`, safePayload);
+    }
   }
 
   if (typeof window !== "undefined") return;

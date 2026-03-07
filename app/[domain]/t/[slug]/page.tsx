@@ -20,6 +20,7 @@ export default async function TagArchivePage({ params }: { params: Params }) {
   const site = await getSiteData(decodedDomain);
   if (!site) notFound();
   const writing = await getSiteWritingSettings(site.id);
+  if (!writing.enableTaxonomyShortcuts) notFound();
   const data = await getTaxonomyArchiveData(decodedDomain, "tag", decodedSlug);
   if (!data) notFound();
   const activeTheme = site?.id ? await getActiveThemeForSite(site.id) : null;

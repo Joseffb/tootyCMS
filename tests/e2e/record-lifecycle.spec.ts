@@ -1,11 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { drizzle } from "drizzle-orm/vercel-postgres";
-import { sql } from "@vercel/postgres";
-import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { dataDomains, domainPosts, sites, users } from "../../lib/schema";
-
-const db = drizzle(sql);
+import { deleteSitePost, ensureCoreSiteDomain, ensureNetworkSite, ensureNetworkUser, ensureSitePost } from "./helpers/storage";
+import { getSiteDomainPostBySlug } from "../../lib/site-domain-post-store";
+import { tiptapParagraph } from "./helpers/tiptap";
 const runId = `e2e-record-${randomUUID()}`;
 const postSlug = `${runId}-post`;
 
@@ -14,75 +11,47 @@ let userId = "";
 let postDomainId = 0;
 
 test.describe.configure({ mode: "serial" });
+test.setTimeout(90_000);
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
+  testInfo.setTimeout(120_000);
   userId = `${runId}-user`;
   siteId = `${runId}-site`;
-  await db
-    .insert(users)
-    .values({
-      id: userId,
-      email: `${runId}@example.com`,
-      name: "E2E Record User",
-      role: "administrator",
-    })
-    .onConflictDoNothing();
-  await db
-    .insert(sites)
-    .values({
-      id: siteId,
-      userId,
-      name: "Record Lifecycle Site",
-      subdomain: `${runId}-site`,
-      isPrimary: false,
-    })
-    .onConflictDoNothing();
-
-  let domainRows = await db.select({ id: dataDomains.id }).from(dataDomains).where(eq(dataDomains.key, "post")).limit(1);
-  if (!domainRows[0]) {
-    await db
-      .insert(dataDomains)
-      .values({
-        key: "post",
-        label: "Post",
-        contentTable: "posts",
-        metaTable: "post_meta",
-        description: "Default core post type",
-      })
-      .onConflictDoNothing();
-    domainRows = await db
-      .select({ id: dataDomains.id })
-      .from(dataDomains)
-      .where(eq(dataDomains.key, "post"))
-      .limit(1);
-  }
-  if (!domainRows[0]) throw new Error("Post data domain not found for record lifecycle e2e.");
-  postDomainId = domainRows[0].id;
+  await ensureNetworkUser({
+    id: userId,
+    email: `${runId}@example.com`,
+    name: "E2E Record User",
+    role: "administrator",
+    authProvider: "native",
+  });
+  await ensureNetworkSite({
+    id: siteId,
+    userId,
+    name: "Record Lifecycle Site",
+    subdomain: `${runId}-site`,
+    isPrimary: false,
+  });
+  const domain = await ensureCoreSiteDomain(siteId, "post");
+  postDomainId = domain.id;
 });
 
 test("post record lifecycle: add and delete record", async () => {
-  await db.insert(domainPosts).values({
-    dataDomainId: postDomainId,
+  await ensureSitePost({
+    id: `${runId}-post-id`,
+    siteId,
+    domainKey: "post",
+    userId,
     title: `E2E Lifecycle ${runId}`,
     slug: postSlug,
-    content: "<p>E2E lifecycle content.</p>",
+    content: tiptapParagraph("E2E lifecycle content."),
     published: true,
-    siteId,
   });
 
-  const created = await db
-    .select({ id: domainPosts.id, slug: domainPosts.slug })
-    .from(domainPosts)
-    .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)))
-    .limit(1);
-  expect(created[0]?.slug).toBe(postSlug);
+  const created = await getSiteDomainPostBySlug({ siteId, slug: postSlug, dataDomainKey: "post", published: true });
+  expect(created?.slug).toBe(postSlug);
 
-  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)));
+  await deleteSitePost(siteId, "post", String(created?.id || ""));
 
-  const removed = await db
-    .select({ id: domainPosts.id })
-    .from(domainPosts)
-    .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomainId), eq(domainPosts.slug, postSlug)))
-    .limit(1);
-  expect(removed).toHaveLength(0);
+  const removed = await getSiteDomainPostBySlug({ siteId, slug: postSlug, dataDomainKey: "post", published: true });
+  expect(removed).toBeNull();
 });

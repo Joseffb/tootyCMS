@@ -1,9 +1,10 @@
 // DO NOT implement authorization outside lib/authorization.ts
 import db from "@/lib/db";
-import { domainPosts, sites, users } from "@/lib/schema";
+import { sites, users } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { getSiteUserRole } from "@/lib/site-user-tables";
 import { SITE_CAPABILITIES, roleHasCapability, type SiteCapability } from "@/lib/rbac";
+import { findDomainPostForMutation } from "@/lib/site-domain-post-store";
 
 async function getGlobalRole(userId: string) {
   if (!userId) return null;
@@ -139,10 +140,7 @@ export async function canUserMutateDomainPost(
   kind: DomainPostMutationKind,
 ) {
   if (!userId || !postId) return { allowed: false, post: null as any };
-  const post = await db.query.domainPosts.findFirst({
-    where: eq(domainPosts.id, postId),
-    columns: { id: true, siteId: true, userId: true, slug: true, published: true },
-  });
+  const post = await findDomainPostForMutation(postId);
   if (!post) return { allowed: false, post: null as any };
   if (!post.siteId) return { allowed: false, post };
   const globalRole = await getGlobalRole(userId);

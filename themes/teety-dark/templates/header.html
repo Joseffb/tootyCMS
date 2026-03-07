@@ -10,6 +10,6 @@
         {% endfor %}
       </nav>
     {% endif %}
-    <p class="tooty-post-auth" data-theme-auth-greeting hidden>{% if auth and auth.logged_in %}Hello {{ auth.display_name or "there" }}{% endif %}</p>
+    <p class="tooty-post-auth" data-theme-auth-greeting>{% if auth and auth.logged_in %}Hello {{ auth.display_name or "there" }}{% else %}Login{% endif %}</p>
   </div>
 </section>

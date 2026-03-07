@@ -16,6 +16,7 @@ Themes are presentation modules only.
 - Themes may not rely on feature-specific control booleans injected by Core for one plugin.
 - Themes should consume generic DTOs, slots, and query results instead of plugin-specific permission flags.
 - Themes may render media URLs and metadata already resolved by Core, but may not infer storage provider details or interact with media storage directly.
+- Themes may read viewer profile presentation state only through Core DTO surfaces such as `core.profile.*`.
 - Feature behavior belongs in plugins.
 - Core contains only spines and contracts for extension behavior.
 

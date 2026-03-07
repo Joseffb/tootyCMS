@@ -6,6 +6,7 @@ export default defineConfig([
   globalIgnores([
     ".next/**",
     ".next-test-*/**",
+    ".next-playwright-harness-*/**",
     "out/**",
     "build/**",
     "coverage/**",

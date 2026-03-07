@@ -2,8 +2,92 @@
 set -euo pipefail
 
 TEST_PORT="${TEST_PORT:-3123}"
-TEST_PORT="$(node "./scripts/resolve-test-port.mjs" "${TEST_PORT}")"
-export TEST_PORT
+TEST_TSCONFIG_PATH=""
+ROOT_TSCONFIG_BACKUP=""
+TEST_DIST_DIR=""
+TEST_SLOT_LOCK=""
+SERVER_PID=""
+
+wait_for_pid_exit() {
+  local pid="${1:-}"
+  local attempts="${2:-40}"
+  local attempt
+  [[ -n "${pid}" ]] || return 0
+  for ((attempt = 0; attempt < attempts; attempt += 1)); do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+terminate_pid() {
+  local pid="${1:-}"
+  [[ -n "${pid}" ]] || return 0
+  if ! kill -0 "${pid}" >/dev/null 2>&1; then
+    wait "${pid}" 2>/dev/null || true
+    return 0
+  fi
+  kill "${pid}" >/dev/null 2>&1 || true
+  if ! wait_for_pid_exit "${pid}" 16; then
+    kill -9 "${pid}" >/dev/null 2>&1 || true
+    wait_for_pid_exit "${pid}" 16 || true
+  fi
+  wait "${pid}" 2>/dev/null || true
+}
+
+terminate_port_processes() {
+  local port="${1:-}"
+  local pids=""
+  local pid=""
+  [[ -n "${port}" ]] || return 0
+  pids="$(lsof -ti "tcp:${port}" 2>/dev/null || true)"
+  [[ -n "${pids}" ]] || return 0
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    terminate_pid "${pid}"
+  done < <(echo "${pids}" | tr ' ' '\n' | sort -u)
+}
+
+copy_if_distinct() {
+  local source_file="${1:-}"
+  local target_file="${2:-}"
+  [[ -n "${source_file}" && -n "${target_file}" ]] || return 0
+  if [[ "$(cd "$(dirname "${source_file}")" && pwd)/$(basename "${source_file}")" == "$(cd "$(dirname "${target_file}")" && pwd)/$(basename "${target_file}")" ]]; then
+    return 0
+  fi
+  if [[ -f "${source_file}" && -f "${target_file}" ]] && cmp -s "${source_file}" "${target_file}"; then
+    return 0
+  fi
+  cp "${source_file}" "${target_file}"
+}
+
+acquire_test_slot() {
+  local requested_port="${1:-3123}"
+  local candidate_port=""
+  local candidate_dist_dir=""
+  local candidate_lock=""
+
+  while true; do
+    candidate_port="$(node "./scripts/resolve-test-port.mjs" "${requested_port}")"
+    candidate_dist_dir=".next-test-${candidate_port}"
+    candidate_lock="${candidate_dist_dir}/lock"
+    mkdir -p "${candidate_dist_dir}"
+    if ( set -o noclobber; : > "${candidate_lock}" ) 2>/dev/null; then
+      TEST_PORT="${candidate_port}"
+      TEST_DIST_DIR="${candidate_dist_dir}"
+      TEST_TSCONFIG_PATH=".tsconfig.next-test-${TEST_PORT}.json"
+      ROOT_TSCONFIG_BACKUP=".tsconfig.root-backup-${TEST_PORT}.json"
+      TEST_SLOT_LOCK="${candidate_lock}"
+      export TEST_PORT
+      return 0
+    fi
+    requested_port="$((candidate_port + 1))"
+  done
+}
+
+acquire_test_slot "${TEST_PORT}"
 
 set -a
 source ".env"
@@ -15,11 +99,20 @@ set +a
 # Integration/e2e must be stable regardless of local dev site configuration.
 export NEXTAUTH_URL="${NEXTAUTH_URL_TEST_OVERRIDE:-http://localhost:${TEST_PORT}}"
 export NEXT_PUBLIC_ROOT_DOMAIN="${NEXT_PUBLIC_ROOT_DOMAIN_TEST_OVERRIDE:-localhost:${TEST_PORT}}"
-export CMS_DB_PREFIX="${CMS_DB_PREFIX_TEST_OVERRIDE:-tooty_}"
+export CMS_DB_PREFIX="${CMS_DB_PREFIX_TEST_OVERRIDE:-tooty_test_${TEST_PORT}_}"
 export ADMIN_PATH="${ADMIN_PATH_TEST_OVERRIDE:-cp}"
 export E2E_APP_ORIGIN="${E2E_APP_ORIGIN_TEST_OVERRIDE:-${NEXTAUTH_URL}}"
 export E2E_PUBLIC_ORIGIN="${E2E_PUBLIC_ORIGIN_TEST_OVERRIDE:-http://localhost:${TEST_PORT}}"
 export PLAYWRIGHT_EXTERNAL_SERVER="1"
+
+echo "Using integration test slot: port=${TEST_PORT} prefix=${CMS_DB_PREFIX} dist=${TEST_DIST_DIR}"
+
+# Always evict an old test server before touching the shared test DB.
+EXISTING_PIDS="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
+if [[ -n "${EXISTING_PIDS}" ]]; then
+  echo "Killing stale process(es) on test port ${TEST_PORT}: ${EXISTING_PIDS}"
+  terminate_port_processes "${TEST_PORT}"
+fi
 
 # Integration/e2e must run against a dedicated test DB, never the dev DB.
 if [[ -z "${POSTGRES_TEST_URL:-}" ]]; then
@@ -62,6 +155,17 @@ async function dropPrefixedTables(url, normalizedPrefix) {
       .map((row) => `"public"."${sanitizeIdentifier(String(row.tablename))}"`)
       .join(", ");
     await client.query(`DROP TABLE IF EXISTS ${tableList} CASCADE`);
+
+    const remaining = await client.query(
+      `select tablename from pg_tables where schemaname='public' and tablename like $1 order by tablename`,
+      [`${normalizedPrefix}%`],
+    );
+    if (remaining.rows.length > 0) {
+      const leftover = remaining.rows.map((row) => String(row.tablename)).join(", ");
+      const error = new Error(`Integration DB reset left prefixed tables behind: ${leftover}`);
+      error.code = "55P03";
+      throw error;
+    }
   } finally {
     await client.end();
   }
@@ -103,43 +207,39 @@ main().catch((error) => {
 NODE
 
 # Recreate latest schema from current contracts after full drop reset.
-npx drizzle-kit push --config "drizzle.config.ts"
-
-TEST_DIST_DIR=".next-test-${TEST_PORT}"
-NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" build
-
-EXISTING_PIDS="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
-if [[ -n "${EXISTING_PIDS}" ]]; then
-  echo "Killing stale process(es) on test port ${TEST_PORT}: ${EXISTING_PIDS}"
-  echo "${EXISTING_PIDS}" | xargs kill >/dev/null 2>&1 || true
-  sleep 1
-fi
-
-NEXT_DIST_DIR="${TEST_DIST_DIR}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" &
-SERVER_PID=$!
-
+bash "./scripts/bootstrap-test-db.sh"
+copy_if_distinct "tsconfig.json" "${ROOT_TSCONFIG_BACKUP}"
 cleanup() {
-  local pids=""
-
-  if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
-    kill "${SERVER_PID}" >/dev/null 2>&1 || true
-    # Do not wait indefinitely on shutdown; force-kill lingering server later.
-    sleep 1
+  if [[ -n "${TEST_SLOT_LOCK:-}" ]]; then
+    rm -f "${TEST_SLOT_LOCK}"
   fi
 
-  pids="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
-  if [[ -n "${pids}" ]]; then
-    echo "${pids}" | tr ' ' '\n' | sort -u | xargs kill >/dev/null 2>&1 || true
-    sleep 1
-
-    pids="$(lsof -ti "tcp:${TEST_PORT}" 2>/dev/null || true)"
-    if [[ -n "${pids}" ]]; then
-      echo "${pids}" | tr ' ' '\n' | sort -u | xargs kill -9 >/dev/null 2>&1 || true
-    fi
+  if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
+    copy_if_distinct "${ROOT_TSCONFIG_BACKUP}" "tsconfig.json"
+    rm -f "${ROOT_TSCONFIG_BACKUP}"
   fi
+
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    terminate_pid "${SERVER_PID}"
+  fi
+
+  terminate_port_processes "${TEST_PORT}"
 }
 
 trap cleanup EXIT
+
+node "./scripts/prepare-next-tsconfig.mjs" "${TEST_TSCONFIG_PATH}" "${TEST_DIST_DIR}" "${ROOT_TSCONFIG_BACKUP}"
+node "./scripts/prepare-next-tsconfig.mjs" "tsconfig.json" "${TEST_DIST_DIR}" "${ROOT_TSCONFIG_BACKUP}" >/dev/null
+
+NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" build
+
+if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
+  copy_if_distinct "${ROOT_TSCONFIG_BACKUP}" "tsconfig.json"
+  rm -f "${ROOT_TSCONFIG_BACKUP}"
+fi
+
+NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" &
+SERVER_PID=$!
 
 node <<'NODE'
 const http = require("node:http");
@@ -216,57 +316,19 @@ has_explicit_workers_arg() {
   return 1
 }
 
-targets_edge_project() {
-  local expect_value="0"
-  local arg
-
-  for arg in "$@"; do
-    if [[ "${expect_value}" == "1" ]]; then
-      [[ "${arg}" == "edge" ]] && return 0
-      expect_value="0"
-      continue
-    fi
-
-    if [[ "${arg}" == "--project" ]]; then
-      expect_value="1"
-      continue
-    fi
-
-    if [[ "${arg}" == "--project=edge" ]]; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
 set +e
 if has_explicit_project_arg "$@"; then
-  if targets_edge_project "$@" && ! has_explicit_workers_arg "$@"; then
-    run_playwright --workers=1 "$@"
+  run_playwright "$@"
+  PLAYWRIGHT_STATUS=$?
+else
+  if has_explicit_workers_arg "$@"; then
+    run_playwright "$@"
+  elif [[ -n "${PLAYWRIGHT_INTEGRATION_WORKERS:-}" ]]; then
+    run_playwright --workers="${PLAYWRIGHT_INTEGRATION_WORKERS}" "$@"
   else
     run_playwright "$@"
   fi
   PLAYWRIGHT_STATUS=$?
-else
-  PLAYWRIGHT_STATUS=0
-  PROJECTS=(chromium firefox webkit)
-
-  if [[ -n "${PLAYWRIGHT_EDGE_EXECUTABLE_PATH:-}" || -x "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" ]]; then
-    PROJECTS+=(edge)
-  fi
-
-  for project in "${PROJECTS[@]}"; do
-    if [[ "${project}" == "edge" ]] && ! has_explicit_workers_arg "$@"; then
-      run_playwright --project="${project}" --workers=1 "$@"
-    else
-      run_playwright --project="${project}" "$@"
-    fi
-    PLAYWRIGHT_STATUS=$?
-    if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
-      break
-    fi
-  done
 fi
 set -e
 

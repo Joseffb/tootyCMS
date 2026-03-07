@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 
 type SlideItem = {
@@ -25,15 +25,18 @@ export default function CollectionOrderManager({
   title?: string;
 }) {
   const [items, setItems] = useState(initialItems);
+  const [previewItems, setPreviewItems] = useState<SlideItem[] | null>(null);
   const [draggingId, setDraggingId] = useState("");
+  const [dragOverId, setDragOverId] = useState("");
   const [isPending, startTransition] = useTransition();
+  const didDropRef = useRef(false);
 
-  function buildNextOrder(sourceId: string, targetId: string) {
+  function buildNextOrder(sourceList: SlideItem[], sourceId: string, targetId: string) {
     if (!sourceId || !targetId || sourceId === targetId) return null;
-    const sourceIndex = items.findIndex((item) => item.id === sourceId);
-    const targetIndex = items.findIndex((item) => item.id === targetId);
+    const sourceIndex = sourceList.findIndex((item) => item.id === sourceId);
+    const targetIndex = sourceList.findIndex((item) => item.id === targetId);
     if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return null;
-    const next = [...items];
+    const next = [...sourceList];
     const [moved] = next.splice(sourceIndex, 1);
     next.splice(targetIndex, 0, moved);
     return next;
@@ -41,11 +44,17 @@ export default function CollectionOrderManager({
 
   function persistOrder(nextItems: SlideItem[]) {
     setItems(nextItems);
+    setPreviewItems(null);
     startTransition(async () => {
       const formData = new FormData();
       formData.set(
         "order",
-        JSON.stringify(nextItems.map((item, index) => ({ id: item.id, sortOrder: index }))),
+        JSON.stringify(
+          nextItems.map((item, index) => ({
+            id: item.id,
+            sortOrder: index,
+          })),
+        ),
       );
       formData.set("siteId", siteId);
       for (const [key, value] of Object.entries(extraFormData || {})) {
@@ -55,6 +64,8 @@ export default function CollectionOrderManager({
     });
   }
 
+  const renderedItems = previewItems || items;
+
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
       <div className="flex items-center justify-between gap-3">
@@ -62,32 +73,62 @@ export default function CollectionOrderManager({
           <h2 className="font-cal text-xl dark:text-white">{title}</h2>
         </div>
         <div className="text-xs text-stone-500 dark:text-stone-400">
-          {items.length < 2 ? "Add more items to reorder." : isPending ? "Saving order..." : "Drag to reorder. Saves automatically."}
+          {renderedItems.length < 2 ? "Add more items to reorder." : isPending ? "Saving order..." : "Drag to reorder. Saves automatically."}
         </div>
       </div>
 
       <div className="mt-4 grid gap-2">
-        {items.map((item, index) => (
+        {renderedItems.map((item, index) => (
           <div
             key={item.id}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
-              const nextItems = buildNextOrder(draggingId, item.id);
-              if (nextItems) persistOrder(nextItems);
-              setDraggingId("");
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragOverId(item.id);
             }}
-            onDragEnd={() => setDraggingId("")}
+            onDragEnter={() => {
+              if (!draggingId || draggingId === item.id) return;
+              const source = previewItems || items;
+              const nextItems = buildNextOrder(source, draggingId, item.id);
+              if (nextItems) setPreviewItems(nextItems);
+            }}
+            onDrop={() => {
+              didDropRef.current = true;
+              const source = previewItems || items;
+              const nextItems = buildNextOrder(source, draggingId, item.id) || source;
+              if (nextItems && nextItems.length) persistOrder(nextItems);
+              setDraggingId("");
+              setDragOverId("");
+            }}
+            onDragEnd={() => {
+              if (!didDropRef.current) setPreviewItems(null);
+              didDropRef.current = false;
+              setDraggingId("");
+              setDragOverId("");
+            }}
             className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 ${
               draggingId === item.id
                 ? "border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/20"
+                : dragOverId === item.id && draggingId
+                  ? "border-sky-300 bg-sky-50 dark:border-sky-700 dark:bg-sky-950/20"
                 : "border-stone-200 dark:border-stone-700"
             }`}
           >
             <span
               draggable
-              onDragStart={() => setDraggingId(item.id)}
-              onDragEnd={() => setDraggingId("")}
-              className="cursor-grab select-none text-lg leading-none text-stone-400"
+              onDragStart={() => {
+                didDropRef.current = false;
+                setDraggingId(item.id);
+                setPreviewItems(items);
+              }}
+              onDragEnd={() => {
+                if (!didDropRef.current) setPreviewItems(null);
+                didDropRef.current = false;
+                setDraggingId("");
+                setDragOverId("");
+              }}
+              className={`select-none text-lg leading-none text-stone-400 ${
+                draggingId === item.id ? "cursor-grabbing opacity-60" : "cursor-grab"
+              }`}
               title="Drag to reorder"
               aria-label={`Drag ${item.title || "item"} to reorder`}
             >
@@ -131,7 +172,7 @@ export default function CollectionOrderManager({
             )}
           </div>
         ))}
-        {items.length === 0 ? (
+        {renderedItems.length === 0 ? (
           <div className="rounded-md border border-dashed border-stone-300 px-3 py-4 text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
             No items available to reorder.
           </div>

@@ -2,11 +2,18 @@ import LoginButton from "./login-button";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getInstallState } from "@/lib/install-state";
+import { getSession } from "@/lib/auth";
+import { getAdminPathAlias } from "@/lib/admin-path";
 
 export default async function LoginPage() {
   const state = await getInstallState();
   if (state.setupRequired) {
     redirect("/setup");
+  }
+
+  const session = await getSession();
+  if (session?.user?.id) {
+    redirect(`/app/${getAdminPathAlias()}/sites`);
   }
 
   return (

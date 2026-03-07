@@ -11,7 +11,7 @@ import {
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { getAdminPathAlias } from "@/lib/admin-path";
 
@@ -31,7 +31,7 @@ export default async function SiteThemeSettingsPage({ params, searchParams }: Pr
   const view = paramsQuery.view === "active" || paramsQuery.view === "inactive" ? paramsQuery.view : "all";
 
   const id = decodeURIComponent((await params).id);
-  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
   if (!site) notFound();
   const siteData = site;
   const siteThemesPath = `${adminBasePath}/site/${siteData.id}/settings/themes`;

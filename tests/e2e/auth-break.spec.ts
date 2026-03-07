@@ -3,11 +3,12 @@ import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
-import { getAppHostname, getAppOrigin } from "./helpers/env";
+import { getAppOrigin } from "./helpers/env";
+import { addSessionTokenCookie } from "./helpers/auth";
+import { ensureNetworkSession, ensureNetworkSite, ensureNetworkUser } from "./helpers/storage";
 
 const runId = `e2e-auth-break-${randomUUID()}`;
 const appOrigin = getAppOrigin();
-const appHostname = getAppHostname();
 const runAuthBreakE2E = process.env.RUN_AUTH_BREAK_E2E === "1";
 
 const adminUserId = `${runId}-admin-user`;
@@ -28,54 +29,31 @@ async function ensureUser(params: {
   role: "administrator" | "editor";
   passwordHash: string;
 }) {
-  await sql`
-    INSERT INTO tooty_users ("id", "email", "name", "role", "authProvider", "passwordHash", "createdAt", "updatedAt")
-    VALUES (${params.id}, ${params.email}, ${params.name}, ${params.role}, 'native', ${params.passwordHash}, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "email" = EXCLUDED."email",
-        "name" = EXCLUDED."name",
-        "role" = EXCLUDED."role",
-        "authProvider" = EXCLUDED."authProvider",
-        "passwordHash" = EXCLUDED."passwordHash",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkUser({
+    ...params,
+    authProvider: "native",
+  });
 }
 
 async function ensureSite() {
-  await sql`
-    INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${adminSiteId}, ${adminUserId}, ${"Auth Break Site"}, ${`${runId}-site`}, false, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "userId" = EXCLUDED."userId",
-        "name" = EXCLUDED."name",
-        "subdomain" = EXCLUDED."subdomain",
-        "isPrimary" = EXCLUDED."isPrimary",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkSite({
+    id: adminSiteId,
+    userId: adminUserId,
+    name: "Auth Break Site",
+    subdomain: `${runId}-site`,
+    isPrimary: false,
+  });
 }
 
 async function authenticateAs(page: Page, userId: string) {
   const token = `e2e-${randomUUID()}`;
   const expires = new Date(Date.now() + 1000 * 60 * 60 * 24);
-  await sql`
-    INSERT INTO tooty_sessions ("sessionToken", "userId", "expires")
-    VALUES (${token}, ${userId}, ${expires.toISOString()})
-    ON CONFLICT ("sessionToken") DO UPDATE
-    SET "userId" = EXCLUDED."userId", "expires" = EXCLUDED."expires"
-  `;
-
-  await page.context().addCookies([
-    {
-      name: "next-auth.session-token",
-      value: token,
-      domain: appHostname,
-      path: "/",
-      httpOnly: true,
-      secure: false,
-      sameSite: "Lax",
-      expires: Math.floor(expires.getTime() / 1000),
-    },
-  ]);
+  await ensureNetworkSession(token, userId, expires);
+  await addSessionTokenCookie(page.context(), {
+    value: token,
+    origin: appOrigin,
+    expires: Math.floor(expires.getTime() / 1000),
+  });
 }
 
 test.describe.configure({ mode: "serial" });

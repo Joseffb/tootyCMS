@@ -9,10 +9,12 @@ import { verifyPassword } from "@/lib/password";
 import { NETWORK_ADMIN_ROLE, type SiteCapability } from "@/lib/rbac";
 import { getAuthorizedSiteForUser } from "@/lib/authorization";
 import { getUserMetaValue } from "@/lib/user-meta";
+import { PROFILE_IMAGE_META_KEY, resolveProfileImageUrl } from "@/lib/profile-image";
 import { cookies } from "next/headers";
 import { getSettingByKey, getSettingsByKeys } from "@/lib/settings-store";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { findDomainPostForMutation } from "@/lib/site-domain-post-store";
 import {
   DefaultPostgresAccountsTable,
   DefaultPostgresSessionsTable,
@@ -312,9 +314,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       jwt: async ({ token, user }) => {
         if (user) {
           const displayName = await getUserMetaValue(String((user as any).id || ""), "display_name");
+          const profileImageUrl = await getUserMetaValue(String((user as any).id || ""), PROFILE_IMAGE_META_KEY);
           token.user = {
             ...user,
             displayName: String(displayName || "").trim() || (user as any).username || "",
+            profileImageUrl: String(profileImageUrl || "").trim(),
           };
         }
         if (token.sub) {
@@ -340,6 +344,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           username: token?.user?.username || token?.user?.gh_username,
           role: userRole?.role ?? "author",
           displayName: String((token as any)?.user?.displayName || "").trim(),
+          profileImageUrl: String((token as any)?.user?.profileImageUrl || "").trim(),
           forcePasswordChange: Boolean((token as any)?.forcePasswordChange),
         };
         return session;
@@ -364,15 +369,51 @@ export async function getSession() {
       role: string;
       email: string;
       image: string;
-    };
+      };
   } | null>);
   if (!baseSession?.user?.id) return baseSession;
+
+  const currentUser = await db.query.users.findFirst({
+    where: eq(users.id, baseSession.user.id),
+    columns: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+      role: true,
+      username: true,
+      gh_username: true,
+    },
+  });
+  if (!currentUser) return null;
+  const profileImageUrl = await getUserMetaValue(currentUser.id, PROFILE_IMAGE_META_KEY);
+  const resolvedImage = resolveProfileImageUrl({
+    profileImageUrl,
+    providerImageUrl: currentUser.image ?? baseSession.user.image,
+    email: currentUser.email ?? baseSession.user.email,
+    username: currentUser.username ?? currentUser.gh_username ?? baseSession.user.username,
+    name: currentUser.name ?? baseSession.user.name,
+  });
+
+  const session = {
+    ...baseSession,
+    user: {
+      ...baseSession.user,
+      id: currentUser.id,
+      name: currentUser.name ?? currentUser.email ?? baseSession.user.name,
+      email: currentUser.email ?? baseSession.user.email,
+      image: resolvedImage,
+      role: currentUser.role ?? (baseSession.user as any).role ?? "author",
+      username: currentUser.username ?? currentUser.gh_username ?? (baseSession.user as any).username,
+      profileImageUrl: String(profileImageUrl || "").trim(),
+    } as any,
+  };
 
   const store = await cookies();
   const actorId = String(store.get(MIMIC_ACTOR_COOKIE)?.value || "").trim();
   const targetId = String(store.get(MIMIC_TARGET_COOKIE)?.value || "").trim();
-  if (!actorId || !targetId || actorId !== baseSession.user.id || targetId === actorId) {
-    return baseSession;
+  if (!actorId || !targetId || actorId !== session.user.id || targetId === actorId) {
+    return session;
   }
 
   const target = await db.query.users.findFirst({
@@ -386,6 +427,13 @@ export async function getSession() {
     },
   });
   if (!target) return baseSession;
+  const targetProfileImageUrl = await getUserMetaValue(target.id, PROFILE_IMAGE_META_KEY);
+  const targetResolvedImage = resolveProfileImageUrl({
+    profileImageUrl: targetProfileImageUrl,
+    providerImageUrl: target.image ?? baseSession.user.image,
+    email: target.email ?? baseSession.user.email,
+    name: target.name ?? baseSession.user.name,
+  });
 
   return {
     ...baseSession,
@@ -394,9 +442,10 @@ export async function getSession() {
       id: target.id,
       name: target.name ?? target.email,
       email: target.email,
-      image: target.image ?? baseSession.user.image,
+      image: targetResolvedImage,
       role: target.role ?? "author",
       username: (baseSession.user as any).username,
+      profileImageUrl: String(targetProfileImageUrl || "").trim(),
       mimicActorId: actorId,
       mimicTargetId: target.id,
       mimicActorName: baseSession.user.name,
@@ -442,12 +491,7 @@ export function withPostAuth(action: any) {
       };
     }
 
-    const post = await db.query.posts.findFirst({
-      where: (posts, { eq }) => eq(posts.id, postId),
-      with: {
-        site: true,
-      },
-    });
+    const post = await findDomainPostForMutation(postId);
 
     if (!post || post.userId !== session.user.id) {
       return {

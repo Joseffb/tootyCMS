@@ -8,6 +8,7 @@ This contract defines ownership boundaries for user identity, authentication, an
   - identity (`id`, `name`, `email`)
   - authentication linkage/provider state
   - native password metadata (`force_password_change`)
+  - profile presentation metadata (`display_name`, `profile_image_url`)
 - Site-level user tables are membership/authorization surfaces only:
   - role and capability assignment per site
   - no duplication of global identity as authority
@@ -19,6 +20,32 @@ This contract defines ownership boundaries for user identity, authentication, an
 - Single-site UX may mirror profile under site settings:
   - `/site/:id/settings/profile`
 - Site profile view must read/write the same global identity state.
+
+## Core Profile Service Contract
+
+Core owns profile reads and writes through the core profile surface:
+
+- `core.profile.create`
+- `core.profile.read`
+- `core.profile.update`
+
+Notes:
+
+- This is a global identity service, not a site-scoped service.
+- `profile_image_url` is stored in `network_user_meta`, not on site membership tables.
+- Clearing a profile image is an update to empty value, not a delete flow.
+
+## Theme Exposure Contract
+
+Themes may read profile presentation data only through Core-provided DTO/context surfaces.
+
+- canonical theme-safe shape: `core.profile.*`
+- current fields:
+  - `core.profile.logged_in`
+  - `core.profile.display_name`
+  - `core.profile.image_url`
+
+Themes must not query profile tables or user meta directly.
 
 ## Auth Reset Contract (MUST)
 

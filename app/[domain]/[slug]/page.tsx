@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { getDomainPostsForSite, getPostData, getSiteData } from "@/lib/fetchers";
+import { getDomainPostsForSite, getMdxSource, getPostData, getSiteData } from "@/lib/fetchers";
 import SitePostContent from "./page-content";
 import db from "@/lib/db";
 import { and, eq } from "drizzle-orm";
-import { dataDomains, siteDataDomains, termRelationships, termTaxonomies, terms } from "@/lib/schema"; // This is a client component.
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
 import { getActiveThemeForSite, getThemeDetailTemplateByHierarchy, getThemeLayoutTemplateForSite, getThemeTemplateFromCandidates } from "@/lib/theme-runtime";
@@ -15,6 +14,7 @@ import { getRootSiteUrl, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteTextSetting, getSiteUrlSettingForSite, getSiteWritingSettings } from "@/lib/cms-config";
 import { toThemePostHtml } from "@/lib/theme-post-html";
 import { parseGalleryMediaFromContent } from "@/lib/gallery-media";
+import { getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
 import {
   dataDomainDescriptionSettingKey,
   dataDomainKeySettingKey,
@@ -30,7 +30,11 @@ import { trace } from "@/lib/debug";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
-import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import { DEFAULT_CORE_DOMAIN_KEYS } from "@/lib/default-data-domains";
+import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
+import PostViewTracker from "@/components/post-view-tracker";
+import { getPublicCommentCapabilities } from "@/lib/comments-spine";
+import { hydrateCommentsSlotMarkup } from "@/lib/comments-slot-bootstrap";
 
 // We expect params to be a Promise resolving to an object with domain and slug.
 type Params = Promise<{ domain: string; slug: string }>;
@@ -45,14 +49,18 @@ export default async function SitePostPage({
   // Await the entire params object.
   const resolvedParams = await params;
   const resolvedSearchParams = (await searchParams) || {};
-  await ensureDefaultCoreDataDomains();
 
   const decodedDomain = decodeURIComponent(resolvedParams.domain);
   const decodedSlug = decodeURIComponent(resolvedParams.slug);
   const site = await getSiteData(decodedDomain);
   if (!site) notFound();
-  const writing = await getSiteWritingSettings(site.id as string);
-  const existingPost = await getPostData(decodedDomain, decodedSlug);
+  const [writing, existingPost] = await Promise.all([
+    getSiteWritingSettings(site.id as string),
+    getPostData(decodedDomain, decodedSlug, {
+      includeMdxSource: false,
+      includeAdjacentPosts: false,
+    }),
+  ]);
   const normalizedSlug = normalizeDomainSegment(decodedSlug);
   const singularFromSlug = normalizeDomainKeyFromSegment(decodedSlug);
   const noDomainPrefixDomainKey = resolveNoDomainPrefixDomain(decodedSlug, writing);
@@ -77,21 +85,7 @@ export default async function SitePostPage({
   }
 
   if (!existingPost) {
-    const candidateRows = await db
-      .select({
-        id: dataDomains.id,
-        key: dataDomains.key,
-        label: dataDomains.label,
-        description: dataDomains.description,
-        settings: dataDomains.settings,
-        siteIsActive: siteDataDomains.isActive,
-      })
-      .from(dataDomains)
-      .leftJoin(
-        siteDataDomains,
-        and(eq(siteDataDomains.dataDomainId, dataDomains.id), eq(siteDataDomains.siteId, site.id as string)),
-      )
-      .orderBy(dataDomains.id);
+    const candidateRows = await listSiteDataDomains(site.id as string, { includeInactive: true });
 
     const candidateWithSegments = await Promise.all(
       candidateRows.map(async (row) => {
@@ -122,7 +116,7 @@ export default async function SitePostPage({
       const isCoreDomain = DEFAULT_CORE_DOMAIN_KEYS.includes(
         domainRow.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number],
       );
-      const isAssignedToSite = domainRow.siteIsActive !== null && domainRow.siteIsActive !== undefined;
+      const isAssignedToSite = true;
       if (!isCoreDomain && !isAssignedToSite) {
         notFound();
       }
@@ -273,7 +267,11 @@ export default async function SitePostPage({
               data_domain_key: effectiveDomainKey,
               data_domain_description: resolvedDomainDescription,
             });
-            return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
+            const hydratedHtml = hydrateCommentsSlotMarkup(
+              html,
+              await getPublicCommentCapabilities(siteId),
+            );
+            return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: hydratedHtml }} />;
           }
         }
 
@@ -378,18 +376,18 @@ export default async function SitePostPage({
       ? activeTheme.config.documentation_category_slug.trim().toLowerCase()
       : "documentation";
   const categoryRows =
-    (data as any)?.id
-      ? await db
-          .select({ slug: terms.slug })
-          .from(termRelationships)
-          .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
-          .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-          .where(
-            and(
-              eq(termRelationships.objectId, (data as any).id),
-              ...(siteId ? [eq(termTaxonomies.siteId, siteId)] : []),
-            ),
-          )
+    (data as any)?.id && siteId
+      ? await (async () => {
+          return withSiteTaxonomyTableRecovery(siteId, async () => {
+            const { termsTable, termTaxonomiesTable, termRelationshipsTable } = getSiteTaxonomyTables(siteId);
+            return db
+              .select({ slug: termsTable.slug })
+              .from(termRelationshipsTable)
+              .innerJoin(termTaxonomiesTable, eq(termTaxonomiesTable.id, termRelationshipsTable.termTaxonomyId))
+              .innerJoin(termsTable, eq(termsTable.id, termTaxonomiesTable.termId))
+              .where(eq(termRelationshipsTable.objectId, (data as any).id));
+          });
+        })()
       : [];
   const categorySlugs = categoryRows
     .map((row) => row.slug)
@@ -490,15 +488,30 @@ export default async function SitePostPage({
         route_kind: "domain_detail",
         data_domain: "post",
       });
-      return <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: html }} />;
+      const hydratedHtml = hydrateCommentsSlotMarkup(
+        html,
+        await getPublicCommentCapabilities(siteId),
+      );
+      return (
+        <>
+          <div className="tooty-theme-template" dangerouslySetInnerHTML={{ __html: hydratedHtml }} />
+          <PostViewTracker
+            postId={String((data as any)?.id || "")}
+            siteId={siteId || ""}
+            dataDomainKey="post"
+          />
+        </>
+      );
     }
   }
 
   const postData = {
     ...data,
+    mdxSource: (data as any)?.mdxSource ?? (await getMdxSource((data as any)?.content || "")),
     layout,
     menuItems,
     categorySlugs,
+    themeSlots: {} as Record<string, string>,
     primals: {
       public_image_base: `/theme-assets/${themeId}`,
       documentation_category_slug: documentationCategorySlug,
@@ -519,5 +532,14 @@ export default async function SitePostPage({
     });
     postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};
   }
-  return <SitePostContent postData={postData} />;
+  return (
+    <>
+      <SitePostContent postData={postData} />
+      <PostViewTracker
+        postId={String((data as any)?.id || "")}
+        siteId={siteId || ""}
+        dataDomainKey="post"
+      />
+    </>
+  );
 }

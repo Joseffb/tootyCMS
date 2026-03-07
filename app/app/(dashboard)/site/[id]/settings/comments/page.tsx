@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 import SiteCommentsPanel from "@/components/settings/site-comments-panel";
 
 type Props = {
@@ -14,10 +14,14 @@ export default async function SiteCommentsSettingsPage({ params }: Props) {
   }
   const { id } = await params;
   const siteId = decodeURIComponent(id);
-  const allowedSite = await getAuthorizedSiteForUser(session.user.id, siteId, "site.settings.write");
+  const { site: allowedSite } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    siteId,
+    "site.settings.write",
+  );
   if (!allowedSite) {
     notFound();
   }
 
-  return <SiteCommentsPanel siteId={siteId} />;
+  return <SiteCommentsPanel siteId={allowedSite.id} />;
 }

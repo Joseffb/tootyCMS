@@ -17,10 +17,11 @@ import {
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
-import { getAuthorizedSiteForUser, userCan } from "@/lib/authorization";
+import { userCan } from "@/lib/authorization";
 import ConfirmSubmitButton from "@/components/confirm-submit-button";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -39,7 +40,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
   const view = paramsQuery.view === "installed" || paramsQuery.view === "uninstalled" ? paramsQuery.view : "all";
 
   const id = decodeURIComponent((await params).id);
-  const site = await getAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
   if (!site) notFound();
   const siteId = site.id;
   const sitePluginsPath = `${adminBasePath}/site/${siteId}/settings/plugins`;

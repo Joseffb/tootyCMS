@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import db from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { media, sites } from "@/lib/schema";
+import { sites } from "@/lib/schema";
 import { trace } from "@/lib/debug";
 import { canUserAccessSiteAnyCapability } from "@/lib/authorization";
+import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
 
 export async function GET(req: Request) {
   const traceId = req.headers.get("x-trace-id") || crypto.randomUUID();
@@ -46,6 +47,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  await ensureSiteMediaTable(siteId);
+  const media = getSiteMediaTable(siteId);
   const rows = await db
     .select({
       id: media.id,
@@ -62,7 +65,6 @@ export async function GET(req: Request) {
       createdAt: media.createdAt,
     })
     .from(media)
-    .where(eq(media.siteId, siteId))
     .orderBy(desc(media.createdAt))
     .limit(limit + 1)
     .offset(offset);

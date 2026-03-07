@@ -1,14 +1,5 @@
 import db from "@/lib/db";
-import {
-  domainPosts,
-  dataDomains,
-  siteDataDomains,
-  sites,
-  termRelationships,
-  termTaxonomies,
-  termTaxonomyMeta,
-  terms,
-} from "@/lib/schema";
+import { sites } from "@/lib/schema";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
@@ -59,6 +50,11 @@ import {
   updateCoreMenuItem,
 } from "@/lib/core-menu-contract";
 import type { UpsertMenuInput, UpsertMenuItemInput } from "@/lib/menu-system";
+import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
+import { getSiteDomainPostById } from "@/lib/site-domain-post-store";
+import { ensureSiteTaxonomyTables, getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
+import { createCoreProfile, readCoreProfile, updateCoreProfile } from "@/lib/core-profile";
+import { getSession } from "@/lib/auth";
 
 type BaseExtensionApi = {
   pluginId?: string;
@@ -147,6 +143,21 @@ type CoreServiceApi = {
   forSite: (siteId: string) => BoundSiteCoreApi;
   site: {
     get: (siteId: string) => Promise<Awaited<ReturnType<BaseExtensionApi["getSiteById"]>>>;
+  };
+  profile: {
+    create: (input: {
+      name?: string | null;
+      email?: string;
+      displayName?: string;
+      profileImageUrl?: string;
+    }) => Promise<any>;
+    read: () => Promise<any>;
+    update: (input: {
+      name?: string | null;
+      email?: string;
+      displayName?: string;
+      profileImageUrl?: string;
+    }) => Promise<any>;
   };
   settings: {
     get: (key: string, fallback?: string) => Promise<string>;
@@ -286,7 +297,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
-  core: Pick<CoreServiceApi, "site" | "settings" | "dataDomain" | "taxonomy" | "menus">;
+  core: Pick<CoreServiceApi, "site" | "profile" | "settings" | "dataDomain" | "taxonomy" | "menus">;
   setSetting: (key: string, value: string) => Promise<never>;
   setPluginSetting: (key: string, value: string) => Promise<never>;
   createSchedule: (input: {
@@ -355,6 +366,29 @@ function normalizeMetaKey(value: string) {
     .slice(0, 80);
 }
 
+async function getSiteTaxonomyScope(siteId: string) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) {
+    throw new Error("siteId is required");
+  }
+  await ensureSiteTaxonomyTables(normalizedSiteId);
+  return getSiteTaxonomyTables(normalizedSiteId);
+}
+
+async function withSiteTaxonomyScope<T>(
+  siteId: string,
+  run: (tables: Awaited<ReturnType<typeof getSiteTaxonomyScope>>) => Promise<T>,
+) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) {
+    throw new Error("siteId is required");
+  }
+  return withSiteTaxonomyTableRecovery(normalizedSiteId, async () => {
+    const tables = await getSiteTaxonomyScope(normalizedSiteId);
+    return run(tables);
+  });
+}
+
 function parseCommandInput(input?: CoreApiInvokeInput): Record<string, string> {
   if (typeof input === "string") {
     const [rawKey, ...rest] = input.split(":");
@@ -395,6 +429,30 @@ function parseMenuItemInput(input?: CoreApiInvokeInput): UpsertMenuItemInput {
     enabled: command.enabled ? String(command.enabled).toLowerCase() !== "false" : true,
     sortOrder: Number(command.sortorder || command.sort_order || 10),
     meta: parseJsonObject<Record<string, string>>(command.meta, {}),
+  };
+}
+
+function parseProfileInput(input?: CoreApiInvokeInput) {
+  const command = parseCommandInput(input);
+  return {
+    ...(command.name !== undefined ? { name: command.name } : {}),
+    ...(command.email !== undefined ? { email: command.email } : {}),
+    ...(command.displayname !== undefined || command.display_name !== undefined
+      ? { displayName: command.displayname || command.display_name || "" }
+      : {}),
+    ...(command.profileimageurl !== undefined ||
+    command.profile_image_url !== undefined ||
+    command.imageurl !== undefined ||
+    command.image_url !== undefined
+      ? {
+          profileImageUrl:
+            command.profileimageurl ||
+            command.profile_image_url ||
+            command.imageurl ||
+            command.image_url ||
+            "",
+        }
+      : {}),
   };
 }
 
@@ -452,21 +510,27 @@ function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOption
       return byKey[finalKey] ?? fallback;
     },
     async listDataDomains(siteId?: string) {
-      const rows = await db.select().from(dataDomains);
-      if (!siteId) return rows;
-      const assignments = await db
-        .select({
-          dataDomainId: siteDataDomains.dataDomainId,
-          isActive: siteDataDomains.isActive,
-        })
-        .from(siteDataDomains)
-        .where(eq(siteDataDomains.siteId, siteId));
-      const assignmentMap = new Map(assignments.map((row) => [row.dataDomainId, row.isActive]));
-      return rows.map((row) => ({
-        ...row,
-        isActive: assignmentMap.get(row.id) ?? false,
-        assigned: assignmentMap.has(row.id),
-      }));
+      const normalizedSiteId = String(siteId || "").trim();
+      if (normalizedSiteId) {
+        return listSiteDataDomains(normalizedSiteId, { includeInactive: true });
+      }
+
+      const siteRows = await db.select({ id: sites.id }).from(sites);
+      const byKey = new Map<string, any>();
+      for (const row of siteRows) {
+        const currentSiteId = String(row.id || "").trim();
+        if (!currentSiteId) continue;
+        const domains = await listSiteDataDomains(currentSiteId, { includeInactive: true });
+        for (const domain of domains) {
+          if (byKey.has(domain.key)) continue;
+          byKey.set(domain.key, {
+            ...domain,
+            assigned: true,
+            siteId: currentSiteId,
+          });
+        }
+      }
+      return Array.from(byKey.values());
     },
   };
 }
@@ -632,16 +696,16 @@ export function createPluginExtensionApi(
 
   const listTaxonomies = async (siteId?: string) => {
     const resolvedSiteId = resolveTaxonomySiteId(siteId);
-    const rows = await db
-      .select({
-        key: termTaxonomies.taxonomy,
-        termCount: sql<number>`count(${termTaxonomies.id})::int`,
-      })
-      .from(termTaxonomies)
-      .where(eq(termTaxonomies.siteId, resolvedSiteId))
-      .groupBy(termTaxonomies.taxonomy)
-      .orderBy(asc(termTaxonomies.taxonomy));
-    return rows;
+    return withSiteTaxonomyScope(resolvedSiteId, async ({ termTaxonomiesTable }) =>
+      db
+        .select({
+          key: termTaxonomiesTable.taxonomy,
+          termCount: sql<number>`count(${termTaxonomiesTable.id})::int`,
+        })
+        .from(termTaxonomiesTable)
+        .groupBy(termTaxonomiesTable.taxonomy)
+        .orderBy(asc(termTaxonomiesTable.taxonomy)),
+    );
   };
 
   const editTaxonomy = async (siteId: string, taxonomy: string, input?: CoreApiInvokeInput) => {
@@ -652,10 +716,12 @@ export function createPluginExtensionApi(
     const renameTo = normalizeTaxonomyKey(command.rename || command.key || "");
     const name = String(command.name || command.label || "").trim();
     if (renameTo && renameTo !== key) {
-      await db
-        .update(termTaxonomies)
-        .set({ taxonomy: renameTo })
-        .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.taxonomy, key)));
+      await withSiteTaxonomyScope(resolvedSiteId, async ({ termTaxonomiesTable }) => {
+        await db
+          .update(termTaxonomiesTable)
+          .set({ taxonomy: renameTo })
+          .where(eq(termTaxonomiesTable.taxonomy, key));
+      });
       return { ok: true, taxonomy: renameTo, action: "rename" as const };
     }
     if (name) {
@@ -668,18 +734,20 @@ export function createPluginExtensionApi(
   const listTaxonomyTerms = async (siteId: string, taxonomy: string) => {
     const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const key = normalizeTaxonomyKey(taxonomy);
-    return db
-      .select({
-        id: termTaxonomies.id,
-        taxonomy: termTaxonomies.taxonomy,
-        name: terms.name,
-        slug: terms.slug,
-        parentId: termTaxonomies.parentId,
-      })
-      .from(termTaxonomies)
-      .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.taxonomy, key)))
-      .orderBy(asc(terms.name));
+    return withSiteTaxonomyScope(resolvedSiteId, async ({ termsTable, termTaxonomiesTable }) =>
+      db
+        .select({
+          id: termTaxonomiesTable.id,
+          taxonomy: termTaxonomiesTable.taxonomy,
+          name: termsTable.name,
+          slug: termsTable.slug,
+          parentId: termTaxonomiesTable.parentId,
+        })
+        .from(termTaxonomiesTable)
+        .innerJoin(termsTable, eq(termsTable.id, termTaxonomiesTable.termId))
+        .where(eq(termTaxonomiesTable.taxonomy, key))
+        .orderBy(asc(termsTable.name)),
+    );
   };
 
   const listPostTaxonomyAssignments = async (siteId: string, dataDomainKey: string, postId: string) => {
@@ -687,45 +755,41 @@ export function createPluginExtensionApi(
     const normalizedSiteId = String(siteId || "").trim();
     const normalizedPostId = String(postId || "").trim();
     if (!domainKey || !normalizedPostId) return [];
-
-    return db
-      .select({
-        taxonomy: termTaxonomies.taxonomy,
-        termTaxonomyId: termTaxonomies.id,
-        termId: terms.id,
-        slug: terms.slug,
-        name: terms.name,
-      })
-      .from(termRelationships)
-      .innerJoin(termTaxonomies, eq(termTaxonomies.id, termRelationships.termTaxonomyId))
-      .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-      .innerJoin(domainPosts, eq(domainPosts.id, termRelationships.objectId))
-      .innerJoin(dataDomains, eq(dataDomains.id, domainPosts.dataDomainId))
-      .where(
-        and(
-          eq(domainPosts.id, normalizedPostId),
-          eq(dataDomains.key, domainKey),
-          ...(normalizedSiteId ? [eq(termTaxonomies.siteId, normalizedSiteId)] : []),
-          ...(normalizedSiteId ? [eq(domainPosts.siteId, normalizedSiteId)] : []),
-        ),
-      )
-      .orderBy(asc(termTaxonomies.taxonomy), asc(terms.name));
+    const post = await getSiteDomainPostById({
+      siteId: normalizedSiteId,
+      postId: normalizedPostId,
+      dataDomainKey: domainKey,
+    });
+    if (!post) return [];
+    return withSiteTaxonomyScope(
+      normalizedSiteId,
+      async ({ termRelationshipsTable, termTaxonomiesTable, termsTable, termTaxonomyDomainsTable }) =>
+        db
+          .select({
+            taxonomy: termTaxonomiesTable.taxonomy,
+            termTaxonomyId: termTaxonomiesTable.id,
+            termId: termsTable.id,
+            slug: termsTable.slug,
+            name: termsTable.name,
+          })
+          .from(termRelationshipsTable)
+          .innerJoin(termTaxonomiesTable, eq(termTaxonomiesTable.id, termRelationshipsTable.termTaxonomyId))
+          .innerJoin(termsTable, eq(termsTable.id, termTaxonomiesTable.termId))
+          .innerJoin(termTaxonomyDomainsTable, eq(termTaxonomyDomainsTable.termTaxonomyId, termTaxonomiesTable.id))
+          .where(
+            and(
+              eq(termRelationshipsTable.objectId, normalizedPostId),
+              eq(termTaxonomyDomainsTable.dataDomainId, post.dataDomainId),
+            ),
+          )
+          .orderBy(asc(termTaxonomiesTable.taxonomy), asc(termsTable.name)),
+    );
   };
 
   const editTaxonomyTerm = async (siteId: string, taxonomy: string, termTaxonomyId: number, input?: CoreApiInvokeInput) => {
     const resolvedSiteId = resolveTaxonomySiteId(siteId);
     const key = normalizeTaxonomyKey(taxonomy);
     const command = parseCommandInput(input);
-    const [row] = await db
-      .select({
-        taxonomy: termTaxonomies.taxonomy,
-        termId: termTaxonomies.termId,
-      })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, termTaxonomyId)))
-      .limit(1);
-    if (!row || row.taxonomy !== key) throw new Error("Term taxonomy not found.");
-
     const name = String(command.name || "").trim();
     const slug = String(command.slug || "")
       .trim()
@@ -734,59 +798,75 @@ export function createPluginExtensionApi(
       .replace(/-+/g, "-")
       .replace(/^-+|-+$/g, "");
 
-    if (name || slug) {
-      await db
-        .update(terms)
-        .set({
-          ...(name ? { name } : {}),
-          ...(slug ? { slug } : {}),
-          updatedAt: new Date(),
+    await withSiteTaxonomyScope(resolvedSiteId, async ({ termsTable, termTaxonomiesTable }) => {
+      const [row] = await db
+        .select({
+          taxonomy: termTaxonomiesTable.taxonomy,
+          termId: termTaxonomiesTable.termId,
         })
-        .where(eq(terms.id, row.termId));
-    }
+        .from(termTaxonomiesTable)
+        .where(eq(termTaxonomiesTable.id, termTaxonomyId))
+        .limit(1);
+      if (!row || row.taxonomy !== key) throw new Error("Term taxonomy not found.");
+
+      if (name || slug) {
+        await db
+          .update(termsTable)
+          .set({
+            ...(name ? { name } : {}),
+            ...(slug ? { slug } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(termsTable.id, row.termId));
+      }
+    });
 
     return { ok: true, taxonomy: key, termTaxonomyId };
   };
 
   const getTaxonomyTermMeta = async (siteId: string, termTaxonomyId: number) => {
     const resolvedSiteId = resolveTaxonomySiteId(siteId);
-    const [taxonomyRow] = await db
-      .select({ id: termTaxonomies.id })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, Math.trunc(termTaxonomyId))))
-      .limit(1);
-    if (!taxonomyRow) return [];
-    return db
-      .select({
-        key: termTaxonomyMeta.key,
-        value: termTaxonomyMeta.value,
-      })
-      .from(termTaxonomyMeta)
-      .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
-      .orderBy(asc(termTaxonomyMeta.key));
+    return withSiteTaxonomyScope(resolvedSiteId, async ({ termTaxonomiesTable, termTaxonomyMetaTable }) => {
+      const [taxonomyRow] = await db
+        .select({ id: termTaxonomiesTable.id })
+        .from(termTaxonomiesTable)
+        .where(eq(termTaxonomiesTable.id, Math.trunc(termTaxonomyId)))
+        .limit(1);
+      if (!taxonomyRow) return [];
+      return db
+        .select({
+          key: termTaxonomyMetaTable.key,
+          value: termTaxonomyMetaTable.value,
+        })
+        .from(termTaxonomyMetaTable)
+        .where(eq(termTaxonomyMetaTable.termTaxonomyId, Math.trunc(termTaxonomyId)))
+        .orderBy(asc(termTaxonomyMetaTable.key));
+    });
   };
 
   const setTaxonomyTermMeta = async (siteId: string, termTaxonomyId: number, key: string, value: string) => {
     const resolvedSiteId = resolveTaxonomySiteId(siteId);
-    const [taxonomyRow] = await db
-      .select({ id: termTaxonomies.id })
-      .from(termTaxonomies)
-      .where(and(eq(termTaxonomies.siteId, resolvedSiteId), eq(termTaxonomies.id, Math.trunc(termTaxonomyId))))
-      .limit(1);
-    if (!taxonomyRow) throw new Error("Term taxonomy not found.");
     const metaKey = normalizeMetaKey(key);
     if (!metaKey) throw new Error("meta key is required");
-    await db
-      .insert(termTaxonomyMeta)
-      .values({
-        termTaxonomyId: Math.trunc(termTaxonomyId),
-        key: metaKey,
-        value: String(value ?? ""),
-      })
-      .onConflictDoUpdate({
-        target: [termTaxonomyMeta.termTaxonomyId, termTaxonomyMeta.key],
-        set: { value: String(value ?? ""), updatedAt: new Date() },
-      });
+    await withSiteTaxonomyScope(resolvedSiteId, async ({ termTaxonomiesTable, termTaxonomyMetaTable }) => {
+      const [taxonomyRow] = await db
+        .select({ id: termTaxonomiesTable.id })
+        .from(termTaxonomiesTable)
+        .where(eq(termTaxonomiesTable.id, Math.trunc(termTaxonomyId)))
+        .limit(1);
+      if (!taxonomyRow) throw new Error("Term taxonomy not found.");
+      await db
+        .insert(termTaxonomyMetaTable)
+        .values({
+          termTaxonomyId: Math.trunc(termTaxonomyId),
+          key: metaKey,
+          value: String(value ?? ""),
+        })
+        .onConflictDoUpdate({
+          target: [termTaxonomyMetaTable.termTaxonomyId, termTaxonomyMetaTable.key],
+          set: { value: String(value ?? ""), updatedAt: new Date() },
+        });
+    });
     return { ok: true };
   };
 
@@ -882,6 +962,12 @@ export function createPluginExtensionApi(
         const action = (segments.shift() || "").toLowerCase();
         if (action === "list") return listSchedules();
       }
+      if (service === "profile") {
+        const action = (segments.shift() || "read").toLowerCase();
+        if (action === "read" || action === "get") return core.profile.read();
+        if (action === "create") return core.profile.create(parseProfileInput(input));
+        if (action === "edit" || action === "update") return core.profile.update(parseProfileInput(input));
+      }
       if (service === "data-domain" || service === "datadomain") {
         if ((segments[0] || "").toLowerCase() === "list") return base.listDataDomains(boundSiteId || undefined);
         const domainKey = segments.shift() || "";
@@ -976,6 +1062,26 @@ export function createPluginExtensionApi(
     },
     site: {
       get: (siteId: string) => base.getSiteById(siteId),
+    },
+    profile: {
+      create: async (input) => {
+        const session = await getSession();
+        const userId = String(session?.user?.id || "").trim();
+        if (!userId) throw new Error("Not authenticated");
+        return createCoreProfile(userId, input || {});
+      },
+      read: async () => {
+        const session = await getSession();
+        const userId = String(session?.user?.id || "").trim();
+        if (!userId) throw new Error("Not authenticated");
+        return readCoreProfile(userId);
+      },
+      update: async (input) => {
+        const session = await getSession();
+        const userId = String(session?.user?.id || "").trim();
+        if (!userId) throw new Error("Not authenticated");
+        return updateCoreProfile(userId, input || {});
+      },
     },
     settings: {
       get: (key: string, fallback = "") => base.getSetting(key, fallback),
@@ -1079,6 +1185,16 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
       site: {
         get: (siteId: string) => base.getSiteById(siteId),
       },
+      profile: {
+        create: async () => throwThemeSideEffectError("core.profile.create"),
+        read: async () => {
+          const session = await getSession();
+          const userId = String(session?.user?.id || "").trim();
+          if (!userId) return null;
+          return readCoreProfile(userId);
+        },
+        update: async () => throwThemeSideEffectError("core.profile.update"),
+      },
       settings: {
         get: (key: string, fallback = "") => base.getSetting(key, fallback),
         set: async () => throwThemeSideEffectError("core.settings.set"),
@@ -1110,40 +1226,12 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
         },
       },
       taxonomy: {
-        list: async () =>
-          db
-            .select({
-              key: termTaxonomies.taxonomy,
-              termCount: sql<number>`count(${termTaxonomies.id})::int`,
-            })
-            .from(termTaxonomies)
-            .groupBy(termTaxonomies.taxonomy)
-            .orderBy(asc(termTaxonomies.taxonomy)),
+        list: async () => [],
         edit: async () => throwThemeSideEffectError("core.taxonomy.edit"),
         terms: {
-          list: async (taxonomy: string) =>
-            db
-              .select({
-                id: termTaxonomies.id,
-                taxonomy: termTaxonomies.taxonomy,
-                name: terms.name,
-                slug: terms.slug,
-                parentId: termTaxonomies.parentId,
-              })
-              .from(termTaxonomies)
-              .innerJoin(terms, eq(terms.id, termTaxonomies.termId))
-              .where(eq(termTaxonomies.taxonomy, normalizeTaxonomyKey(taxonomy)))
-              .orderBy(asc(terms.name)),
+          list: async () => [],
           meta: {
-            get: async (termTaxonomyId: number) =>
-              db
-                .select({
-                  key: termTaxonomyMeta.key,
-                  value: termTaxonomyMeta.value,
-                })
-                .from(termTaxonomyMeta)
-                .where(eq(termTaxonomyMeta.termTaxonomyId, Math.trunc(termTaxonomyId)))
-                .orderBy(asc(termTaxonomyMeta.key)),
+            get: async () => [],
             set: async () => throwThemeSideEffectError("core.taxonomy.terms.meta.set"),
           },
         },

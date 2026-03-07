@@ -3,8 +3,9 @@ import { notFound, redirect } from "next/navigation";
 import Form from "@/components/form";
 import { getSiteDataDomainByKey, updateDomainPostMetadata } from "@/lib/actions";
 import DeleteDomainPostForm from "@/components/form/delete-domain-post-form";
-import db from "@/lib/db";
 import { canUserMutateDomainPost } from "@/lib/authorization";
+import { getSiteDomainPostById } from "@/lib/site-domain-post-store";
+import { resolveAuthorizedSiteForAnyCapability } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -24,19 +25,26 @@ export default async function DomainPostSettings({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
   const resolvedPostId = decodeURIComponent(postId);
+  const { site } = await resolveAuthorizedSiteForAnyCapability(session.user.id, siteId, [
+    "site.content.read",
+    "site.content.edit.own",
+    "site.content.edit.any",
+    "site.content.publish",
+  ]);
+  if (!site) {
+    notFound();
+  }
+  const effectiveSiteId = site.id;
 
-  const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
+  const domain = await getSiteDataDomainByKey(effectiveSiteId, resolvedDomainKey);
   if (!domain) {
     notFound();
   }
 
-  const data = await db.query.domainPosts.findFirst({
-    where: (table, { and, eq }) =>
-      and(
-        eq(table.id, resolvedPostId),
-        eq(table.siteId, siteId),
-        eq(table.dataDomainId, domain.id),
-      ),
+  const data = await getSiteDomainPostById({
+    siteId: effectiveSiteId,
+    postId: resolvedPostId,
+    dataDomainKey: resolvedDomainKey,
   });
 
   const canEdit = await canUserMutateDomainPost(session.user.id, resolvedPostId, "edit");
@@ -65,7 +73,7 @@ export default async function DomainPostSettings({ params }: Props) {
 
         <DeleteDomainPostForm
           postName={Promise.resolve({ postName: data.title || "Untitled" })}
-          siteId={siteId}
+          siteId={effectiveSiteId}
           domainKey={resolvedDomainKey}
         />
       </div>

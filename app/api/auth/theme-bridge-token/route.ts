@@ -5,6 +5,7 @@ import db from "@/lib/db";
 import { userMeta, users } from "@/lib/schema";
 import { createThemeBridgeToken } from "@/lib/theme-auth-bridge";
 import { isAllowedThemeBridgeOrigin } from "@/lib/theme-bridge-hosts";
+import { traceInfo } from "@/lib/debug";
 
 async function resolveBridgeUserProfile(userId: string) {
   const row = await db.query.users.findFirst({
@@ -54,7 +55,7 @@ export async function GET(request: Request) {
   const userId = String(session?.user?.id || "").trim();
   if (!userId) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:theme-bridge] token request unauthenticated", { mode });
+      traceInfo("theme-bridge", "token request unauthenticated", { mode });
     }
     return NextResponse.json({ ok: true, authenticated: false }, { status: 200, headers: corsHeaders });
   }
@@ -77,12 +78,12 @@ export async function GET(request: Request) {
   });
   if (!token) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:theme-bridge] token request failed to mint", { userId, mode });
+      traceInfo("theme-bridge", "token request failed to mint", { userId, mode });
     }
     return NextResponse.json({ ok: true, authenticated: false }, { status: 200, headers: corsHeaders });
   }
   if (process.env.TRACE_PROFILE === "Test") {
-    console.info("[trace:Test:theme-bridge] token request authenticated", { userId, hasDisplayName: Boolean(user.displayName), mode });
+    traceInfo("theme-bridge", "token request authenticated", { userId, hasDisplayName: Boolean(user.displayName), mode });
   }
   return NextResponse.json({
     ok: true,

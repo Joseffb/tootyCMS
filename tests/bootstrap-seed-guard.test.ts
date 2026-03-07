@@ -10,11 +10,19 @@ const mocks = vi.hoisted(() => {
   const del = vi.fn(() => ({ where: vi.fn(async () => undefined) }));
   const createSiteMenu = vi.fn(async () => ({ id: "menu-1" }));
   const createSiteMenuItem = vi.fn(async () => ({ id: "item-1" }));
+  const createSiteDomainPost = vi.fn(async (payload: unknown) => payload);
+  const listSiteDomainPosts = vi.fn(async () => []);
+  const updateSiteDomainPostById = vi.fn(async () => null);
+  const deleteSiteDomainPostById = vi.fn(async () => undefined);
 
   return {
     listSiteIdsForUser: vi.fn(async () => []),
     upsertSiteUserRole: vi.fn(async () => undefined),
     ensureDefaultCoreDataDomains: vi.fn(async () => new Map([["post", 1], ["page", 2]])),
+    getCoreDomainByKeyForSite: vi.fn(async (_siteId: string, key: "post" | "page") => ({
+      id: key === "post" ? 1 : 2,
+      key,
+    })),
     isRandomDefaultImagesEnabled: vi.fn(async () => false),
     sitesFindFirst,
     dataDomainsFindFirst,
@@ -25,6 +33,10 @@ const mocks = vi.hoisted(() => {
     del,
     createSiteMenu,
     createSiteMenuItem,
+    createSiteDomainPost,
+    listSiteDomainPosts,
+    updateSiteDomainPostById,
+    deleteSiteDomainPostById,
     seededRows: [] as unknown[],
   };
 });
@@ -37,6 +49,7 @@ vi.mock("@/lib/site-user-tables", () => ({
 vi.mock("@/lib/default-data-domains", () => ({
   DEFAULT_CORE_DOMAIN_KEYS: ["post", "page"],
   ensureDefaultCoreDataDomains: mocks.ensureDefaultCoreDataDomains,
+  getCoreDomainByKeyForSite: mocks.getCoreDomainByKeyForSite,
 }));
 
 vi.mock("@/lib/cms-config", () => ({
@@ -59,6 +72,13 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/menu-system", () => ({
   createSiteMenu: mocks.createSiteMenu,
   createSiteMenuItem: mocks.createSiteMenuItem,
+}));
+
+vi.mock("@/lib/site-domain-post-store", () => ({
+  createSiteDomainPost: mocks.createSiteDomainPost,
+  listSiteDomainPosts: mocks.listSiteDomainPosts,
+  updateSiteDomainPostById: mocks.updateSiteDomainPostById,
+  deleteSiteDomainPostById: mocks.deleteSiteDomainPostById,
 }));
 
 function buildInsertChain() {
@@ -90,19 +110,33 @@ describe("bootstrap seed guard", () => {
     mocks.listSiteIdsForUser.mockReset();
     mocks.ensureDefaultCoreDataDomains.mockReset();
     mocks.isRandomDefaultImagesEnabled.mockReset();
+    mocks.getCoreDomainByKeyForSite.mockReset();
     mocks.usersFindFirst.mockReset();
     mocks.update.mockClear();
     mocks.del.mockClear();
     mocks.createSiteMenu.mockClear();
     mocks.createSiteMenuItem.mockClear();
+    mocks.createSiteDomainPost.mockReset();
+    mocks.listSiteDomainPosts.mockReset();
+    mocks.updateSiteDomainPostById.mockReset();
+    mocks.deleteSiteDomainPostById.mockReset();
     mocks.seededRows.length = 0;
 
     // getGlobalMainSite() before and after initial insert
     mocks.sitesFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mocks.listSiteIdsForUser.mockResolvedValue([]);
     mocks.ensureDefaultCoreDataDomains.mockResolvedValue(new Map([["post", 1], ["page", 2]]));
+    mocks.getCoreDomainByKeyForSite.mockImplementation(async (_siteId: string, key: "post" | "page") => ({
+      id: key === "post" ? 1 : 2,
+      key,
+    }));
     mocks.isRandomDefaultImagesEnabled.mockResolvedValue(false);
     mocks.usersFindFirst.mockResolvedValue({ role: "administrator" });
+    mocks.listSiteDomainPosts.mockResolvedValue([]);
+    mocks.createSiteDomainPost.mockImplementation(async (payload: unknown) => {
+      mocks.seededRows.push(payload);
+      return payload;
+    });
 
     // post/page lookups used only when seedStarterContent=true
     mocks.dataDomainsFindFirst

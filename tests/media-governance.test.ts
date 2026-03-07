@@ -5,12 +5,18 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   selectWhere: vi.fn(),
   deleteWhere: vi.fn(),
+  sitesFindMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   default: {
     select: mocks.select,
     delete: mocks.delete,
+    query: {
+      sites: {
+        findMany: mocks.sitesFindMany,
+      },
+    },
   },
 }));
 
@@ -20,6 +26,8 @@ describe("media governance cleanup", () => {
     mocks.delete.mockReset();
     mocks.selectWhere.mockReset();
     mocks.deleteWhere.mockReset();
+    mocks.sitesFindMany.mockReset();
+    mocks.sitesFindMany.mockResolvedValue([]);
 
     const selectLimit = vi.fn(async () => []);
     const selectOrderBy = vi.fn(() => ({ limit: selectLimit }));
@@ -46,6 +54,7 @@ describe("media governance cleanup", () => {
   });
 
   it("deletes selected rows when candidates exist", async () => {
+    mocks.sitesFindMany.mockResolvedValue([{ id: "site-1" }]);
     const selectLimit = vi.fn(async () => [{ id: 11 }, { id: 12 }]);
     const selectOrderBy = vi.fn(() => ({ limit: selectLimit }));
     const selectWhere = vi.fn(() => ({ orderBy: selectOrderBy }));

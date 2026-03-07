@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 test("@cross-browser about page is accessible", async ({ page }) => {
-  const response = await page.goto("/about-this-site");
+  const response = await page.goto("/about-this-site", { waitUntil: "domcontentloaded" });
   if (!response?.ok()) {
-    await page.goto("/app/cp/login");
+    await page.goto("/app/cp/login", { waitUntil: "domcontentloaded" });
     expect(page.url()).toMatch(/\/(app\/cp\/login|setup)$/);
     await expect(page.locator("body")).toContainText(/login|auth|provider|configured|setup/i);
     return;
@@ -12,7 +12,7 @@ test("@cross-browser about page is accessible", async ({ page }) => {
 });
 
 test("@cross-browser direct app login route is not a 404", async ({ page }) => {
-  const response = await page.goto("/app/cp/login");
+  const response = await page.goto("/app/cp/login", { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBe(200);
   await expect(page.locator("body")).toContainText(/login|auth|provider|configured/i);
 });

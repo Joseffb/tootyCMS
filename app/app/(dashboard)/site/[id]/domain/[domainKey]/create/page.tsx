@@ -1,7 +1,7 @@
 import { createDomainPost, getSiteDataDomainByKey } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import { canUserCreateDomainContent } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -18,16 +18,21 @@ export default async function CreateDomainEntryPage({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
 
-  const canCreate = await canUserCreateDomainContent(session.user.id, siteId);
-  if (!canCreate) notFound();
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, siteId, "site.content.create");
+  if (!site) notFound();
+  const effectiveSiteId = site.id;
 
-  const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
+  const domain = await getSiteDataDomainByKey(effectiveSiteId, resolvedDomainKey);
   if (!domain) notFound();
 
-  const created = await createDomainPost(null, siteId, resolvedDomainKey);
+  const created = await createDomainPost(null, effectiveSiteId, resolvedDomainKey);
   if ((created as any)?.error || !(created as any)?.id) {
-    redirect(domain.key === "post" ? `/app/site/${siteId}` : `/app/site/${siteId}/domain/${resolvedDomainKey}`);
+    redirect(
+      domain.key === "post"
+        ? `/app/site/${effectiveSiteId}`
+        : `/app/site/${effectiveSiteId}/domain/${resolvedDomainKey}`,
+    );
   }
 
-  redirect(`/app/site/${siteId}/domain/${resolvedDomainKey}/post/${(created as any).id}`);
+  redirect(`/app/site/${effectiveSiteId}/domain/${resolvedDomainKey}/post/${(created as any).id}`);
 }

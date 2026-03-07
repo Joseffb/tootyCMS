@@ -12,9 +12,11 @@ import {
 import { resolveAuthenticatedDisplayName, sanitizePublicCommentMetadata } from "@/lib/comment-identity";
 import type { CommentContextType, CommentStatus } from "@/lib/kernel";
 import db from "@/lib/db";
-import { domainPosts, userMeta, users } from "@/lib/schema";
+import { userMeta, users } from "@/lib/schema";
 import { hasPostPasswordAccess } from "@/lib/post-password";
 import { verifyThemeBridgeToken } from "@/lib/theme-auth-bridge";
+import { getSiteDomainPostById } from "@/lib/site-domain-post-store";
+import { traceInfo } from "@/lib/debug";
 
 function normalize(value: unknown) {
   return String(value || "").trim();
@@ -72,13 +74,8 @@ async function hasEntryPasswordAccess(
   contextId: string | undefined,
 ) {
   if (contextType !== "entry" || !contextId) return false;
-  const entry = await db.query.domainPosts.findFirst({
-    where: and(eq(domainPosts.siteId, siteId), eq(domainPosts.id, contextId), eq(domainPosts.published, true)),
-    columns: {
-      id: true,
-      password: true,
-    },
-  });
+  const entry = await getSiteDomainPostById({ siteId, postId: contextId });
+  if (!entry || !entry.published) return false;
   if (!entry || String(entry.password || "").trim().length === 0) return false;
   const cookieStore = await cookies();
   return hasPostPasswordAccess(cookieStore, {
@@ -136,19 +133,19 @@ async function resolveBridgeUser(request: Request) {
   const rawHeader = String(request.headers.get("x-tooty-theme-bridge") || "").trim();
   if (!rawHeader) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:comments.auth] no bridge header");
+      traceInfo("comments.auth", "no bridge header");
     }
     return null;
   }
   const claims = await verifyThemeBridgeToken(rawHeader);
   if (!claims?.sub) {
     if (process.env.TRACE_PROFILE === "Test") {
-      console.info("[trace:Test:comments.auth] invalid bridge header");
+      traceInfo("comments.auth", "invalid bridge header");
     }
     return null;
   }
   if (process.env.TRACE_PROFILE === "Test") {
-    console.info("[trace:Test:comments.auth] bridge user resolved", { userId: claims.sub });
+    traceInfo("comments.auth", "bridge user resolved", { userId: claims.sub });
   }
   return {
     id: claims.sub,
@@ -237,7 +234,7 @@ export async function GET(request: Request) {
       const validAuthorUserId = await resolveAuthorIdentity(sessionUserId, bridgeUserId);
       const canPostAsKnownUser = Boolean(validAuthorUserId);
       if (process.env.TRACE_PROFILE === "Test") {
-        console.info("[trace:Test:comments.auth] permission inputs", {
+        traceInfo("comments.auth", "permission inputs", {
           hasSessionUser: Boolean(normalize(session?.user?.id)),
           hasBridgeUser: Boolean(bridgeUser?.id),
           isAuthenticated,

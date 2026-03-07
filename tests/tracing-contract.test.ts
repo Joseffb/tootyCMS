@@ -72,4 +72,44 @@ describe("trace pipeline contract", () => {
     expect(names.includes(today)).toBe(true);
     expect(names.length).toBe(1);
   });
+
+  it("suppresses Test-profile console output by default while keeping trace writes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tooty-trace-"));
+    tempDirs.push(root);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const mod = await freshTraceModule({
+      DEBUG_MODE: "true",
+      TRACE_LOG_DIR: root,
+      TRACE_PROFILE: "test",
+    });
+
+    mod.trace("kernel", "shared-load trace");
+    await mod.__flushTraceForTests();
+
+    expect(infoSpy).not.toHaveBeenCalled();
+    const day = new Date().toISOString().slice(0, 10);
+    const line = (await readFile(path.join(root, `${day}.jsonl`), "utf8")).trim().split("\n")[0];
+    const parsed = JSON.parse(line);
+    expect(parsed.tier).toBe("Test");
+    expect(parsed.message).toBe("shared-load trace");
+  });
+
+  it("allows Test-profile console output when TRACE_TEST_CONSOLE is enabled", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tooty-trace-"));
+    tempDirs.push(root);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const mod = await freshTraceModule({
+      DEBUG_MODE: "true",
+      TRACE_LOG_DIR: root,
+      TRACE_PROFILE: "test",
+      TRACE_TEST_CONSOLE: "true",
+    });
+
+    mod.trace("kernel", "loud test trace");
+    await mod.__flushTraceForTests();
+
+    expect(infoSpy).toHaveBeenCalled();
+  });
 });

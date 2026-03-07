@@ -1,30 +1,38 @@
 import db from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { sites } from "@/lib/schema";
+import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-const registryTableName = `${normalizedPrefix}site_settings_table_registry`;
-const siteSettingsCache = new Map<string, { tableIndex: number; settingsTable: string }>();
-const siteSettingsInFlight = new Map<string, Promise<{ siteId: string; tableIndex: number; settingsTable: string }>>();
-let registryEnsured = false;
-let registryEnsurePromise: Promise<void> | null = null;
+const siteSettingsCache = new Map<string, { settingsTable: string }>();
+const siteSettingsInFlight = new Map<string, Promise<{ siteId: string; settingsTable: string }>>();
+const siteSettingsEnsured = new Set<string>();
 
 function quoted(identifier: string) {
   return `"${String(identifier || "").replace(/"/g, '""')}"`;
 }
 
-function settingsTableName(tableIndex: number) {
-  return `${normalizedPrefix}site_${tableIndex}_settings`;
+function settingsTableName(siteId: string) {
+  return sitePhysicalTableName(normalizedPrefix, siteId, "settings");
 }
 
-type QueryRows<T> = { rows?: T[] };
 type SqlExecutor = { execute: typeof db.execute };
+type QueryRows<T> = { rows?: T[] };
 
 function isDuplicatePgTypeError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { code?: string; constraint?: string };
-  return candidate.code === "23505" && candidate.constraint === "pg_type_typname_nsp_index";
+  return (
+    candidate.code === "42710" ||
+    (candidate.code === "23505" && candidate.constraint === "pg_type_typname_nsp_index")
+  );
+}
+
+function isRetryablePgLockError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string };
+  return candidate.code === "40P01" || candidate.code === "55P03";
 }
 
 async function executeDdl(executor: SqlExecutor, statement: string) {
@@ -36,156 +44,111 @@ async function executeDdl(executor: SqlExecutor, statement: string) {
   }
 }
 
-async function ensureRegistryTable(executor: SqlExecutor) {
-  if (executor === db && registryEnsured) return;
-  if (executor === db && registryEnsurePromise) return registryEnsurePromise;
-  const run = async () => {
-  const prefixedSites = `${normalizedPrefix}sites`;
-  await executeDdl(executor, `
-    CREATE TABLE IF NOT EXISTS ${quoted(registryTableName)} (
-      "siteId" TEXT PRIMARY KEY REFERENCES ${quoted(prefixedSites)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
-      "tableIndex" INTEGER NOT NULL UNIQUE,
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-    if (executor === db) registryEnsured = true;
-  };
-  if (executor === db) {
-    registryEnsurePromise = run().finally(() => {
-      if (!registryEnsured) registryEnsurePromise = null;
-    });
-    return registryEnsurePromise;
-  }
-  return run();
-}
-
-async function createPhysicalSiteSettingsTable(executor: SqlExecutor, tableIndex: number) {
-  const table = settingsTableName(tableIndex);
-  await executeDdl(executor, `
+async function createPhysicalSiteSettingsTable(executor: SqlExecutor, siteId: string) {
+  const table = settingsTableName(siteId);
+  await executeDdl(
+    executor,
+    `
     CREATE TABLE IF NOT EXISTS ${quoted(table)} (
       "key" TEXT PRIMARY KEY,
       "value" TEXT NOT NULL,
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `);
-  await executeDdl(executor, `
+  `,
+  );
+  await executeDdl(
+    executor,
+    `
     CREATE INDEX IF NOT EXISTS ${quoted(`${table}_key_idx`)} ON ${quoted(table)} ("key")
-  `);
+  `,
+  );
 }
 
-async function allocateSiteTableIndex(executor: SqlExecutor, siteId: string) {
-  await ensureRegistryTable(executor);
-  const existing = (await executor.execute(
-    sql`SELECT "tableIndex" FROM ${sql.raw(quoted(registryTableName))} WHERE "siteId" = ${siteId} LIMIT 1`,
-  )) as QueryRows<{ tableIndex?: number | string | null }>;
-  const existingRaw = existing.rows?.[0]?.tableIndex;
-  const existingIndex =
-    typeof existingRaw === "number" ? existingRaw : Number.parseInt(String(existingRaw ?? "-1"), 10);
-  if (Number.isFinite(existingIndex) && existingIndex >= 0) return existingIndex;
+async function tableExistsWithExecutor(executor: SqlExecutor, tableName: string) {
+  const result = (await executor.execute(
+    sql`SELECT to_regclass(${`public.${tableName}`}) AS table_name`,
+  )) as QueryRows<{ table_name?: string | null }>;
+  return Boolean(result?.rows?.[0]?.table_name);
+}
 
-  const registryLockKey = `${normalizedPrefix}site_settings_registry`;
-  await executor.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${registryLockKey}))`);
-
-  const lockedExisting = (await executor.execute(
-    sql`SELECT "tableIndex" FROM ${sql.raw(quoted(registryTableName))} WHERE "siteId" = ${siteId} LIMIT 1`,
-  )) as QueryRows<{ tableIndex?: number | string | null }>;
-  const lockedExistingRaw = lockedExisting.rows?.[0]?.tableIndex;
-  const lockedExistingIndex =
-    typeof lockedExistingRaw === "number"
-      ? lockedExistingRaw
-      : Number.parseInt(String(lockedExistingRaw ?? "-1"), 10);
-  if (Number.isFinite(lockedExistingIndex) && lockedExistingIndex >= 0) return lockedExistingIndex;
-
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const maxResult = (await executor.execute(
-      sql.raw(`SELECT COALESCE(MAX("tableIndex"), -1) + 1 AS next_index FROM ${quoted(registryTableName)}`),
-    )) as QueryRows<{ next_index?: number | string | null }>;
-    const nextRaw = maxResult.rows?.[0]?.next_index;
-    const nextIndex =
-      typeof nextRaw === "number" ? nextRaw : Number.parseInt(String(nextRaw ?? "-1"), 10);
-    const finalIndex = Number.isFinite(nextIndex) && nextIndex >= 0 ? nextIndex : 0;
-    await executor.execute(sql`
-      INSERT INTO ${sql.raw(quoted(registryTableName))} ("siteId", "tableIndex")
-      VALUES (${siteId}, ${finalIndex})
-      ON CONFLICT DO NOTHING
-    `);
-    const finalRows = (await executor.execute(
-      sql`SELECT "tableIndex" FROM ${sql.raw(quoted(registryTableName))} WHERE "siteId" = ${siteId} LIMIT 1`,
-    )) as QueryRows<{ tableIndex?: number | string | null }>;
-    const finalRaw = finalRows.rows?.[0]?.tableIndex;
-    const resolved =
-      typeof finalRaw === "number" ? finalRaw : Number.parseInt(String(finalRaw ?? "-1"), 10);
-    if (Number.isFinite(resolved) && resolved >= 0) {
-      return resolved;
+async function withLockRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isRetryablePgLockError(error) || attempt === attempts) throw error;
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
     }
   }
-  throw new Error("Unable to allocate site settings table index.");
+  throw lastError;
 }
 
 export async function ensureSiteSettingsTable(siteId: string) {
   const normalizedSiteId = String(siteId || "").trim();
   if (!normalizedSiteId) throw new Error("siteId is required.");
   const cached = siteSettingsCache.get(normalizedSiteId);
-  if (cached) {
-    return {
-      siteId: normalizedSiteId,
-      tableIndex: cached.tableIndex,
-      settingsTable: cached.settingsTable,
-    };
+  if (cached && siteSettingsEnsured.has(normalizedSiteId)) {
+    const hasPhysicalTable = await tableExistsWithExecutor(db, cached.settingsTable);
+    if (!hasPhysicalTable) {
+      siteSettingsCache.delete(normalizedSiteId);
+      siteSettingsEnsured.delete(normalizedSiteId);
+    } else {
+      return {
+        siteId: normalizedSiteId,
+        settingsTable: cached.settingsTable,
+      };
+    }
   }
-  const site = await db.query.sites.findFirst({
-    where: eq(sites.id, normalizedSiteId),
-    columns: { id: true },
-  });
-  if (!site) throw new Error("Invalid site.");
   const inFlight = siteSettingsInFlight.get(normalizedSiteId);
   if (inFlight) return inFlight;
-  const run = db.transaction(async (tx) => {
-    const lockKey = `${normalizedPrefix}site_settings_tables:${normalizedSiteId}`;
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
-    const prefixedSites = `${normalizedPrefix}sites`;
-    const lockedSite = (await tx.execute(
-      sql`SELECT "id" FROM ${sql.raw(quoted(prefixedSites))} WHERE "id" = ${normalizedSiteId} FOR UPDATE`,
-    )) as QueryRows<{ id?: string | null }>;
-    if (!String(lockedSite.rows?.[0]?.id || "").trim()) {
-      throw new Error("Invalid site.");
-    }
-    const tableIndex = await allocateSiteTableIndex(tx, normalizedSiteId);
-    await createPhysicalSiteSettingsTable(tx, tableIndex);
-    const settingsTable = settingsTableName(tableIndex);
-    siteSettingsCache.set(normalizedSiteId, { tableIndex, settingsTable });
-    return {
-      siteId: normalizedSiteId,
-      tableIndex,
-      settingsTable,
-    };
-  });
+  const run = withLockRetry(() =>
+    db.transaction(async (tx) => {
+      const site = await tx.query.sites.findFirst({
+        where: eq(sites.id, normalizedSiteId),
+        columns: { id: true },
+      });
+      if (!site) throw new Error("Invalid site.");
+      const lockKey = `${normalizedPrefix}site_settings_tables:${normalizedSiteId}`;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+      await createPhysicalSiteSettingsTable(tx, normalizedSiteId);
+      const settingsTable = settingsTableName(normalizedSiteId);
+      if (!(await tableExistsWithExecutor(tx, settingsTable))) {
+        await createPhysicalSiteSettingsTable(tx, normalizedSiteId);
+      }
+      return {
+        siteId: normalizedSiteId,
+        settingsTable,
+      };
+    }),
+  );
   siteSettingsInFlight.set(normalizedSiteId, run);
-  return run.finally(() => {
-    siteSettingsInFlight.delete(normalizedSiteId);
-  });
+  return run
+    .then(async (resolved) => {
+      if (!(await tableExistsWithExecutor(db, resolved.settingsTable))) {
+        await createPhysicalSiteSettingsTable(db, normalizedSiteId);
+      }
+      siteSettingsCache.set(normalizedSiteId, { settingsTable: resolved.settingsTable });
+      siteSettingsEnsured.add(normalizedSiteId);
+      return resolved;
+    })
+    .finally(() => {
+      siteSettingsInFlight.delete(normalizedSiteId);
+    });
 }
 
 export async function listSiteSettingsRegistries() {
-  await ensureRegistryTable(db);
-  const rows = (await db.execute(
-    sql`SELECT "siteId", "tableIndex" FROM ${sql.raw(quoted(registryTableName))} ORDER BY "tableIndex" ASC`,
-  )) as QueryRows<{ siteId?: string; tableIndex?: number | string | null }>;
-  return (rows.rows || [])
-    .map((row) => {
-      const siteId = String(row.siteId || "").trim();
-      const tableIndexRaw = row.tableIndex;
-      const tableIndex =
-        typeof tableIndexRaw === "number"
-          ? tableIndexRaw
-          : Number.parseInt(String(tableIndexRaw ?? "-1"), 10);
-      if (!siteId || !Number.isFinite(tableIndex) || tableIndex < 0) return null;
-      return {
-        siteId,
-        tableIndex,
-        settingsTable: settingsTableName(tableIndex),
-      };
-    })
-    .filter((row): row is { siteId: string; tableIndex: number; settingsTable: string } => Boolean(row));
+  const siteRows = await db.select({ siteId: sites.id }).from(sites);
+  const results: Array<{ siteId: string; settingsTable: string }> = [];
+  for (const row of siteRows) {
+    const siteId = String(row.siteId || "").trim();
+    if (!siteId) continue;
+    const ensured = await ensureSiteSettingsTable(siteId);
+    results.push({
+      siteId,
+      settingsTable: ensured.settingsTable,
+    });
+  }
+  return results;
 }

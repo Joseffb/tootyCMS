@@ -100,7 +100,7 @@ All extensibility state persists via settings providers:
 - Theme enable state: `theme_<id>_enabled`
 - Theme config: `theme_<id>_config`
 - Site selected theme: `site_<siteId>_theme`
-- Site menus: `site_<siteId>_menu_<location>`
+- Site menus: `<prefix>site_{siteId}_menus`, `<prefix>site_{siteId}_menu_items`, `<prefix>site_{siteId}_menu_item_meta`
 
 ## Filesystem conventions
 

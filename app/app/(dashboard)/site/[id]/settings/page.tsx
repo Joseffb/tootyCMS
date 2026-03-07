@@ -9,7 +9,7 @@ import { sites } from "@/lib/schema";
 import { count, inArray } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 
 type Props = {
@@ -22,7 +22,11 @@ export default async function SiteSettingsIndex({ params }: Props) {
     redirect("/login");
   }
   const { id } = await params;
-  const data = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  const { site: data } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    decodeURIComponent(id),
+    "site.settings.write",
+  );
   if (!data) {
     notFound();
     return null;

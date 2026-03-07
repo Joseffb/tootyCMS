@@ -4,7 +4,7 @@
 
 Tooty Core is in early-contract phase and uses `0.x` SemVer.
 
-- Current core version: `0.4.2-4`
+- Current core version: `0.4.5`
 - Current compatibility line: `0.4.x`
 
 ## Core Bump Rules

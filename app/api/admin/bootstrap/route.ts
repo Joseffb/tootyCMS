@@ -9,13 +9,15 @@ import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { getDashboardPluginMenuItems, createKernelForRequest } from "@/lib/plugin-runtime";
 import { getAllDataDomains } from "@/lib/actions";
 import { pluralizeLabel, singularizeLabel } from "@/lib/data-domain-labels";
-import { listPluginsWithSiteState, listPluginsWithState } from "@/lib/plugins";
+import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
 import {
   buildAdminPluginPageContext,
   getDefaultAdminUseTypes,
   normalizeAdminUseType,
   normalizeAdminUseTypes,
 } from "@/lib/admin-plugin-context";
+import { ensureAllRegisteredSiteDomainTypeTables } from "@/lib/site-domain-type-tables";
+import { resolveAccessibleSiteId, resolveAdminScope, resolvePrimarySite } from "@/lib/admin-site-selection";
 
 type EnvironmentBadge = {
   show?: boolean;
@@ -51,6 +53,9 @@ function emptyResponse() {
     navContext: {
       siteCount: 0,
       mainSiteId: null,
+      effectiveSiteId: null,
+      adminMode: "multi-site",
+      activeScope: "network",
       migrationRequired: false,
       canManageNetworkSettings: false,
       canManageNetworkPlugins: false,
@@ -96,11 +101,15 @@ export async function GET(request: Request) {
     where: inArray(sites.id, accessibleSiteIds),
     columns: { id: true, name: true, isPrimary: true, subdomain: true },
   });
-  const primary =
-    ownedSites.find((site) => site.isPrimary || site.subdomain === "main") ||
-    ownedSites[0] ||
-    null;
-  const effectiveSiteId = requestedSiteId || primary?.id || "";
+  const primary = resolvePrimarySite(ownedSites);
+  const requestedOrPrimarySiteId = requestedSiteId
+    ? resolveAccessibleSiteId(ownedSites, requestedSiteId)
+    : null;
+  const scope = resolveAdminScope({
+    siteCount: ownedSites.length,
+    mainSiteId: primary?.id || null,
+    effectiveSiteId: requestedOrPrimarySiteId,
+  });
 
   const dbHealth = await getDatabaseHealthReport();
   const [
@@ -113,21 +122,28 @@ export async function GET(request: Request) {
   ] = await Promise.all([
     userCan("network.settings.write", session.user.id),
     userCan("network.plugins.manage", session.user.id),
-    effectiveSiteId
-      ? userCan("site.settings.write", session.user.id, { siteId: effectiveSiteId })
+    scope.effectiveSiteId
+      ? userCan("site.settings.write", session.user.id, { siteId: scope.effectiveSiteId })
       : Promise.resolve(false),
-    effectiveSiteId
-      ? userCan("site.analytics.read", session.user.id, { siteId: effectiveSiteId })
+    scope.effectiveSiteId
+      ? userCan("site.analytics.read", session.user.id, { siteId: scope.effectiveSiteId })
       : Promise.resolve(false),
-    effectiveSiteId
-      ? userCan("site.content.create", session.user.id, { siteId: effectiveSiteId })
+    scope.effectiveSiteId
+      ? userCan("site.content.create", session.user.id, { siteId: scope.effectiveSiteId })
       : Promise.resolve(false),
-    getDashboardPluginMenuItems(effectiveSiteId || undefined),
+    getDashboardPluginMenuItems(scope.effectiveSiteId || undefined),
   ]);
+
+  if (scope.effectiveSiteId) {
+    await ensureAllRegisteredSiteDomainTypeTables({ siteId: scope.effectiveSiteId });
+  }
 
   const navContext = {
     siteCount: ownedSites.length,
-    mainSiteId: primary?.id || null,
+    mainSiteId: scope.mainSiteId,
+    effectiveSiteId: scope.effectiveSiteId,
+    adminMode: scope.adminMode,
+    activeScope: scope.activeScope,
     migrationRequired: dbHealth.migrationRequired,
     canManageNetworkSettings,
     canManageNetworkPlugins,
@@ -150,8 +166,8 @@ export async function GET(request: Request) {
     listHref: string;
     addHref: string;
   }> = [];
-  if (effectiveSiteId && canCreateSiteContent) {
-    const domains = await getAllDataDomains(effectiveSiteId);
+  if (scope.effectiveSiteId && canCreateSiteContent) {
+    const domains = await getAllDataDomains(scope.effectiveSiteId);
     dataDomainItems = domains
       .filter((domain: any) => {
         if (!domain.assigned || domain.isActive === false) return false;
@@ -168,8 +184,8 @@ export async function GET(request: Request) {
           const n = Number(rawOrder);
           return Number.isFinite(n) ? n : undefined;
         })(),
-        listHref: `/site/${effectiveSiteId}/domain/${domain.key}`,
-        addHref: `/site/${effectiveSiteId}/domain/${domain.key}/create`,
+        listHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}`,
+        addHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
       }))
       .sort((a, b) => {
         const aHasOrder = Number.isFinite(a.order);
@@ -179,10 +195,10 @@ export async function GET(request: Request) {
         if (!aHasOrder && bHasOrder) return 1;
         return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
       });
-  } else if (effectiveSiteId) {
-    const canAccess = await canUserCreateDomainContent(session.user.id, effectiveSiteId);
+  } else if (scope.effectiveSiteId) {
+    const canAccess = await canUserCreateDomainContent(session.user.id, scope.effectiveSiteId);
     if (canAccess) {
-      const domains = await getAllDataDomains(effectiveSiteId);
+      const domains = await getAllDataDomains(scope.effectiveSiteId);
       dataDomainItems = domains
         .filter((domain: any) => {
           if (!domain.assigned || domain.isActive === false) return false;
@@ -194,27 +210,20 @@ export async function GET(request: Request) {
           label: pluralizeLabel(domain.label),
           singular: singularizeLabel(domain.label),
           order: undefined,
-          listHref: `/site/${effectiveSiteId}/domain/${domain.key}`,
-          addHref: `/site/${effectiveSiteId}/domain/${domain.key}/create`,
+          listHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}`,
+          addHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
         }));
     }
   }
 
-  const kernel = await createKernelForRequest(effectiveSiteId || undefined);
-  const page = buildAdminPluginPageContext(path, effectiveSiteId || null);
-  const pluginStates = effectiveSiteId
-    ? await listPluginsWithSiteState(effectiveSiteId)
-    : await listPluginsWithState();
-  const hasAnalyticsProviders = pluginStates.some((plugin: any) => {
-    const isAnalytics = String(plugin?.id || "").startsWith("analytics-");
-    if (!isAnalytics) return false;
-    return effectiveSiteId
-      ? Boolean(plugin?.enabled && plugin?.siteEnabled)
-      : Boolean(plugin?.enabled);
-  });
+  const kernel = await createKernelForRequest(scope.effectiveSiteId || undefined);
+  const page = buildAdminPluginPageContext(path, scope.effectiveSiteId || null);
+  const hasAnalyticsProviders = scope.effectiveSiteId
+    ? await hasGraphAnalyticsProvider(scope.effectiveSiteId)
+    : false;
 
   const useTypeContext = {
-    siteId: effectiveSiteId || null,
+    siteId: scope.effectiveSiteId || null,
     environment,
     path,
     page,
@@ -227,14 +236,14 @@ export async function GET(request: Request) {
   const useType = normalizeAdminUseType(legacyUseType, allowedUseTypes);
 
   const badge = await kernel.applyFilters<EnvironmentBadge | null>("admin:environment-badge", null, {
-    siteId: effectiveSiteId || null,
+    siteId: scope.effectiveSiteId || null,
     environment,
     path,
     page,
     use_type: useType,
   });
   const widgets = await kernel.applyFilters<FloatingWidget[]>("admin:floating-widgets", [], {
-    siteId: effectiveSiteId || null,
+    siteId: scope.effectiveSiteId || null,
     environment,
     path,
     page,

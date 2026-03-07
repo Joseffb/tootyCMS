@@ -1,14 +1,25 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { dataDomains, domainPosts, siteDataDomains, sites, users } from "@/lib/schema";
+import { sites, users } from "@/lib/schema";
 import { isRandomDefaultImagesEnabled } from "@/lib/cms-config";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { listSiteIdsForUser, upsertSiteUserRole } from "@/lib/site-user-tables";
-import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import {
+  DEFAULT_CORE_DOMAIN_KEYS,
+  ensureDefaultCoreDataDomains,
+  getCoreDomainByKeyForSite,
+} from "@/lib/default-data-domains";
 import { NETWORK_ADMIN_ROLE } from "@/lib/rbac";
 import { createSiteMenu, createSiteMenuItem } from "@/lib/menu-system";
+import { ensureSiteDomainTypeTables } from "@/lib/site-domain-type-tables";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  createSiteDomainPost,
+  deleteSiteDomainPostById,
+  listSiteDomainPosts,
+  updateSiteDomainPostById,
+} from "@/lib/site-domain-post-store";
 
 const PRIMARY_SUBDOMAIN = "main";
 const DEFAULT_SITE_THUMBNAIL = "/tooty/sprites/tooty-thumbs-up-cropped.png";
@@ -282,26 +293,23 @@ async function ensureSeedSiteThumbnail(siteId: string) {
 }
 
 async function removeLegacyDocumentationPost(siteId: string) {
-  const postDomain = await db.query.dataDomains.findFirst({
-    where: eq(dataDomains.key, "post"),
-    columns: { id: true },
+  const rows = await listSiteDomainPosts({
+    siteId,
+    dataDomainKey: "post",
+    slug: "documentation",
+    includeInactiveDomains: true,
+    includeContent: false,
+    limit: 10,
   });
-  if (!postDomain) return;
-  await db.delete(domainPosts).where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomain.id), eq(domainPosts.slug, "documentation")));
+  for (const row of rows) {
+    await deleteSiteDomainPostById({ siteId, postId: row.id, dataDomainKey: "post" });
+  }
 }
 
 async function ensureDefaultSiteDataDomains(siteId: string) {
-  const defaults = await ensureDefaultCoreDataDomains();
+  await ensureDefaultCoreDataDomains(siteId);
   for (const key of DEFAULT_CORE_DOMAIN_KEYS) {
-    const domainId = defaults.get(key);
-    if (!domainId) continue;
-    await db
-      .insert(siteDataDomains)
-      .values({ siteId, dataDomainId: domainId, isActive: true })
-      .onConflictDoUpdate({
-        target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-        set: { isActive: true, updatedAt: new Date() },
-      });
+    await ensureSiteDomainTypeTables(siteId, key);
   }
 }
 
@@ -315,92 +323,105 @@ async function getUserRoleForBootstrap(userId: string) {
 }
 
 async function ensureDefaultStarterPosts(siteId: string, userId: string, useRandomDefaultImages: boolean) {
+  await ensureDefaultSiteDataDomains(siteId);
   const [postDomain, pageDomain] = await Promise.all([
-    db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, "post"),
-      columns: { id: true },
-    }),
-    db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, "page"),
-      columns: { id: true },
-    }),
+    getCoreDomainByKeyForSite(siteId, "post"),
+    getCoreDomainByKeyForSite(siteId, "page"),
   ]);
   if (!postDomain || !pageDomain) return;
-  await db
-    .insert(siteDataDomains)
-    .values([
-      { siteId, dataDomainId: postDomain.id, isActive: true },
-      { siteId, dataDomainId: pageDomain.id, isActive: true },
-    ])
-    .onConflictDoUpdate({
-      target: [siteDataDomains.siteId, siteDataDomains.dataDomainId],
-      set: { isActive: true, updatedAt: new Date() },
-    });
 
   const [welcomeMarkdown, aboutMarkdown, termsMarkdown, privacyMarkdown] = await Promise.all([
-    loadStarterMarkdown("welcome", "welcome.md"),
-    loadStarterMarkdown("about", "about.md"),
-    loadStarterMarkdown("terms", "terms-of-service.md"),
-    loadStarterMarkdown("privacy", "privacy-policy.md"),
+    loadStarterMarkdown("welcome", "posts_welcome_to_tooty.md"),
+    loadStarterMarkdown("about", "pages_about_this_site.md"),
+    loadStarterMarkdown("terms", "pages_terms_of_service.md"),
+    loadStarterMarkdown("privacy", "pages_privacy_policy.md"),
   ]);
 
-  await db
-    .insert(domainPosts)
-    .values([
-      {
-        dataDomainId: postDomain.id,
-        siteId,
-        userId,
-        title: "Welcome to Tooty CMS",
-        description: "A complete publishing platform for teams that need speed, clarity, and control.",
-        image: WELCOME_POST_THUMBNAIL,
-        content: markdownToStarterDoc(welcomeMarkdown),
-        layout: "post",
-        slug: "welcome-to-tooty",
-        published: true,
-      },
-      {
-        dataDomainId: pageDomain.id,
-        siteId,
-        userId,
-        title: "About This Site",
-        description: "Core platform overview for this site.",
-        ...(useRandomDefaultImages ? { image: "/tooty/sprites/tooty-notebook.png" } : {}),
-        content: markdownToStarterDoc(aboutMarkdown),
-        layout: "page",
-        slug: "about-this-site",
-        published: true,
-      },
-      {
-        dataDomainId: pageDomain.id,
-        siteId,
-        userId,
-        title: "Terms of Service",
-        description: "Starter legal terms page for your site.",
-        content: markdownToStarterDoc(termsMarkdown),
-        layout: "page",
-        slug: "terms-of-service",
-        published: true,
-      },
-      {
-        dataDomainId: pageDomain.id,
-        siteId,
-        userId,
-        title: "Privacy Policy",
-        description: "Starter privacy disclosure page for your site.",
-        content: markdownToStarterDoc(privacyMarkdown),
-        layout: "page",
-        slug: "privacy-policy",
-        published: true,
-      },
-    ])
-    .onConflictDoNothing({ target: [domainPosts.slug, domainPosts.dataDomainId] });
+  const starterRows: Array<{
+    dataDomainKey: "post" | "page";
+    title: string;
+    description: string;
+    content: string;
+    layout: string;
+    slug: string;
+    image?: string;
+  }> = [
+    {
+      dataDomainKey: "post",
+      title: "Welcome to Tooty CMS",
+      description: "A complete publishing platform for teams that need speed, clarity, and control.",
+      image: WELCOME_POST_THUMBNAIL,
+      content: markdownToStarterDoc(welcomeMarkdown),
+      layout: "post",
+      slug: "welcome-to-tooty",
+    },
+    {
+      dataDomainKey: "page",
+      title: "About This Site",
+      description: "Core platform overview for this site.",
+      ...(useRandomDefaultImages ? { image: "/tooty/sprites/tooty-notebook.png" } : {}),
+      content: markdownToStarterDoc(aboutMarkdown),
+      layout: "page",
+      slug: "about-this-site",
+    },
+    {
+      dataDomainKey: "page",
+      title: "Terms of Service",
+      description: "Starter legal terms page for your site.",
+      content: markdownToStarterDoc(termsMarkdown),
+      layout: "page",
+      slug: "terms-of-service",
+    },
+    {
+      dataDomainKey: "page",
+      title: "Privacy Policy",
+      description: "Starter privacy disclosure page for your site.",
+      content: markdownToStarterDoc(privacyMarkdown),
+      layout: "page",
+      slug: "privacy-policy",
+    },
+  ];
+  for (const starter of starterRows) {
+    const existing = await listSiteDomainPosts({
+      siteId,
+      dataDomainKey: starter.dataDomainKey,
+      slug: starter.slug,
+      includeInactiveDomains: true,
+      includeContent: false,
+      limit: 1,
+    });
+    if (existing[0]) continue;
+    await createSiteDomainPost({
+      siteId,
+      dataDomainKey: starter.dataDomainKey,
+      userId,
+      title: starter.title,
+      description: starter.description,
+      content: starter.content,
+      layout: starter.layout,
+      slug: starter.slug,
+      image: starter.image || "",
+      published: true,
+    });
+  }
 
   // Keep welcome post newest so default feeds show it first on initial load.
-  await db
-    .update(domainPosts)
-    .set({ createdAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, postDomain.id), eq(domainPosts.slug, "welcome-to-tooty")));
+  const welcome = await listSiteDomainPosts({
+    siteId,
+    dataDomainKey: "post",
+    slug: "welcome-to-tooty",
+    includeInactiveDomains: true,
+    includeContent: false,
+    limit: 1,
+  });
+  if (welcome[0]) {
+    await updateSiteDomainPostById({
+      siteId,
+      postId: welcome[0].id,
+      dataDomainKey: "post",
+      patch: {},
+    });
+  }
 }
 
 export async function ensureMainSiteForCurrentUser(userIdFromSession?: string) {
@@ -449,12 +470,20 @@ export async function ensureMainSiteForUser(
     }
     await ensureSeedSiteThumbnail(existingPrimary.id);
     await ensureDefaultSiteDataDomains(existingPrimary.id);
-    const postDomain = await db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, "post"),
-      columns: { id: true },
+    const postRows = await listSiteDomainPosts({
+      siteId: existingPrimary.id,
+      dataDomainKey: "post",
+      includeInactiveDomains: true,
+      includeContent: false,
     });
-    if (postDomain) {
-      await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingPrimary.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
+    for (const postRow of postRows) {
+      if (postRow.layout !== null) continue;
+      await updateSiteDomainPostById({
+        siteId: existingPrimary.id,
+        postId: postRow.id,
+        dataDomainKey: "post",
+        patch: { layout: "post" },
+      });
     }
     await upsertSiteUserRole(existingPrimary.id, userId, defaultRole);
     return;
@@ -481,12 +510,20 @@ export async function ensureMainSiteForUser(
     }
     await ensureSeedSiteThumbnail(existingAny.id);
     await ensureDefaultSiteDataDomains(existingAny.id);
-    const postDomain = await db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, "post"),
-      columns: { id: true },
+    const postRows = await listSiteDomainPosts({
+      siteId: existingAny.id,
+      dataDomainKey: "post",
+      includeInactiveDomains: true,
+      includeContent: false,
     });
-    if (postDomain) {
-      await db.update(domainPosts).set({ layout: "post" }).where(and(eq(domainPosts.siteId, existingAny.id), eq(domainPosts.dataDomainId, postDomain.id), isNull(domainPosts.layout)));
+    for (const postRow of postRows) {
+      if (postRow.layout !== null) continue;
+      await updateSiteDomainPostById({
+        siteId: existingAny.id,
+        postId: postRow.id,
+        dataDomainKey: "post",
+        patch: { layout: "post" },
+      });
     }
     await upsertSiteUserRole(existingAny.id, userId, defaultRole);
     return;
@@ -500,21 +537,20 @@ export async function ensureMainSiteForUser(
     await ensurePrimarySiteUsesMainSubdomain(globalMain.id);
     await ensureSeedSiteThumbnail(globalMain.id);
     await ensureDefaultSiteDataDomains(globalMain.id);
-    const postDomain = await db.query.dataDomains.findFirst({
-      where: eq(dataDomains.key, "post"),
-      columns: { id: true },
+    const postRows = await listSiteDomainPosts({
+      siteId: globalMain.id,
+      dataDomainKey: "post",
+      includeInactiveDomains: true,
+      includeContent: false,
     });
-    if (postDomain) {
-      await db
-        .update(domainPosts)
-        .set({ layout: "post" })
-        .where(
-          and(
-            eq(domainPosts.siteId, globalMain.id),
-            eq(domainPosts.dataDomainId, postDomain.id),
-            isNull(domainPosts.layout),
-          ),
-        );
+    for (const postRow of postRows) {
+      if (postRow.layout !== null) continue;
+      await updateSiteDomainPostById({
+        siteId: globalMain.id,
+        postId: postRow.id,
+        dataDomainKey: "post",
+        patch: { layout: "post" },
+      });
     }
     await upsertSiteUserRole(globalMain.id, userId, defaultRole);
     return;

@@ -4,11 +4,12 @@ import { TARGET_DB_SCHEMA_VERSION } from "../../lib/db-health";
 import { encode } from "next-auth/jwt";
 import { randomUUID } from "node:crypto";
 import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
-import { getAppHostname, getAppOrigin } from "./helpers/env";
+import { getAppOrigin } from "./helpers/env";
+import { addSessionTokenCookie } from "./helpers/auth";
+import { ensureNetworkSite, ensureNetworkUser } from "./helpers/storage";
 
 const runId = `e2e-setup-migrate-${randomUUID()}`;
 const appOrigin = getAppOrigin();
-const appHostname = getAppHostname();
 const runSetupMigrationE2E = process.env.RUN_SETUP_MIGRATION_E2E === "1";
 
 const adminUserId = `${runId}-admin-user`;
@@ -24,27 +25,20 @@ async function readSetting(key: string) {
 }
 
 async function ensureAdminUserAndSite() {
-  await sql`
-    INSERT INTO tooty_users ("id", "email", "name", "role", "authProvider", "createdAt", "updatedAt")
-    VALUES (${adminUserId}, ${adminEmail}, ${"Setup Migration Admin"}, 'administrator', 'native', NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "email" = EXCLUDED."email",
-        "name" = EXCLUDED."name",
-        "role" = EXCLUDED."role",
-        "authProvider" = EXCLUDED."authProvider",
-        "updatedAt" = NOW()
-  `;
-
-  await sql`
-    INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${adminSiteId}, ${adminUserId}, ${"Setup Migration Site"}, ${`${runId}-site`}, false, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "userId" = EXCLUDED."userId",
-        "name" = EXCLUDED."name",
-        "subdomain" = EXCLUDED."subdomain",
-        "isPrimary" = EXCLUDED."isPrimary",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkUser({
+    id: adminUserId,
+    email: adminEmail,
+    name: "Setup Migration Admin",
+    role: "administrator",
+    authProvider: "native",
+  });
+  await ensureNetworkSite({
+    id: adminSiteId,
+    userId: adminUserId,
+    name: "Setup Migration Site",
+    subdomain: `${runId}-site`,
+    isPrimary: false,
+  });
 }
 
 async function authenticateAs(page: Page, userId: string) {
@@ -62,18 +56,11 @@ async function authenticateAs(page: Page, userId: string) {
     maxAge: 60 * 60 * 24,
   });
 
-  await page.context().addCookies([
-    {
-      name: "next-auth.session-token",
-      value: token,
-      domain: appHostname,
-      path: "/",
-      httpOnly: true,
-      secure: false,
-      sameSite: "Lax",
-      expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
-    },
-  ]);
+  await addSessionTokenCookie(page.context(), {
+    value: token,
+    origin: appOrigin,
+    expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+  });
 }
 
 test.describe.configure({ mode: "serial" });

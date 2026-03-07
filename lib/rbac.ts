@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import db from "@/lib/db";
 import { getTextSetting, setTextSetting } from "@/lib/cms-config";
-import { rbacRoles, siteUserTableRegistry, users } from "@/lib/schema";
+import { rbacRoles, sites, users } from "@/lib/schema";
 import { getSiteUserRole } from "@/lib/site-user-tables";
 
 export const NETWORK_ADMIN_ROLE = "network admin" as const;
@@ -311,10 +311,14 @@ async function seedRoleRow(role: string, capabilities: CapabilityMap, isSystem: 
     });
 }
 
-async function ensureDynamicRolesTable() {
+export function dynamicRbacRolesTableName() {
   const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
   const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-  const table = `"${normalizedPrefix}rbac_roles"`;
+  return `${normalizedPrefix}network_rbac_roles`;
+}
+
+async function ensureDynamicRolesTable() {
+  const table = `"${dynamicRbacRolesTableName()}"`;
   await db.execute(sql.raw(
     `CREATE TABLE IF NOT EXISTS ${table} (
       "role" text PRIMARY KEY,
@@ -466,10 +470,22 @@ function quoted(identifier: string) {
   return `"${identifier.replace(/"/g, "\"\"")}"`;
 }
 
-function siteUsersTableName(tableIndex: number) {
+function siteToken(siteId: string) {
+  return String(siteId || "").trim().replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+function siteUsersTableName(siteId: string) {
   const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
   const prefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-  return `${prefix}site_${tableIndex}_users`;
+  return `${prefix}site_${siteToken(siteId)}_users`;
+}
+
+async function siteUsersTableExists(siteId: string) {
+  const tableName = siteUsersTableName(siteId);
+  const result = (await db.execute(
+    sql`SELECT to_regclass(${`public.${tableName}`}) AS table_name`,
+  )) as { rows?: Array<{ table_name?: string | null }> };
+  return Boolean(result.rows?.[0]?.table_name);
 }
 
 export async function deleteRbacRole(role: string) {
@@ -494,11 +510,12 @@ export async function deleteRbacRole(role: string) {
     throw new Error("Cannot delete role while it is assigned to users");
   }
 
-  const registries = await db
-    .select({ tableIndex: siteUserTableRegistry.tableIndex })
-    .from(siteUserTableRegistry);
-  for (const registry of registries) {
-    const tableName = siteUsersTableName(registry.tableIndex);
+  const siteRows = await db.select({ siteId: sites.id }).from(sites);
+  for (const siteRow of siteRows) {
+    const siteId = String(siteRow.siteId || "").trim();
+    if (!siteId) continue;
+    if (!(await siteUsersTableExists(siteId))) continue;
+    const tableName = siteUsersTableName(siteId);
     const result = (await db.execute(
       sql`SELECT 1 FROM ${sql.raw(quoted(tableName))} WHERE "role" = ${normalized} LIMIT 1`,
     )) as { rows?: Array<{ [key: string]: unknown }> };

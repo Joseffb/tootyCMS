@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { visit } from "unist-util-visit";
 import { ReactNode } from "react";
-import { DrizzleClient } from "./db";
-import { SelectExample } from "./schema";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import type { DrizzleClient } from "./db";
 
 export function replaceLinks({
   href,
@@ -69,6 +70,21 @@ export function replaceTweets() {
     });
 }
 
+const STARTER_CONTENT_DIR = path.join(process.cwd(), "public", "docs");
+
+type ExampleDoc = {
+  key: string;
+  title: string;
+  markdown: string;
+};
+
+const FALLBACK_EXAMPLE_DOCS: Record<string, string> = {
+  welcome: "# Welcome\n\nStarter content is loaded from markdown files.",
+  about: "# About\n\nUpdate this file in public/docs/about.md.",
+  "terms-of-service": "# Terms of Service\n\nUpdate this file in public/docs/terms-of-service.md.",
+  "privacy-policy": "# Privacy Policy\n\nUpdate this file in public/docs/privacy-policy.md.",
+};
+
 export function replaceExamples(drizzle: DrizzleClient) {
   return (tree: any) =>
     new Promise<void>(async (resolve, reject) => {
@@ -101,17 +117,32 @@ export function replaceExamples(drizzle: DrizzleClient) {
 }
 
 async function getExamples(node: any, drizzle: DrizzleClient) {
-  const names = node?.attributes[0].value.split(",");
+  void drizzle;
+  const names = String(node?.attributes?.[0]?.value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const data: ExampleDoc[] = [];
 
-  // changed to | undefined (was null)
-  const data = new Array<SelectExample | undefined>();
-
-  for (let i = 0; i < names.length; i++) {
-    const results = await drizzle.query.examples.findFirst({
-      where: (examples, { eq }) => eq(examples.id, parseInt(names[i])),
+  for (const name of names) {
+    const key = name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!key) continue;
+    const filename = key.endsWith(".md") ? key : `${key}.md`;
+    const filePath = path.join(STARTER_CONTENT_DIR, filename);
+    let markdown = FALLBACK_EXAMPLE_DOCS[key] || "";
+    try {
+      const loaded = await readFile(filePath, "utf8");
+      if (loaded.trim().length > 0) markdown = loaded.trim();
+    } catch {}
+    data.push({
+      key,
+      title: key.replace(/-/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()),
+      markdown,
     });
-
-    data.push(results);
   }
 
   return JSON.stringify(data);

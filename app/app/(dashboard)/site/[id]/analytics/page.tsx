@@ -5,7 +5,8 @@ import { notFound, redirect } from "next/navigation";
 import SiteAnalyticsCharts from "@/components/site-analytics";
 import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSetting } from "@/lib/cms-config";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 
 type PageProps = {
   // Next.js is expecting params to be a Promise here
@@ -21,8 +22,16 @@ export default async function Page({ params }: PageProps) {
     redirect("/login");
   }
 
-  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.analytics.read");
+  const { site } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    decodeURIComponent(id),
+    "site.analytics.read",
+  );
   if (!site) {
+    notFound();
+  }
+  const analyticsAvailable = await hasGraphAnalyticsProvider(site.id);
+  if (!analyticsAvailable) {
     notFound();
   }
 

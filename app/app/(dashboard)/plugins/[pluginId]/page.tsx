@@ -10,14 +10,28 @@ import MigrationKitConsole from "@/components/migration-kit-console";
 import CollectionOrderManager from "@/components/plugins/collection-order-manager";
 import CollectionSetInlineEditor from "@/components/plugins/collection-set-inline-editor";
 import CollectionChildEditModal from "@/components/plugins/collection-child-edit-modal";
+import CarouselCtaUrlField from "@/components/plugins/carousel-cta-url-field";
 import MediaPickerField from "@/components/media/media-picker-field";
 import PluginSettingsInlineForm from "@/components/plugins/plugin-settings-inline-form";
 import PluginSiteSelect from "@/components/plugins/plugin-site-select";
 import db from "@/lib/db";
-import { dataDomains, domainPostMeta, domainPosts, media } from "@/lib/schema";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { createId } from "@paralleldrive/cuid2";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
+import { findSiteDataDomainByKey } from "@/lib/site-data-domain-registry";
+import { resolveAccessibleSiteId, resolvePrimarySite } from "@/lib/admin-site-selection";
+import {
+  createSiteDomainPost,
+  deleteSiteDomainPostById,
+  getSiteDomainPostById,
+  listSiteDomainPostMeta,
+  listSiteDomainPostMetaMany,
+  listSiteDomainPosts,
+  replaceSiteDomainPostMeta,
+  upsertSiteDomainPostMeta,
+  updateSiteDomainPostById,
+} from "@/lib/site-domain-post-store";
+import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
 
 type Props = {
   params: Promise<{ pluginId: string }>;
@@ -55,6 +69,68 @@ function buildRefreshToken() {
   return Date.now().toString(36);
 }
 
+async function listMediaItemsForSite(siteId: string) {
+  await ensureSiteMediaTable(siteId);
+  const mediaTable = getSiteMediaTable(siteId);
+  return db
+    .select({ id: mediaTable.id, label: mediaTable.label, url: mediaTable.url })
+    .from(mediaTable)
+    .orderBy(asc(mediaTable.createdAt));
+}
+
+async function findMediaItemForSite(siteId: string, mediaId: string) {
+  const normalizedMediaId = Number(mediaId || 0);
+  if (!Number.isFinite(normalizedMediaId) || normalizedMediaId <= 0) return null;
+  await ensureSiteMediaTable(siteId);
+  const mediaTable = getSiteMediaTable(siteId);
+  const rows = await db
+    .select({ id: mediaTable.id, url: mediaTable.url })
+    .from(mediaTable)
+    .where(eq(mediaTable.id, normalizedMediaId))
+    .limit(1);
+  return rows[0] || null;
+}
+
+async function listCollectionPostsForDomain(siteId: string, domainKey: string) {
+  const rows = await listSiteDomainPosts({
+    siteId,
+    dataDomainKey: domainKey,
+    includeInactiveDomains: true,
+    includeContent: false,
+  });
+  return [...rows].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+}
+
+async function getCollectionMetaValue(siteId: string, domainKey: string, postId: string, key: string) {
+  const rows = await listSiteDomainPostMeta({ siteId, dataDomainKey: domainKey, postId });
+  return String(rows.find((row) => row.key === key)?.value || "").trim();
+}
+
+async function listChildPostIdsByParent(siteId: string, domainKey: string, parentMetaKey: string, parentId: string) {
+  const posts = await listCollectionPostsForDomain(siteId, domainKey);
+  const postIds = posts.map((post) => post.id);
+  if (!postIds.length) return [];
+  const rows = await listSiteDomainPostMetaMany({
+    siteId,
+    dataDomainKey: domainKey,
+    postIds,
+    keys: [parentMetaKey],
+  });
+  return rows
+    .filter((row) => row.key === parentMetaKey && row.value === parentId)
+    .map((row) => row.domainPostId);
+}
+
+async function upsertCollectionMeta(siteId: string, domainKey: string, postId: string, key: string, value: string) {
+  await upsertSiteDomainPostMeta({
+    siteId,
+    dataDomainKey: domainKey,
+    postId,
+    key,
+    value,
+  });
+}
+
 export default async function PluginSetupPage({ params, searchParams }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -79,10 +155,11 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
     columns: { id: true, name: true, isPrimary: true, subdomain: true },
     orderBy: (sites, { asc }) => [asc(sites.name), asc(sites.subdomain), asc(sites.id)],
   });
-  const mainOwnedSiteId =
-    ownedSites.find((site) => site.isPrimary || site.subdomain === "main")?.id || ownedSites[0]?.id || "";
-  const effectiveSiteId = selectedSiteId || (ownedSites.length === 1 ? mainOwnedSiteId : "");
-  const migrationRedirectSuffix = selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : "";
+  const mainOwnedSiteId = resolvePrimarySite(ownedSites)?.id || "";
+  const normalizedSelectedSiteId = resolveAccessibleSiteId(ownedSites, selectedSiteId);
+  const effectiveSiteId = normalizedSelectedSiteId || (ownedSites.length === 1 ? mainOwnedSiteId : "");
+  const effectiveSite = ownedSites.find((site) => site.id === effectiveSiteId) || null;
+  const migrationRedirectSuffix = normalizedSelectedSiteId ? `&siteId=${encodeURIComponent(normalizedSelectedSiteId)}` : "";
 
   const isDevTools = pluginData.id === "dev-tools";
   const isMigrationKit = pluginData.id === "export-import";
@@ -132,52 +209,31 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
     const [parentDomain, childDomain, mediaItems] = effectiveSiteId
       ? await Promise.all([
-          db.query.dataDomains.findFirst({
-            where: eq(dataDomains.key, model.parentTypeKey),
-            columns: { id: true, key: true },
-          }),
-          db.query.dataDomains.findFirst({
-            where: eq(dataDomains.key, model.childTypeKey),
-            columns: { id: true, key: true },
-          }),
-          db.query.media.findMany({
-            where: eq(media.siteId, effectiveSiteId),
-            columns: { id: true, label: true, url: true },
-            orderBy: [asc(media.createdAt)],
-          }),
+          findSiteDataDomainByKey(effectiveSiteId, model.parentTypeKey),
+          findSiteDataDomainByKey(effectiveSiteId, model.childTypeKey),
+          listMediaItemsForSite(effectiveSiteId),
         ])
       : [null, null, []];
 
     const setRows = effectiveSiteId && parentDomain
-      ? await db
-          .select({
-            id: domainPosts.id,
-            title: domainPosts.title,
-            description: domainPosts.description,
-            slug: domainPosts.slug,
-            published: domainPosts.published,
-            createdAt: domainPosts.createdAt,
-          })
-          .from(domainPosts)
-          .where(and(eq(domainPosts.siteId, effectiveSiteId), eq(domainPosts.dataDomainId, parentDomain.id)))
-          .orderBy(asc(domainPosts.createdAt))
+      ? (await listCollectionPostsForDomain(effectiveSiteId, model.parentTypeKey)).map((row) => ({
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          slug: row.slug,
+          published: row.published,
+          createdAt: row.createdAt,
+        }))
       : [];
 
     const setIds = setRows.map((row) => row.id);
     const setMetaRows = setIds.length
-      ? await db
-          .select({
-            domainPostId: domainPostMeta.domainPostId,
-            key: domainPostMeta.key,
-            value: domainPostMeta.value,
-          })
-          .from(domainPostMeta)
-          .where(
-            and(
-              inArray(domainPostMeta.domainPostId, setIds),
-              inArray(domainPostMeta.key, [model.parentHandleMetaKey, model.workflowMetaKey]),
-            ),
-          )
+      ? await listSiteDomainPostMetaMany({
+          siteId: effectiveSiteId,
+          dataDomainKey: model.parentTypeKey,
+          postIds: setIds,
+          keys: [model.parentHandleMetaKey, model.workflowMetaKey],
+        })
       : [];
 
     const setMetaById = new Map<string, Record<string, string>>();
@@ -234,18 +290,14 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
     }
 
     const slideRows = effectiveSiteId && childDomain
-      ? await db
-          .select({
-            id: domainPosts.id,
-            title: domainPosts.title,
-            description: domainPosts.description,
-            image: domainPosts.image,
-            published: domainPosts.published,
-            createdAt: domainPosts.createdAt,
-          })
-          .from(domainPosts)
-          .where(and(eq(domainPosts.siteId, effectiveSiteId), eq(domainPosts.dataDomainId, childDomain.id)))
-          .orderBy(asc(domainPosts.createdAt))
+      ? (await listCollectionPostsForDomain(effectiveSiteId, model.childTypeKey)).map((row) => ({
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          image: row.image,
+          published: row.published,
+          createdAt: row.createdAt,
+        }))
       : [];
 
     const slideIds = slideRows.map((row) => row.id);
@@ -259,14 +311,12 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       ...(model.ctaUrlMetaKey ? [model.ctaUrlMetaKey] : []),
     ];
     const slideMetaRows = slideIds.length
-      ? await db
-          .select({
-            domainPostId: domainPostMeta.domainPostId,
-            key: domainPostMeta.key,
-            value: domainPostMeta.value,
-          })
-          .from(domainPostMeta)
-          .where(and(inArray(domainPostMeta.domainPostId, slideIds), inArray(domainPostMeta.key, slideMetaKeys)))
+      ? await listSiteDomainPostMetaMany({
+          siteId: effectiveSiteId,
+          dataDomainKey: model.childTypeKey,
+          postIds: slideIds,
+          keys: slideMetaKeys,
+        })
       : [];
 
     const slideMetaById = new Map<string, Record<string, string>>();
@@ -316,10 +366,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       if (!allowed) return;
 
       await createKernelForRequest(siteId);
-      const domain = await db.query.dataDomains.findFirst({
-        where: eq(dataDomains.key, model.parentTypeKey),
-        columns: { id: true },
-      });
+      const domain = await findSiteDataDomainByKey(siteId, model.parentTypeKey);
       if (!domain) return;
 
       const setId = String(formData.get("setId") || "").trim();
@@ -337,31 +384,28 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       let previousHandle = "";
       if (setId) {
-        const existingHandle = await db.query.domainPostMeta.findFirst({
-          where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
-          columns: { value: true },
-        });
-        previousHandle = String(existingHandle?.value || "").trim();
-        await db
-          .update(domainPosts)
-          .set({
+        previousHandle = await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey);
+        await updateSiteDomainPostById({
+          siteId,
+          postId: setId,
+          dataDomainKey: model.parentTypeKey,
+          patch: {
             title,
             description,
             slug: handle,
             published,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, domain.id)));
+          },
+        });
       } else {
-        await db.insert(domainPosts).values({
+        await createSiteDomainPost({
+          siteId,
           id: targetId,
-          dataDomainId: domain.id,
+          dataDomainKey: model.parentTypeKey,
           title,
           description,
           content: "",
           slug: handle,
           published,
-          siteId,
           userId: current.user.id,
         });
       }
@@ -370,20 +414,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         { key: model.parentHandleMetaKey, value: handle },
         { key: model.workflowMetaKey, value: workflowState },
       ]) {
-        await db
-          .insert(domainPostMeta)
-          .values({
-            domainPostId: targetId,
-            key: entry.key,
-            value: entry.value,
-          })
-          .onConflictDoUpdate({
-            target: [domainPostMeta.domainPostId, domainPostMeta.key],
-            set: {
-              value: entry.value,
-              updatedAt: new Date(),
-            },
-          });
+        await upsertCollectionMeta(siteId, model.parentTypeKey, targetId, entry.key, entry.value);
       }
 
       if (
@@ -393,25 +424,9 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         previousHandle &&
         handle !== previousHandle
       ) {
-        const childLinks = await db
-          .select({ domainPostId: domainPostMeta.domainPostId })
-          .from(domainPostMeta)
-          .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
-        for (const child of childLinks) {
-          await db
-            .insert(domainPostMeta)
-            .values({
-              domainPostId: child.domainPostId,
-              key: model.childParentKeyMetaKey,
-              value: handle,
-            })
-            .onConflictDoUpdate({
-              target: [domainPostMeta.domainPostId, domainPostMeta.key],
-              set: {
-                value: handle,
-                updatedAt: new Date(),
-              },
-            });
+        const childIds = await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId);
+        for (const childId of childIds) {
+          await upsertCollectionMeta(siteId, model.childTypeKey, childId, model.childParentKeyMetaKey, handle);
         }
       }
 
@@ -434,17 +449,13 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
       if (!allowed) return;
 
-      const childLinks = await db
-        .select({ domainPostId: domainPostMeta.domainPostId })
-        .from(domainPostMeta)
-        .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
-      const childIds = childLinks.map((row) => row.domainPostId);
+      const childIds = await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId);
       if (childIds.length) {
-        await db.delete(domainPostMeta).where(inArray(domainPostMeta.domainPostId, childIds));
-        await db.delete(domainPosts).where(inArray(domainPosts.id, childIds));
+        for (const childId of childIds) {
+          await deleteSiteDomainPostById({ siteId, postId: childId, dataDomainKey: model.childTypeKey });
+        }
       }
-      await db.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, setId));
-      await db.delete(domainPosts).where(eq(domainPosts.id, setId));
+      await deleteSiteDomainPostById({ siteId, postId: setId, dataDomainKey: model.parentTypeKey });
 
       revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
@@ -463,10 +474,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       if (!allowed) return;
 
       await createKernelForRequest(siteId);
-      const domain = await db.query.dataDomains.findFirst({
-        where: eq(dataDomains.key, model.parentTypeKey),
-        columns: { id: true },
-      });
+      const domain = await findSiteDataDomainByKey(siteId, model.parentTypeKey);
       if (!domain) return;
 
       const title = String(formData.get("title") || "").trim() || "Untitled";
@@ -477,41 +485,25 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         : "draft";
       const handle = toSlug(requestedHandle || title, "collection");
 
-      const existingHandle = await db.query.domainPostMeta.findFirst({
-        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
-        columns: { value: true },
-      });
-      const previousHandle = String(existingHandle?.value || "").trim();
+      const previousHandle = await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey);
 
-      await db
-        .update(domainPosts)
-        .set({
+      await updateSiteDomainPostById({
+        siteId,
+        postId: setId,
+        dataDomainKey: model.parentTypeKey,
+        patch: {
           title,
           description,
           slug: handle,
           published: workflowState === "published",
-          updatedAt: new Date(),
-        })
-        .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, domain.id)));
+        },
+      });
 
       for (const entry of [
         { key: model.parentHandleMetaKey, value: handle },
         { key: model.workflowMetaKey, value: workflowState },
       ]) {
-        await db
-          .insert(domainPostMeta)
-          .values({
-            domainPostId: setId,
-            key: entry.key,
-            value: entry.value,
-          })
-          .onConflictDoUpdate({
-            target: [domainPostMeta.domainPostId, domainPostMeta.key],
-            set: {
-              value: entry.value,
-              updatedAt: new Date(),
-            },
-          });
+        await upsertCollectionMeta(siteId, model.parentTypeKey, setId, entry.key, entry.value);
       }
 
       if (
@@ -520,25 +512,9 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         previousHandle &&
         handle !== previousHandle
       ) {
-        const childLinks = await db
-          .select({ domainPostId: domainPostMeta.domainPostId })
-          .from(domainPostMeta)
-          .where(and(eq(domainPostMeta.key, model.childParentMetaKey), eq(domainPostMeta.value, setId)));
-        for (const child of childLinks) {
-          await db
-            .insert(domainPostMeta)
-            .values({
-              domainPostId: child.domainPostId,
-              key: model.childParentKeyMetaKey,
-              value: handle,
-            })
-            .onConflictDoUpdate({
-              target: [domainPostMeta.domainPostId, domainPostMeta.key],
-              set: {
-                value: handle,
-                updatedAt: new Date(),
-              },
-            });
+        const childIds = await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId);
+        for (const childId of childIds) {
+          await upsertCollectionMeta(siteId, model.childTypeKey, childId, model.childParentKeyMetaKey, handle);
         }
       }
 
@@ -558,41 +534,30 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       await createKernelForRequest(siteId);
       const [parentDomainRow, childDomainRow] = await Promise.all([
-        db.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, model.parentTypeKey),
-          columns: { id: true },
-        }),
-        db.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, model.childTypeKey),
-          columns: { id: true },
-        }),
+        findSiteDataDomainByKey(siteId, model.parentTypeKey),
+        findSiteDataDomainByKey(siteId, model.childTypeKey),
       ]);
       if (!parentDomainRow || !childDomainRow) return;
 
-      const setRecord = await db.query.domainPosts.findFirst({
-        where: and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, parentDomainRow.id)),
-        columns: { id: true, slug: true },
+      const setRecord = await getSiteDomainPostById({
+        siteId,
+        postId: setId,
+        dataDomainKey: model.parentTypeKey,
       });
       if (!setRecord) return;
-      const setHandleMeta = await db.query.domainPostMeta.findFirst({
-        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
-        columns: { value: true },
-      });
-      const setHandle = String(setHandleMeta?.value || setRecord.slug || "").trim();
+      const setHandle =
+        (await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey)) ||
+        String(setRecord.slug || "").trim();
 
       const slideId = String(formData.get("slideId") || "").trim();
       const title = String(formData.get("title") || "").trim();
       const description = String(formData.get("description") || "").trim();
-      const imageInput = normalizeManagedImageValue(formData.get("image"));
       const mediaId = String(formData.get("media_id") || "").trim();
       const mediaRow =
         mediaId && model.mediaMetaKey
-          ? await db.query.media.findFirst({
-              where: and(eq(media.id, Number(mediaId)), eq(media.siteId, siteId)),
-              columns: { id: true, url: true },
-            })
+          ? await findMediaItemForSite(siteId, mediaId)
           : null;
-      const resolvedImage = imageInput || String(mediaRow?.url || "").trim();
+      const resolvedImage = String(mediaRow?.url || "").trim();
       const ctaText = model.ctaTextMetaKey ? String(formData.get("cta_text") || "").trim() : "";
       const ctaUrl = model.ctaUrlMetaKey ? String(formData.get("cta_url") || "").trim() : "";
       const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
@@ -607,27 +572,28 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const slideSlug = `${toSlug(title, model.childTypeKey)}-${targetId.slice(-8)}`;
 
       if (slideId) {
-        await db
-          .update(domainPosts)
-          .set({
+        await updateSiteDomainPostById({
+          siteId,
+          postId: slideId,
+          dataDomainKey: model.childTypeKey,
+          patch: {
             title,
             description,
             image: resolvedImage,
             published,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, childDomainRow.id)));
+          },
+        });
       } else {
-        await db.insert(domainPosts).values({
+        await createSiteDomainPost({
+          siteId,
           id: targetId,
-          dataDomainId: childDomainRow.id,
+          dataDomainKey: model.childTypeKey,
           title,
           description,
           content: "",
           slug: slideSlug,
           image: resolvedImage,
           published,
-          siteId,
           userId: current.user.id,
         });
       }
@@ -642,20 +608,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         ...(model.ctaUrlMetaKey ? [{ key: model.ctaUrlMetaKey, value: ctaUrl }] : []),
       ];
       for (const entry of metaEntries) {
-        await db
-          .insert(domainPostMeta)
-          .values({
-            domainPostId: targetId,
-            key: entry.key,
-            value: entry.value,
-          })
-          .onConflictDoUpdate({
-            target: [domainPostMeta.domainPostId, domainPostMeta.key],
-            set: {
-              value: entry.value,
-              updatedAt: new Date(),
-            },
-          });
+        await upsertCollectionMeta(siteId, model.childTypeKey, targetId, entry.key, entry.value);
       }
 
       revalidatePath(`/app/plugins/${pluginData.id}`);
@@ -678,8 +631,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
       if (!allowed) return;
 
-      await db.delete(domainPostMeta).where(eq(domainPostMeta.domainPostId, slideId));
-      await db.delete(domainPosts).where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId)));
+      await deleteSiteDomainPostById({ siteId, postId: slideId, dataDomainKey: model.childTypeKey });
 
       revalidatePath(`/app/plugins/${pluginData.id}`);
       revalidatePath(`/app/site/${siteId}/settings/plugins`);
@@ -702,40 +654,29 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       await createKernelForRequest(siteId);
       const [parentDomainRow, childDomainRow] = await Promise.all([
-        db.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, model.parentTypeKey),
-          columns: { id: true },
-        }),
-        db.query.dataDomains.findFirst({
-          where: eq(dataDomains.key, model.childTypeKey),
-          columns: { id: true },
-        }),
+        findSiteDataDomainByKey(siteId, model.parentTypeKey),
+        findSiteDataDomainByKey(siteId, model.childTypeKey),
       ]);
       if (!parentDomainRow || !childDomainRow) return;
 
-      const setRecord = await db.query.domainPosts.findFirst({
-        where: and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, parentDomainRow.id)),
-        columns: { id: true, slug: true },
+      const setRecord = await getSiteDomainPostById({
+        siteId,
+        postId: setId,
+        dataDomainKey: model.parentTypeKey,
       });
       if (!setRecord) return;
-      const setHandleMeta = await db.query.domainPostMeta.findFirst({
-        where: and(eq(domainPostMeta.domainPostId, setId), eq(domainPostMeta.key, model.parentHandleMetaKey)),
-        columns: { value: true },
-      });
-      const setHandle = String(setHandleMeta?.value || setRecord.slug || "").trim();
+      const setHandle =
+        (await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey)) ||
+        String(setRecord.slug || "").trim();
 
       const title = String(formData.get("title") || "").trim() || "Untitled";
       const description = String(formData.get("description") || "").trim();
-      const imageInput = normalizeManagedImageValue(formData.get("image"));
       const mediaId = String(formData.get("media_id") || "").trim();
       const mediaRow =
         mediaId && model.mediaMetaKey
-          ? await db.query.media.findFirst({
-              where: and(eq(media.id, Number(mediaId)), eq(media.siteId, siteId)),
-              columns: { id: true, url: true },
-            })
+          ? await findMediaItemForSite(siteId, mediaId)
           : null;
-      const resolvedImage = imageInput || String(mediaRow?.url || "").trim();
+      const resolvedImage = String(mediaRow?.url || "").trim();
       const ctaText = model.ctaTextMetaKey ? String(formData.get("cta_text") || "").trim() : "";
       const ctaUrl = model.ctaUrlMetaKey ? String(formData.get("cta_url") || "").trim() : "";
       const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
@@ -744,16 +685,17 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const orderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
       const sortOrder = Number.isFinite(orderRaw) ? Math.max(0, Math.trunc(orderRaw)) : 0;
 
-      await db
-        .update(domainPosts)
-        .set({
+      await updateSiteDomainPostById({
+        siteId,
+        postId: slideId,
+        dataDomainKey: model.childTypeKey,
+        patch: {
           title,
           description,
           image: resolvedImage,
           published: workflowState === "published",
-          updatedAt: new Date(),
-        })
-        .where(and(eq(domainPosts.id, slideId), eq(domainPosts.siteId, siteId), eq(domainPosts.dataDomainId, childDomainRow.id)));
+        },
+      });
 
       const metaEntries = [
         { key: model.childParentMetaKey, value: setId },
@@ -765,20 +707,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         ...(model.ctaUrlMetaKey ? [{ key: model.ctaUrlMetaKey, value: ctaUrl }] : []),
       ];
       for (const entry of metaEntries) {
-        await db
-          .insert(domainPostMeta)
-          .values({
-            domainPostId: slideId,
-            key: entry.key,
-            value: entry.value,
-          })
-          .onConflictDoUpdate({
-            target: [domainPostMeta.domainPostId, domainPostMeta.key],
-            set: {
-              value: entry.value,
-              updatedAt: new Date(),
-            },
-          });
+        await upsertCollectionMeta(siteId, model.childTypeKey, slideId, entry.key, entry.value);
       }
 
       revalidatePath(`/app/plugins/${pluginData.id}`);
@@ -813,24 +742,19 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       if (!parsed.length) return;
 
       for (const entry of parsed) {
-        await db
-          .insert(domainPostMeta)
-          .values({
-            domainPostId: entry.id,
-            key: model.orderMetaKey,
-            value: String(Math.max(0, Math.trunc(entry.sortOrder))),
-          })
-          .onConflictDoUpdate({
-            target: [domainPostMeta.domainPostId, domainPostMeta.key],
-            set: {
-              value: String(Math.max(0, Math.trunc(entry.sortOrder))),
-              updatedAt: new Date(),
-            },
-          });
+        await upsertCollectionMeta(
+          siteId,
+          model.childTypeKey,
+          entry.id,
+          model.orderMetaKey,
+          String(Math.max(0, Math.trunc(entry.sortOrder))),
+        );
       }
 
       revalidatePath(`/app/plugins/${pluginData.id}`);
       revalidatePath(`/`);
+      revalidatePath("/[domain]", "layout");
+      revalidatePath("/[domain]", "page");
     }
 
     async function toggleCollectionSetEnabled(formData: FormData) {
@@ -845,27 +769,21 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
       if (!allowed) return;
 
-      await db
-        .update(domainPosts)
-        .set({
+      await updateSiteDomainPostById({
+        siteId,
+        postId: setId,
+        dataDomainKey: model.parentTypeKey,
+        patch: {
           published: nextEnabled,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(domainPosts.id, setId), eq(domainPosts.siteId, siteId)));
-      await db
-        .insert(domainPostMeta)
-        .values({
-          domainPostId: setId,
-          key: model.workflowMetaKey,
-          value: nextEnabled ? "published" : "draft",
-        })
-        .onConflictDoUpdate({
-          target: [domainPostMeta.domainPostId, domainPostMeta.key],
-          set: {
-            value: nextEnabled ? "published" : "draft",
-            updatedAt: new Date(),
-          },
-        });
+        },
+      });
+      await upsertCollectionMeta(
+        siteId,
+        model.parentTypeKey,
+        setId,
+        model.workflowMetaKey,
+        nextEnabled ? "published" : "draft",
+      );
 
       revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
     }
@@ -1223,7 +1141,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                   }))}
                   saveOrderAction={reorderCollectionChildren}
                   extraFormData={{ setId: selectedSet.id }}
-                  title="Carousel Slides"
+                  title="Slide Order"
                 />
 
                 {showCreateSlide ? (
@@ -1290,11 +1208,6 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
                       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
                         <div className="space-y-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
-                          <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-                            <div className="flex aspect-[4/3] items-center justify-center text-sm text-stone-400">
-                              No image selected
-                            </div>
-                          </div>
                           <MediaPickerField
                             siteId={effectiveSiteId}
                             name="media_id"
@@ -1317,7 +1230,12 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
                           <label className="grid gap-2 text-sm text-black">
                             <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA URL</span>
-                            <textarea name="cta_url" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
+                            <CarouselCtaUrlField
+                              name="cta_url"
+                              siteSubdomain={effectiveSite?.subdomain || ""}
+                              rows={3}
+                              className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black"
+                            />
                           </label>
                         </div>
                       </div>
@@ -1333,6 +1251,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                       return (
                         <CollectionChildEditModal
                           siteId={effectiveSiteId}
+                          siteSubdomain={effectiveSite?.subdomain || ""}
                           setId={selectedSet.id}
                           childLabel={childLabel}
                           closeHref={buildCollectionHref({ editSlide: undefined })}
@@ -1582,13 +1501,13 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         <>
           <div className="flex gap-2 border-b border-stone-200 pb-2">
             <Link
-              href={`/plugins/${pluginData.id}?tab=settings${selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : ""}`}
+              href={`/plugins/${pluginData.id}?tab=settings${normalizedSelectedSiteId ? `&siteId=${encodeURIComponent(normalizedSelectedSiteId)}` : ""}`}
               className={`rounded border px-3 py-1 text-sm ${tab === "settings" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black"}`}
             >
               Settings
             </Link>
             <Link
-              href={`/plugins/${pluginData.id}?tab=providers${selectedSiteId ? `&siteId=${encodeURIComponent(selectedSiteId)}` : ""}`}
+              href={`/plugins/${pluginData.id}?tab=providers${normalizedSelectedSiteId ? `&siteId=${encodeURIComponent(normalizedSelectedSiteId)}` : ""}`}
               className={`rounded border px-3 py-1 text-sm ${tab === "providers" ? "border-stone-700 bg-stone-700 text-white" : "border-stone-300 bg-white text-black"}`}
             >
               Providers
@@ -1700,7 +1619,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
               </div>
             </div>
           ) : (
-            <MigrationKitConsole siteId={selectedSiteId || null} providers={migrationProviders} />
+            <MigrationKitConsole siteId={normalizedSelectedSiteId || null} providers={migrationProviders} />
           )}
         </>
       ) : isDevTools ? (

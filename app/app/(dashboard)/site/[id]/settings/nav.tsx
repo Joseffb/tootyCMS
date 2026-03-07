@@ -1,115 +1,38 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { buildSiteSettingsNavItems } from "@/lib/admin-nav";
 import Link from "next/link";
-import { useParams, useSelectedLayoutSegment } from "next/navigation";
+import { useSelectedLayoutSegment } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-export default function SiteSettingsNav() {
-  const { id } = useParams() as { id?: string };
+export default function SiteSettingsNav({ siteId }: { siteId: string }) {
   const segment = useSelectedLayoutSegment();
-  const [singleSiteMode, setSingleSiteMode] = useState(false);
-  const [migrationRequired, setMigrationRequired] = useState(false);
+  const [adminMode, setAdminMode] = useState<"single-site" | "multi-site">("multi-site");
+  const [canManageNetworkSettings, setCanManageNetworkSettings] = useState(false);
 
   useEffect(() => {
-    fetch("/api/nav/context", { cache: "no-store" })
+    fetch(`/api/nav/context?siteId=${encodeURIComponent(siteId)}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        const count = Number(json?.siteCount || 0);
-        setSingleSiteMode(count === 1);
-        setMigrationRequired(Boolean(json?.migrationRequired));
+        setAdminMode(json?.adminMode === "single-site" ? "single-site" : "multi-site");
+        setCanManageNetworkSettings(Boolean(json?.canManageNetworkSettings));
       })
       .catch(() => {
-        setSingleSiteMode(false);
-        setMigrationRequired(false);
+        setAdminMode("multi-site");
+        setCanManageNetworkSettings(false);
       });
-  }, []);
+  }, [siteId]);
 
-  const navItems = useMemo(() => ([
-    {
-      name: "General",
-      href: `/app/site/${id}/settings`,
-      segment: null,
-    },
-    {
-      name: "Categories",
-      href: `/app/site/${id}/settings/categories`,
-      segment: "categories",
-    },
-    {
-      name: "Post-Types",
-      href: `/app/site/${id}/settings/domains`,
-      segment: "domains",
-    },
-    {
-      name: "Reading",
-      href: `/app/site/${id}/settings/reading`,
-      segment: "reading",
-    },
-    {
-      name: "SEO & Social",
-      href: `/app/site/${id}/settings/seo`,
-      segment: "seo",
-    },
-    {
-      name: "Writing",
-      href: `/app/site/${id}/settings/writing`,
-      segment: "writing",
-    },
-    {
-      name: "Menus",
-      href: `/app/site/${id}/settings/menus`,
-      segment: "menus",
-    },
-    {
-      name: "Themes",
-      href: `/app/site/${id}/settings/themes`,
-      segment: "themes",
-    },
-    {
-      name: "Plugins",
-      href: `/app/site/${id}/settings/plugins`,
-      segment: "plugins",
-    },
-    {
-      name: "Comments",
-      href: `/app/site/${id}/settings/comments`,
-      segment: "comments",
-    },
-    {
-      name: "Users",
-      href: `/app/site/${id}/settings/users`,
-      segment: "users",
-    },
-    ...(singleSiteMode
-      ? [
-          {
-            name: "Messages",
-            href: `/app/site/${id}/settings/messages`,
-            segment: "messages",
-          },
-          {
-            name: "User Roles",
-            href: `/app/site/${id}/settings/rbac`,
-            segment: "rbac",
-          },
-          {
-            name: "Schedules",
-            href: `/app/site/${id}/settings/schedules`,
-            segment: "schedules",
-          },
-          ...(migrationRequired
-            ? [
-                {
-                  name: "Database",
-                  href: `/app/site/${id}/settings/database`,
-                  segment: "database",
-                },
-              ]
-            : []),
-        ]
-      : []),
-  ]), [id, singleSiteMode, migrationRequired]);
+  const navItems = useMemo(
+    () =>
+      buildSiteSettingsNavItems({
+        siteId,
+        adminMode,
+        canManageNetworkSettings,
+      }),
+    [adminMode, canManageNetworkSettings, siteId],
+  );
 
   return (
     <div className="flex flex-wrap gap-2 border-b border-stone-200 pb-4 pt-2 dark:border-stone-700">

@@ -3,8 +3,6 @@ import { getInstallState } from "@/lib/install-state";
 import { saveSetupEnvValues } from "@/lib/setup-env";
 import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { trace } from "@/lib/debug";
 import { eq, inArray, sql } from "drizzle-orm";
 import { hashPassword } from "@/lib/password";
@@ -19,6 +17,7 @@ import { getPluginById } from "@/lib/plugins";
 import { getAvailableThemes, setSiteTheme, setThemeEnabled } from "@/lib/themes";
 import { getSetupDefaultPluginIds, getSetupDefaultThemeId } from "@/lib/setup-defaults";
 import {
+  applyDatabaseCompatibilityFixes,
   applyPendingDatabaseMigrations,
   getDatabaseHealthReport,
   markDatabaseSchemaCurrent,
@@ -29,25 +28,27 @@ import {
   REQUIRED_SETUP_TABLE_SUFFIXES,
 } from "@/lib/setup-schema";
 
-const execFileAsync = promisify(execFile);
+const AUTH_SESSION_COOKIE_NAMES = [
+  "__Secure-next-auth.session-token",
+  "next-auth.session-token",
+  "__Secure-authjs.session-token",
+  "authjs.session-token",
+] as const;
 
-async function runCommandDbInit(values: Record<string, string>) {
-  trace("setup", "db init via command started");
-  await execFileAsync(
-    "npx",
-    ["drizzle-kit", "push", "--config", "drizzle.config.ts"],
-    {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...values,
-      CI: "1",
-      NO_COLOR: "1",
-    },
-    timeout: 30_000,
-    },
-  );
-  trace("setup", "db init via command completed");
+const LAST_SITE_COOKIE_NAMES = [
+  "cms_last_site_id",
+  "tooty_last_site_id",
+] as const;
+
+const LAST_ADMIN_PATH_COOKIE_NAMES = [
+  "cms_last_admin_path",
+  "tooty_last_app_path",
+] as const;
+
+async function runLocalDbInit() {
+  trace("setup", "db init via local compatibility started");
+  await applyDatabaseCompatibilityFixes();
+  trace("setup", "db init via local compatibility completed");
 }
 
 async function runHttpDbInit(values: Record<string, string>) {
@@ -74,9 +75,10 @@ async function initializeDbSchema(values: Record<string, string>) {
   trace("setup", "db init backend selected", { backend });
   if (backend === "none") return;
   if (backend === "http") return runHttpDbInit(values);
-  if (backend === "command") return runCommandDbInit(values);
+  if (backend === "command") return runLocalDbInit();
+  if (backend === "local") return runLocalDbInit();
   if (process.env.SETUP_DB_INIT_URL?.trim()) return runHttpDbInit(values);
-  return runCommandDbInit(values);
+  return runLocalDbInit();
 }
 
 function normalizedPrefixFromValues(values: Record<string, string>) {
@@ -127,6 +129,43 @@ async function getMissingTableSets(values: Record<string, string>) {
   const missingRequired = missing.filter((tableName) => requiredSet.has(tableName));
   const missingOptional = missing.filter((tableName) => optionalSet.has(tableName));
   return { missingRequired, missingOptional };
+}
+
+function clearCookie(response: NextResponse, name: string) {
+  response.cookies.set(name, "", {
+    path: "/",
+    maxAge: 0,
+    sameSite: "lax",
+    secure: false,
+  });
+}
+
+function applyPostSetupCookies(response: NextResponse, mainSiteId: string | null) {
+  for (const name of AUTH_SESSION_COOKIE_NAMES) {
+    clearCookie(response, name);
+  }
+  for (const name of LAST_SITE_COOKIE_NAMES) {
+    clearCookie(response, name);
+  }
+  for (const name of LAST_ADMIN_PATH_COOKIE_NAMES) {
+    clearCookie(response, name);
+  }
+
+  const normalizedMainSiteId = String(mainSiteId || "").trim();
+  if (!normalizedMainSiteId) return;
+
+  response.cookies.set("cms_last_site_id", normalizedMainSiteId, {
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: "lax",
+    secure: false,
+  });
+  response.cookies.set("cms_last_admin_path", `/site/${normalizedMainSiteId}`, {
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: "lax",
+    secure: false,
+  });
 }
 
 export async function POST(req: Request) {
@@ -210,7 +249,7 @@ export async function POST(req: Request) {
         envSaved: true,
         requiresDbInit: true,
         error:
-          "Environment was saved, but required DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Finish Setup again.",
+          "Environment was saved, but required DB schema could not be initialized automatically. Fix the DB bootstrap issue, then click Finish Setup again.",
       },
       { status: 409 },
     );
@@ -284,17 +323,54 @@ export async function POST(req: Request) {
 
   await ensureDefaultCoreDataDomains();
   await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
-  const siteIds = await listSiteIdsForUser(ensuredUserId);
-  const memberSites = siteIds.length > 0
+  let siteIds = await listSiteIdsForUser(ensuredUserId);
+  let memberSites = siteIds.length > 0
     ? await db.query.sites.findMany({
         where: inArray(sites.id, siteIds),
         columns: { id: true, isPrimary: true, subdomain: true },
       })
     : [];
-  const mainSiteId =
+  let mainSiteId =
     memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
     memberSites[0]?.id ||
     null;
+
+  if (!mainSiteId) {
+    trace("setup", "main site missing after initial bootstrap; retrying site ensure", {
+      adminEmail,
+      userId: ensuredUserId,
+    });
+    await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
+    siteIds = await listSiteIdsForUser(ensuredUserId);
+    memberSites = siteIds.length > 0
+      ? await db.query.sites.findMany({
+          where: inArray(sites.id, siteIds),
+          columns: { id: true, isPrimary: true, subdomain: true },
+        })
+      : [];
+    mainSiteId =
+      memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
+      memberSites[0]?.id ||
+      null;
+  }
+
+  if (!mainSiteId) {
+    trace("setup", "setup save invariant failed: main site unresolved after bootstrap", {
+      adminEmail,
+      userId: ensuredUserId,
+    });
+    return NextResponse.json(
+      {
+        ok: false,
+        envSaved: true,
+        dbInitialized: true,
+        userCreated: true,
+        error:
+          "Setup created the admin user, but no main site could be resolved. Repair site bootstrap and run setup again.",
+      },
+      { status: 500 },
+    );
+  }
 
   if (mainSiteId) {
     for (const pluginId of setupPluginIds) {
@@ -316,11 +392,13 @@ export async function POST(req: Request) {
 
   await advanceSetupLifecycleTo("ready");
   trace("setup", "setup save completed successfully");
-  return NextResponse.json({
+  const response = NextResponse.json({
     ok: true,
     envSaved: true,
     dbInitialized: true,
     userCreated: true,
     mainSiteId,
   });
+  applyPostSetupCookies(response, mainSiteId);
+  return response;
 }

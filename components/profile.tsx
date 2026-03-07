@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import LogoutButton from "./logout-button";
 import packageJson from "@/package.json";
+import { resolveProfileImageUrl } from "@/lib/profile-image";
 
 export default async function Profile() {
   const session = await getSession();
@@ -11,6 +12,13 @@ export default async function Profile() {
     redirect("/login");
   }
   const appVersion = String(packageJson.version || "").trim() || "dev";
+  const avatarUrl = resolveProfileImageUrl({
+    profileImageUrl: (session.user as any).profileImageUrl,
+    providerImageUrl: session.user.image,
+    email: session.user.email,
+    username: (session.user as any).username,
+    name: session.user.name,
+  });
 
   return (
     <div className="w-full">
@@ -20,10 +28,7 @@ export default async function Profile() {
           className="flex w-full flex-1 items-center space-x-3 rounded-lg px-2 py-1.5 transition-all duration-150 ease-in-out hover:bg-stone-200 active:bg-stone-300 dark:text-white dark:hover:bg-stone-700 dark:active:bg-stone-800"
         >
           <Image
-            src={
-              session.user.image ??
-              `https://avatar.vercel.sh/${session.user.email}`
-            }
+            src={avatarUrl}
             width={40}
             height={40}
             alt={session.user.name ?? "User avatar"}

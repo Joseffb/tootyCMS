@@ -13,6 +13,7 @@ export const metadata: Metadata = {
   title: "Tooty CMS",
   description: "Tooty CMS",
 };
+export const dynamic = "force-dynamic";
 
 function normalizeConfiguredHost(value: string) {
   return String(value || "")

@@ -1,4 +1,5 @@
 import { getProfile, updateOwnPassword, updateProfile } from "@/lib/actions";
+import ProfileImageField from "@/components/settings/profile-image-field";
 
 export default async function ProfileSettingsPanel(props: { siteId?: string; forcePasswordChange?: boolean }) {
   const data = await getProfile(props.siteId);
@@ -27,6 +28,14 @@ export default async function ProfileSettingsPanel(props: { siteId?: string; for
           Global user identity. This applies across all sites.
         </p>
         <form action={updateProfileAction} className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500">Profile image</label>
+            <ProfileImageField
+              siteId={data.user.uploadSiteId}
+              initialValue={data.user.profileImageUrl}
+              displayName={data.user.displayName || data.user.name || "Profile image"}
+            />
+          </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500">Name</label>
             <input
@@ -41,7 +50,7 @@ export default async function ProfileSettingsPanel(props: { siteId?: string; for
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500">Display name</label>
             <input
               name="displayName"
-              defaultValue={data.user.displayName}
+              defaultValue={data.user.displayName || data.user.name}
               placeholder="How your name appears publicly"
               maxLength={64}
               className="w-full rounded-md border border-stone-300 px-3 py-2 text-sm dark:border-stone-600 dark:bg-black dark:text-white"

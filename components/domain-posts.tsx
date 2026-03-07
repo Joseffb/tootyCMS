@@ -1,10 +1,12 @@
 import { getSession } from "@/lib/auth";
 import db from "@/lib/db";
-import { dataDomains } from "@/lib/schema";
-import { desc, eq } from "drizzle-orm";
+import { sites } from "@/lib/schema";
+import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import Image from "next/image";
 import DomainPostCard from "@/components/domain-post-card";
+import { getSiteDataDomainByKey } from "@/lib/actions";
+import { listSiteDomainPosts } from "@/lib/site-domain-post-store";
 
 export default async function DomainPosts({
   siteId,
@@ -20,32 +22,32 @@ export default async function DomainPosts({
     redirect("/login");
   }
 
-  const domain = await db.query.dataDomains.findFirst({
-    where: eq(dataDomains.key, domainKey),
-    columns: { id: true },
+  const domain = await getSiteDataDomainByKey(siteId, domainKey);
+  const site = await db.query.sites.findFirst({
+    where: eq(sites.id, siteId),
+    columns: {
+      id: true,
+      subdomain: true,
+      customDomain: true,
+      isPrimary: true,
+    },
   });
 
-  if (!domain) {
+  if (!domain || !site) {
     return null;
   }
 
-  const rows = await db.query.domainPosts.findMany({
-    where: (table, { and, eq }) =>
-      and(
-        eq(table.siteId, siteId),
-        eq(table.dataDomainId, domain.id),
-      ),
-    with: {
-      site: true,
-    },
-    orderBy: (table) => desc(table.updatedAt),
+  const rows = await listSiteDomainPosts({
+    siteId,
+    dataDomainKey: domainKey,
+    includeInactiveDomains: true,
     ...(limit ? { limit } : {}),
   });
 
   return rows.length > 0 ? (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {rows.map((post) => (
-        <DomainPostCard key={post.id} data={post} siteId={siteId} domainKey={domainKey} />
+        <DomainPostCard key={post.id} data={{ ...post, site }} siteId={siteId} domainKey={domainKey} />
       ))}
     </div>
   ) : (

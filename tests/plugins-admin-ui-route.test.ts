@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   createKernelForRequest: vi.fn(),
-  listPluginsWithState: vi.fn(),
-  listPluginsWithSiteState: vi.fn(),
+  hasGraphAnalyticsProvider: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -15,24 +14,20 @@ vi.mock("@/lib/plugin-runtime", () => ({
   createKernelForRequest: mocks.createKernelForRequest,
 }));
 
-vi.mock("@/lib/plugins", () => ({
-  listPluginsWithState: mocks.listPluginsWithState,
-  listPluginsWithSiteState: mocks.listPluginsWithSiteState,
+vi.mock("@/lib/analytics-availability", () => ({
+  hasGraphAnalyticsProvider: mocks.hasGraphAnalyticsProvider,
 }));
 
 describe("GET /api/plugins/admin-ui", () => {
   beforeEach(() => {
     mocks.getSession.mockReset();
     mocks.createKernelForRequest.mockReset();
-    mocks.listPluginsWithState.mockReset();
-    mocks.listPluginsWithSiteState.mockReset();
+    mocks.hasGraphAnalyticsProvider.mockReset();
   });
 
   it("passes shared page/use_type context into admin filters", async () => {
     mocks.getSession.mockResolvedValue({ user: { id: "u1" } });
-    mocks.listPluginsWithSiteState.mockResolvedValue([
-      { id: "analytics-google", enabled: true, siteEnabled: true },
-    ]);
+    mocks.hasGraphAnalyticsProvider.mockResolvedValue(true);
     const contexts: any[] = [];
     const kernel = {
       applyFilters: vi.fn(async (name: string, value: any, context: any) => {

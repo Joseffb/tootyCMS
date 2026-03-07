@@ -1,7 +1,7 @@
 import { createDataDomain, deleteDataDomain, getAllDataDomains, setDataDomainActivation, updateDataDomain } from "@/lib/actions";
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import { getAuthorizedSiteForUser } from "@/lib/authorization";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 import { DEFAULT_CORE_DOMAIN_KEYS } from "@/lib/default-data-domains";
 import TypedDeleteModalSubmit from "@/components/settings/typed-delete-modal-submit";
 import InlineEditableField from "@/components/settings/inline-editable-field";
@@ -18,7 +18,11 @@ export default async function SiteSettingsDomains({ params }: Props) {
     redirect("/login");
   }
   const id = (await params).id;
-  const site = await getAuthorizedSiteForUser(session.user.id, decodeURIComponent(id), "site.settings.write");
+  const { site } = await resolveAuthorizedSiteForUser(
+    session.user.id,
+    decodeURIComponent(id),
+    "site.settings.write",
+  );
   if (!site) {
     notFound();
   }

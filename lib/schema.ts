@@ -4,20 +4,21 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   serial,
   text,
   timestamp,
   uniqueIndex,
-  jsonb
 } from "drizzle-orm/pg-core";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
 const tableName = (name: string) => `${normalizedPrefix}${name}`;
+const networkTableName = (name: string) => tableName(`network_${name}`);
 
-export const users = pgTable(tableName("users"), {
+export const users = pgTable(networkTableName("users"), {
   id: text("id")
     .primaryKey()
     .$defaultFn(() => createId()),
@@ -37,7 +38,7 @@ export const users = pgTable(tableName("users"), {
 });
 
 export const userMeta = pgTable(
-  tableName("user_meta"),
+  networkTableName("user_meta"),
   {
     id: serial("id").primaryKey(),
     userId: text("userId")
@@ -51,17 +52,15 @@ export const userMeta = pgTable(
       .$onUpdate(() => new Date())
       .defaultNow(),
   },
-  (table) => {
-    return {
-      userKeyUnique: uniqueIndex().on(table.userId, table.key),
-      userIdx: index().on(table.userId),
-      keyIdx: index().on(table.key),
-    };
-  },
+  (table) => ({
+    userKeyUnique: uniqueIndex().on(table.userId, table.key),
+    userIdx: index().on(table.userId),
+    keyIdx: index().on(table.key),
+  }),
 );
 
 export const sessions = pgTable(
-  tableName("sessions"),
+  networkTableName("sessions"),
   {
     sessionToken: text("sessionToken").primaryKey(),
     userId: text("userId")
@@ -69,97 +68,25 @@ export const sessions = pgTable(
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
     expires: timestamp("expires", { mode: "date" }).notNull(),
   },
-  (table) => {
-    return {
-      userIdIdx: index().on(table.userId),
-    };
-  },
+  (table) => ({
+    userIdIdx: index().on(table.userId),
+  }),
 );
 
 export const verificationTokens = pgTable(
-  tableName("verificationTokens"),
+  networkTableName("verification_tokens"),
   {
     identifier: text("identifier").notNull(),
     token: text("token").notNull().unique(),
     expires: timestamp("expires", { mode: "date" }).notNull(),
   },
-  (table) => {
-    return {
-      compositePk: primaryKey({ columns: [table.identifier, table.token] }),
-    };
-  },
-);
-
-export const examples = pgTable(tableName("site_examples"), {
-  id: serial("id").primaryKey(),
-  name: text("name"),
-  description: text("description"),
-  domainCount: integer("domainCount"),
-  url: text("url"),
-  image: text("image"),
-  imageBlurhash: text("imageBlurhash"),
-});
-
-export const terms = pgTable(
-  tableName("site_terms"),
-  {
-    id: serial("id").primaryKey(),
-    name: text("name").notNull().unique(),
-    slug: text("slug").notNull().unique(),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
   (table) => ({
-    slugIdx: uniqueIndex().on(table.slug),
-  }),
-);
-
-export const termTaxonomies = pgTable(
-  tableName("site_term_taxonomies"),
-  {
-    id: serial("id").primaryKey(),
-    siteId: text("siteId")
-      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" })
-      .notNull(),
-    termId: integer("termId")
-      .references(() => terms.id)
-      .notNull(),
-    taxonomy: text("taxonomy").notNull(), // category | tag | custom
-    description: text("description"),
-    parentId: integer("parentId"),
-    count: integer("count").default(0).notNull(),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    siteTermTaxonomyUnique: uniqueIndex().on(table.siteId, table.termId, table.taxonomy),
-    siteTaxonomyIdx: index().on(table.siteId, table.taxonomy),
-    taxonomyIdx: index().on(table.taxonomy),
-  }),
-);
-
-export const termRelationships = pgTable(
-  tableName("site_term_relationships"),
-  {
-    objectId: text("objectId").notNull(), // post id / domain-post id
-    termTaxonomyId: integer("termTaxonomyId")
-      .references(() => termTaxonomies.id)
-      .notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.objectId, table.termTaxonomyId] }),
-    termTaxonomyIdx: index().on(table.termTaxonomyId),
+    compositePk: primaryKey({ columns: [table.identifier, table.token] }),
   }),
 );
 
 export const systemSettings = pgTable(
-  tableName("system_settings"),
+  networkTableName("system_settings"),
   {
     key: text("key").primaryKey(),
     value: text("value").notNull(),
@@ -174,7 +101,7 @@ export const systemSettings = pgTable(
 );
 
 export const rbacRoles = pgTable(
-  tableName("rbac_roles"),
+  networkTableName("rbac_roles"),
   {
     role: text("role").primaryKey(),
     capabilities: jsonb("capabilities").notNull().default({}),
@@ -190,90 +117,47 @@ export const rbacRoles = pgTable(
   }),
 );
 
-export const dataDomains = pgTable(
-  tableName("site_data_domains"),
+export const sites = pgTable(
+  networkTableName("sites"),
   {
-    id: serial("id").primaryKey(),
-    key: text("key").notNull().unique(),
-    label: text("label").notNull(),
-    contentTable: text("contentTable").notNull(),
-    metaTable: text("metaTable").notNull(),
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    name: text("name"),
     description: text("description"),
-    settings: jsonb("settings").default({}),
+    logo: text("logo").default(""),
+    font: text("font").default("font-cal").notNull(),
+    image: text("image").default("/tooty-soccer.svg"),
+    imageBlurhash: text("imageBlurhash").default(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAhCAYAAACbffiEAAAACXBIWXMAABYlAAAWJQFJUiTwAAABfUlEQVR4nN3XyZLDIAwE0Pz/v3q3r55JDlSBplsIEI49h76k4opexCK/juP4eXjOT149f2Tf9ySPgcjCc7kdpBTgDPKByKK2bTPFEdMO0RDrusJ0wLRBGCIuelmWJAjkgPGDSIQEMBDCfA2CEPM80+Qwl0JkNxBimiaYGOTUlXYI60YoehzHJDEm7kxjV3whOQTD3AaCuhGKHoYhyb+CBMwjIAFz647kTqyapdV4enGINuDJMSScPmijSwjCaHeLcT77C7EC0C1ugaCTi2HYfAZANgj6Z9A8xY5eiYghDMNQBJNCWhASot0jGsSCUiHWZcSGQjaWWCDaGMOWnsCcn2QhVkRuxqqNxMSdUSElCDbp1hbNOsa6Ugxh7xXauF4DyM1m5BLtCylBXgaxvPXVwEoOBjeIFVODtW74oj1yBQah3E8tyz3SkpolKS9Geo9YMD1QJR1Go4oJkgO1pgbNZq0AOUPChyjvh7vlXaQa+X1UXwKxgHokB2XPxbX+AnijwIU4ahazAAAAAElFTkSuQmCC",
+    ),
+    subdomain: text("subdomain").unique(),
+    customDomain: text("customDomain").unique(),
+    message404: text("message404").default("Blimey! You''ve found a page that doesn''t exist."),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { mode: "date" })
       .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
+      .$onUpdate(() => new Date()),
+    userId: text("userId").references(() => users.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    }),
+    seriesCards: jsonb("seriesCards").default([]),
+    layout: text("layout").default("default"),
+    heroImage: text("heroImage"),
+    heroTitle: text("heroTitle"),
+    heroSubtitle: text("heroSubtitle"),
+    heroCtaText: text("heroCtaText"),
+    heroCtaUrl: text("heroCtaUrl"),
+    isPrimary: boolean("isPrimary").default(false).notNull(),
   },
   (table) => ({
-    keyIdx: uniqueIndex().on(table.key),
-  }),
-);
-
-export const termTaxonomyDomains = pgTable(
-  tableName("site_term_taxonomy_domains"),
-  {
-    dataDomainId: integer("dataDomainId")
-      .references(() => dataDomains.id)
-      .notNull(),
-    termTaxonomyId: integer("termTaxonomyId")
-      .references(() => termTaxonomies.id)
-      .notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.dataDomainId, table.termTaxonomyId] }),
-    termTaxonomyIdx: index().on(table.termTaxonomyId),
-  }),
-);
-
-export const termTaxonomyMeta = pgTable(
-  tableName("site_term_taxonomy_meta"),
-  {
-    id: serial("id").primaryKey(),
-    termTaxonomyId: integer("termTaxonomyId")
-      .references(() => termTaxonomies.id, { onDelete: "cascade", onUpdate: "cascade" })
-      .notNull(),
-    key: text("key").notNull(),
-    value: text("value").notNull().default(""),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    taxonomyIdx: index().on(table.termTaxonomyId),
-    taxonomyKeyUnique: uniqueIndex().on(table.termTaxonomyId, table.key),
-  }),
-);
-
-export const siteDataDomains = pgTable(
-  tableName("site_data_domain_assignments"),
-  {
-    siteId: text("siteId")
-      .references(() => sites.id)
-      .notNull(),
-    dataDomainId: integer("dataDomainId")
-      .references(() => dataDomains.id)
-      .notNull(),
-    isActive: boolean("isActive").default(true).notNull(),
-    description: text("description").notNull().default(""),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.siteId, table.dataDomainId] }),
-    siteIdIdx: index().on(table.siteId),
-    dataDomainIdIdx: index().on(table.dataDomainId),
+    userIdIdx: index().on(table.userId),
   }),
 );
 
 export const communicationMessages = pgTable(
-  tableName("site_communication_messages"),
+  networkTableName("communication_messages"),
   {
     id: text("id")
       .primaryKey()
@@ -282,12 +166,12 @@ export const communicationMessages = pgTable(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    channel: text("channel").notNull(), // email | sms | mms | com-x
+    channel: text("channel").notNull(),
     to: text("to").notNull(),
     subject: text("subject"),
     body: text("body").notNull(),
-    category: text("category").notNull().default("transactional"), // transactional | marketing
-    status: text("status").notNull().default("queued"), // queued | retrying | sent | failed | dead | logged
+    category: text("category").notNull().default("transactional"),
+    status: text("status").notNull().default("queued"),
     providerId: text("providerId"),
     externalId: text("externalId"),
     attemptCount: integer("attemptCount").notNull().default(0),
@@ -313,43 +197,8 @@ export const communicationMessages = pgTable(
   }),
 );
 
-export const comments = pgTable(
-  tableName("site_comments"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    siteId: text("siteId")
-      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" })
-      .notNull(),
-    contextType: text("contextType").notNull(), // entry | group | discussion
-    contextId: text("contextId").notNull(),
-    authorId: text("authorId").references(() => users.id, {
-      onDelete: "set null",
-      onUpdate: "cascade",
-    }),
-    body: text("body").notNull(),
-    status: text("status").notNull().default("pending"), // pending | approved | rejected | spam | deleted
-    parentId: text("parentId"),
-    metadata: jsonb("metadata").notNull().default({}),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    siteIdx: index().on(table.siteId),
-    contextIdx: index().on(table.siteId, table.contextType, table.contextId),
-    statusIdx: index().on(table.status),
-    authorIdx: index().on(table.authorId),
-    parentIdx: index().on(table.parentId),
-    createdAtIdx: index().on(table.createdAt),
-  }),
-);
-
 export const communicationAttempts = pgTable(
-  tableName("site_communication_attempts"),
+  networkTableName("communication_attempts"),
   {
     id: serial("id").primaryKey(),
     messageId: text("messageId")
@@ -357,7 +206,7 @@ export const communicationAttempts = pgTable(
       .notNull(),
     providerId: text("providerId").notNull(),
     eventId: text("eventId"),
-    status: text("status").notNull(), // sent | failed | logged
+    status: text("status").notNull(),
     error: text("error"),
     response: jsonb("response").notNull().default({}),
     createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
@@ -372,7 +221,7 @@ export const communicationAttempts = pgTable(
 );
 
 export const webcallbackEvents = pgTable(
-  tableName("site_webcallback_events"),
+  networkTableName("webcallback_events"),
   {
     id: serial("id").primaryKey(),
     siteId: text("siteId").references(() => sites.id, {
@@ -381,7 +230,7 @@ export const webcallbackEvents = pgTable(
     }),
     handlerId: text("handlerId").notNull(),
     pluginId: text("pluginId"),
-    status: text("status").notNull().default("received"), // received | processed | failed | ignored
+    status: text("status").notNull().default("received"),
     requestBody: text("requestBody").notNull().default(""),
     requestHeaders: jsonb("requestHeaders").notNull().default({}),
     requestQuery: jsonb("requestQuery").notNull().default({}),
@@ -402,7 +251,7 @@ export const webcallbackEvents = pgTable(
 );
 
 export const webhookSubscriptions = pgTable(
-  tableName("site_webhook_subscriptions"),
+  networkTableName("webhook_subscriptions"),
   {
     id: serial("id").primaryKey(),
     siteId: text("siteId").references(() => sites.id, {
@@ -431,7 +280,7 @@ export const webhookSubscriptions = pgTable(
 );
 
 export const webhookDeliveries = pgTable(
-  tableName("site_webhook_deliveries"),
+  networkTableName("webhook_deliveries"),
   {
     id: text("id")
       .primaryKey()
@@ -446,7 +295,7 @@ export const webhookDeliveries = pgTable(
     eventId: text("eventId").notNull(),
     eventName: text("eventName").notNull(),
     endpointUrl: text("endpointUrl").notNull(),
-    status: text("status").notNull().default("queued"), // queued | retrying | sent | failed | dead
+    status: text("status").notNull().default("queued"),
     attemptCount: integer("attemptCount").notNull().default(0),
     maxAttempts: integer("maxAttempts").notNull().default(4),
     nextAttemptAt: timestamp("nextAttemptAt", { mode: "date" }),
@@ -471,432 +320,8 @@ export const webhookDeliveries = pgTable(
   }),
 );
 
-export const posts = pgTable(
-  tableName("site_posts"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    title: text("title"),
-    description: text("description"),
-    content: text("content"),
-    password: text("password").default(""),
-    layout: text("layout"),
-    slug: text("slug")
-      .notNull()
-      .$defaultFn(() => createId()),
-    image: text("image").default(
-      "",
-    ),
-    imageBlurhash: text("imageBlurhash").default(
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAhCAYAAACbffiEAAAACXBIWXMAABYlAAAWJQFJUiTwAAABfUlEQVR4nN3XyZLDIAwE0Pz/v3q3r55JDlSBplsIEI49h76k4opexCK/juP4eXjOT149f2Tf9ySPgcjCc7kdpBTgDPKByKK2bTPFEdMO0RDrusJ0wLRBGCIuelmWJAjkgPGDSIQEMBDCfA2CEPM80+Qwl0JkNxBimiaYGOTUlXYI60YoehzHJDEm7kxjV3whOQTD3AaCuhGKHoYhyb+CBMwjIAFz647kTqyapdV4enGINuDJMSScPmijSwjCaHeLcT77C7EC0C1ugaCTi2HYfAZANgj6Z9A8xY5eiYghDMNQBJNCWhASot0jGsSCUiHWZcSGQjaWWCDaGMOWnsCcn2QhVkRuxqqNxMSdUSElCDbp1hbNOsa6Ugxh7xXauF4DyM1m5BLtCylBXgaxvPXVwEoOBjeIFVODtW74oj1yBQah3E8tyz3SkpolKS9Geo9YMD1QJR1Go4oJkgO1pgbNZq0AOUPChyjvh7vlXaQa+X1UXwKxgHokB2XPxbX+AnijwIU4ahazAAAAAElFTkSuQmCC",
-    ),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date()),
-    published: boolean("published").default(false).notNull(),
-    siteId: text("siteId").references(() => sites.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-    userId: text("userId").references(() => users.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-  },
-  (table) => {
-    return {
-      siteIdIdx: index().on(table.siteId),
-      userIdIdx: index().on(table.userId),
-      slugSiteIdKey: uniqueIndex().on(table.slug, table.siteId),
-    };
-  },
-);
-
-export const domainPosts = pgTable(
-  tableName("site_domain_posts"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    dataDomainId: integer("dataDomainId")
-      .references(() => dataDomains.id)
-      .notNull(),
-    title: text("title"),
-    description: text("description"),
-    content: text("content"),
-    password: text("password").default(""),
-    usePassword: boolean("usePassword").notNull().default(false),
-    layout: text("layout"),
-    slug: text("slug")
-      .notNull()
-      .$defaultFn(() => createId()),
-    image: text("image").default(
-      "",
-    ),
-    imageBlurhash: text("imageBlurhash").default(
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAhCAYAAACbffiEAAAACXBIWXMAABYlAAAWJQFJUiTwAAABfUlEQVR4nN3XyZLDIAwE0Pz/v3q3r55JDlSBplsIEI49h76k4opexCK/juP4eXjOT149f2Tf9ySPgcjCc7kdpBTgDPKByKK2bTPFEdMO0RDrusJ0wLRBGCIuelmWJAjkgPGDSIQEMBDCfA2CEPM80+Qwl0JkNxBimiaYGOTUlXYI60YoehzHJDEm7kxjV3whOQTD3AaCuhGKHoYhyb+CBMwjIAFz647kTqyapdV4enGINuDJMSScPmijSwjCaHeLcT77C7EC0C1ugaCTi2HYfAZANgj6Z9A8xY5eiYghDMNQBJNCWhASot0jGsSCUiHWZcSGQjaWWCDaGMOWnsCcn2QhVkRuxqqNxMSdUSElCDbp1hbNOsa6Ugxh7xXauF4DyM1m5BLtCylBXgaxvPXVwEoOBjeIFVODtW74oj1yBQah3E8tyz3SkpolKS9Geo9YMD1QJR1Go4oJkgO1pgbNZq0AOUPChyjvh7vlXaQa+X1UXwKxgHokB2XPxbX+AnijwIU4ahazAAAAAElFTkSuQmCC",
-    ),
-    published: boolean("published").default(false).notNull(),
-    siteId: text("siteId").references(() => sites.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-    userId: text("userId").references(() => users.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date()),
-  },
-  (table) => ({
-    dataDomainIdIdx: index().on(table.dataDomainId),
-    slugDomainIdKey: uniqueIndex().on(table.slug, table.dataDomainId),
-    siteIdIdx: index().on(table.siteId),
-    siteDomainPublishedIdx: index().on(table.siteId, table.dataDomainId, table.published, table.updatedAt),
-    siteSlugIdx: index().on(table.siteId, table.slug),
-    siteDomainSlugIdx: index().on(table.siteId, table.dataDomainId, table.slug),
-  }),
-);
-
-export const domainPostMeta = pgTable(
-  tableName("site_domain_post_meta"),
-  {
-    id: serial("id").primaryKey(),
-    domainPostId: text("domainPostId")
-      .references(() => domainPosts.id)
-      .notNull(),
-    key: text("key").notNull(),
-    value: text("value").notNull(),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    domainPostIdx: index().on(table.domainPostId),
-    domainPostKeyUnique: uniqueIndex().on(table.domainPostId, table.key),
-  }),
-);
-
-export const media = pgTable(
-  tableName("site_media"),
-  {
-    id: serial("id").primaryKey(),
-    siteId: text("siteId").references(() => sites.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-    userId: text("userId").references(() => users.id, {
-      onDelete: "set null",
-      onUpdate: "cascade",
-    }),
-    provider: text("provider").notNull().default("blob"), // blob | s3
-    bucket: text("bucket"),
-    objectKey: text("objectKey").notNull(),
-    url: text("url").notNull(),
-    label: text("label"),
-    altText: text("altText"),
-    caption: text("caption"),
-    description: text("description"),
-    mimeType: text("mimeType"),
-    size: integer("size"),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    siteIdx: index().on(table.siteId),
-    userIdx: index().on(table.userId),
-    objectKeyIdx: uniqueIndex().on(table.objectKey),
-    createdAtIdx: index().on(table.createdAt),
-    siteCreatedAtIdx: index().on(table.siteId, table.createdAt),
-  }),
-);
-
-export const siteMenus = pgTable(
-  tableName("site_menus"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    siteId: text("siteId")
-      .notNull()
-      .references(() => sites.id, {
-        onDelete: "cascade",
-        onUpdate: "cascade",
-      }),
-    key: text("key").notNull(),
-    title: text("title").notNull(),
-    description: text("description").default("").notNull(),
-    location: text("location"),
-    sortOrder: integer("sortOrder").notNull().default(10),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    siteKeyUnique: uniqueIndex().on(table.siteId, table.key),
-    siteLocationIdx: index().on(table.siteId, table.location),
-    siteOrderIdx: index().on(table.siteId, table.sortOrder),
-  }),
-);
-
-export const siteMenuItems = pgTable(
-  tableName("site_menu_items"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    menuId: text("menuId")
-      .notNull()
-      .references(() => siteMenus.id, {
-        onDelete: "cascade",
-        onUpdate: "cascade",
-      }),
-    parentId: text("parentId"),
-    title: text("title").notNull(),
-    href: text("href").notNull(),
-    description: text("description").default("").notNull(),
-    mediaId: integer("mediaId").references(() => media.id, {
-      onDelete: "set null",
-      onUpdate: "cascade",
-    }),
-    target: text("target"),
-    rel: text("rel"),
-    external: boolean("external").notNull().default(false),
-    enabled: boolean("enabled").notNull().default(true),
-    sortOrder: integer("sortOrder").notNull().default(10),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    menuIdx: index().on(table.menuId),
-    parentIdx: index().on(table.parentId),
-    menuOrderIdx: index().on(table.menuId, table.sortOrder),
-  }),
-);
-
-export const siteMenuItemMeta = pgTable(
-  tableName("site_menu_item_meta"),
-  {
-    id: serial("id").primaryKey(),
-    menuItemId: text("menuItemId")
-      .notNull()
-      .references(() => siteMenuItems.id, {
-        onDelete: "cascade",
-        onUpdate: "cascade",
-      }),
-    key: text("key").notNull(),
-    value: text("value").notNull().default(""),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    menuItemIdx: index().on(table.menuItemId),
-    menuItemKeyUnique: uniqueIndex().on(table.menuItemId, table.key),
-  }),
-);
-
-export const postMeta = pgTable(
-  tableName("post_meta"),
-  {
-    id: serial("id").primaryKey(),
-    postId: text("post_id").references(() => posts.id).notNull(),
-    key: text("key").notNull(),
-    value: text("value").notNull(),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    postKeyUnique: uniqueIndex().on(table.postId, table.key),
-    postIdIdx: index().on(table.postId),
-    keyIdx: index().on(table.key),
-  }),
-);
-
-export const postsRelations = relations(posts, ({ one, many }) => ({
-  site: one(sites, { references: [sites.id], fields: [posts.siteId] }),
-  user: one(users, { references: [users.id], fields: [posts.userId] }),
-  meta: many(postMeta),
-}));
-
-export const postMetaRelations = relations(postMeta, ({ one }) => ({
-  post: one(posts, { references: [posts.id], fields: [postMeta.postId] }),
-}));
-
-export const termsRelations = relations(terms, ({ many }) => ({
-  taxonomies: many(termTaxonomies),
-}));
-
-export const termTaxonomiesRelations = relations(termTaxonomies, ({ one, many }) => ({
-  term: one(terms, { references: [terms.id], fields: [termTaxonomies.termId] }),
-  relationships: many(termRelationships),
-  domains: many(termTaxonomyDomains),
-  meta: many(termTaxonomyMeta),
-}));
-
-export const termRelationshipsRelations = relations(termRelationships, ({ one }) => ({
-  taxonomy: one(termTaxonomies, { references: [termTaxonomies.id], fields: [termRelationships.termTaxonomyId] }),
-}));
-
-export const dataDomainsRelations = relations(dataDomains, ({ many }) => ({
-  posts: many(posts),
-  domainPosts: many(domainPosts),
-  taxonomies: many(termTaxonomyDomains),
-  sites: many(siteDataDomains),
-}));
-
-export const termTaxonomyDomainsRelations = relations(termTaxonomyDomains, ({ one }) => ({
-  dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [termTaxonomyDomains.dataDomainId] }),
-  taxonomy: one(termTaxonomies, { references: [termTaxonomies.id], fields: [termTaxonomyDomains.termTaxonomyId] }),
-}));
-
-export const termTaxonomyMetaRelations = relations(termTaxonomyMeta, ({ one }) => ({
-  taxonomy: one(termTaxonomies, { references: [termTaxonomies.id], fields: [termTaxonomyMeta.termTaxonomyId] }),
-}));
-
-export const siteDataDomainsRelations = relations(siteDataDomains, ({ one }) => ({
-  site: one(sites, { references: [sites.id], fields: [siteDataDomains.siteId] }),
-  dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [siteDataDomains.dataDomainId] }),
-}));
-
-export const communicationMessagesRelations = relations(communicationMessages, ({ one, many }) => ({
-  site: one(sites, { references: [sites.id], fields: [communicationMessages.siteId] }),
-  createdByUser: one(users, { references: [users.id], fields: [communicationMessages.createdByUserId] }),
-  attempts: many(communicationAttempts),
-}));
-
-export const commentsRelations = relations(comments, ({ one }) => ({
-  site: one(sites, { references: [sites.id], fields: [comments.siteId] }),
-  author: one(users, { references: [users.id], fields: [comments.authorId] }),
-}));
-
-export const communicationAttemptsRelations = relations(communicationAttempts, ({ one }) => ({
-  message: one(communicationMessages, { references: [communicationMessages.id], fields: [communicationAttempts.messageId] }),
-}));
-
-export const domainPostsRelations = relations(domainPosts, ({ one, many }) => ({
-  dataDomain: one(dataDomains, { references: [dataDomains.id], fields: [domainPosts.dataDomainId] }),
-  site: one(sites, { references: [sites.id], fields: [domainPosts.siteId] }),
-  user: one(users, { references: [users.id], fields: [domainPosts.userId] }),
-  meta: many(domainPostMeta),
-}));
-
-export const domainPostMetaRelations = relations(domainPostMeta, ({ one }) => ({
-  domainPost: one(domainPosts, { references: [domainPosts.id], fields: [domainPostMeta.domainPostId] }),
-}));
-
-export const sites = pgTable(
-  tableName("sites"),
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => createId()),
-    name: text("name"),
-    description: text("description"),
-    logo: text("logo").default(""),
-    font: text("font").default("font-cal").notNull(),
-    image: text("image").default("/tooty-soccer.svg"),
-    imageBlurhash: text("imageBlurhash").default(
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAhCAYAAACbffiEAAAACXBIWXMAABYlAAAWJQFJUiTwAAABfUlEQVR4nN3XyZLDIAwE0Pz/v3q3r55JDlSBplsIEI49h76k4opexCK/juP4eXjOT149f2Tf9ySPgcjCc7kdpBTgDPKByKK2bTPFEdMO0RDrusJ0wLRBGCIuelmWJAjkgPGDSIQEMBDCfA2CEPM80+Qwl0JkNxBimiaYGOTUlXYI60YoehzHJDEm7kxjV3whOQTD3AaCuhGKHoYhyb+CBMwjIAFz647kTqyapdV4enGINuDJMSScPmijSwjCaHeLcT77C7EC0C1ugaCTi2HYfAZANgj6Z9A8xY5eiYghDMNQBJNCWhASot0jGsSCUiHWZcSGQjaWWCDaGMOWnsCcn2QhVkRuxqqNxMSdUSElCDbp1hbNOsa6Ugxh7xXauF4DyM1m5BLtCylBXgaxvPXVwEoOBjeIFVODtW74oj1yBQah3E8tyz3SkpolKS9Geo9YMD1QJR1Go4oJkgO1pgbNZq0AOUPChyjvh7vlXaQa+X1UXwKxgHokB2XPxbX+AnijwIU4ahazAAAAAElFTkSuQmCC",
-    ),
-    subdomain: text("subdomain").unique(),
-    customDomain: text("customDomain").unique(),
-    message404: text("message404").default(
-      "Blimey! You''ve found a page that doesn''t exist.",
-    ),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date()),
-    userId: text("userId").references(() => users.id, {
-      onDelete: "cascade",
-      onUpdate: "cascade",
-    }),
-    seriesCards: jsonb("seriesCards").default([]),
-    layout: text("layout").default(
-      "default",
-    ),
-    heroImage: text("heroImage"),
-    heroTitle: text("heroTitle"),
-    heroSubtitle: text("heroSubtitle"),
-    heroCtaText: text("heroCtaText"),
-    heroCtaUrl: text("heroCtaUrl"),
-    isPrimary: boolean("isPrimary").default(false).notNull(),
-  },
-  (table) => {
-    return {
-      userIdIdx: index().on(table.userId),
-    };
-  },
-);
-
-export const siteUserTableRegistry = pgTable(
-  tableName("site_user_table_registry"),
-  {
-    siteId: text("siteId")
-      .primaryKey()
-      .references(() => sites.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    tableIndex: integer("tableIndex").notNull().unique(),
-    createdAt: timestamp("createdAt", { mode: "date" }).defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt", { mode: "date" })
-      .notNull()
-      .$onUpdate(() => new Date())
-      .defaultNow(),
-  },
-  (table) => ({
-    tableIndexIdx: index().on(table.tableIndex),
-  }),
-);
-
-export const sitesRelations = relations(sites, ({ one, many }) => ({
-  posts: many(posts),
-  user: one(users, { references: [users.id], fields: [sites.userId] }),
-  dataDomains: many(siteDataDomains),
-  media: many(media),
-  menus: many(siteMenus),
-  comments: many(comments),
-}));
-
-export const siteMenusRelations = relations(siteMenus, ({ one, many }) => ({
-  site: one(sites, { references: [sites.id], fields: [siteMenus.siteId] }),
-  items: many(siteMenuItems),
-}));
-
-export const siteMenuItemsRelations = relations(siteMenuItems, ({ one, many }) => ({
-  menu: one(siteMenus, { references: [siteMenus.id], fields: [siteMenuItems.menuId] }),
-  media: one(media, { references: [media.id], fields: [siteMenuItems.mediaId] }),
-  meta: many(siteMenuItemMeta),
-}));
-
-export const siteMenuItemMetaRelations = relations(siteMenuItemMeta, ({ one }) => ({
-  menuItem: one(siteMenuItems, { references: [siteMenuItems.id], fields: [siteMenuItemMeta.menuItemId] }),
-}));
-
-export const sessionsRelations = relations(sessions, ({ one }) => ({
-  user: one(users, { references: [users.id], fields: [sessions.userId] }),
-}));
-
 export const accounts = pgTable(
-  tableName("accounts"),
+  networkTableName("accounts"),
   {
     userId: text("userId")
       .notNull()
@@ -915,15 +340,23 @@ export const accounts = pgTable(
     oauth_token_secret: text("oauth_token_secret"),
     oauth_token: text("oauth_token"),
   },
-  (table) => {
-    return {
-      userIdIdx: index().on(table.userId),
-      compositePk: primaryKey({
-        columns: [table.provider, table.providerAccountId],
-      }),
-    };
-  },
+  (table) => ({
+    userIdIdx: index().on(table.userId),
+    compositePk: primaryKey({ columns: [table.provider, table.providerAccountId] }),
+  }),
 );
+
+export const sitesRelations = relations(sites, ({ one, many }) => ({
+  user: one(users, { references: [users.id], fields: [sites.userId] }),
+  communicationMessages: many(communicationMessages),
+  webcallbackEvents: many(webcallbackEvents),
+  webhookSubscriptions: many(webhookSubscriptions),
+  webhookDeliveries: many(webhookDeliveries),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, { references: [users.id], fields: [sessions.userId] }),
+}));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
   user: one(users, { references: [users.id], fields: [accounts.userId] }),
@@ -933,25 +366,47 @@ export const userRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
   sites: many(sites),
-  posts: many(posts),
-  media: many(media),
-  comments: many(comments),
   userMeta: many(userMeta),
+  communicationMessages: many(communicationMessages),
 }));
 
 export const userMetaRelations = relations(userMeta, ({ one }) => ({
   user: one(users, { references: [users.id], fields: [userMeta.userId] }),
 }));
 
-export const siteUserTableRegistryRelations = relations(siteUserTableRegistry, ({ one }) => ({
-  site: one(sites, { references: [sites.id], fields: [siteUserTableRegistry.siteId] }),
+export const communicationMessagesRelations = relations(communicationMessages, ({ one, many }) => ({
+  site: one(sites, { references: [sites.id], fields: [communicationMessages.siteId] }),
+  createdByUser: one(users, { references: [users.id], fields: [communicationMessages.createdByUserId] }),
+  attempts: many(communicationAttempts),
 }));
 
-export const mediaRelations = relations(media, ({ one }) => ({
-  site: one(sites, { references: [sites.id], fields: [media.siteId] }),
-  user: one(users, { references: [users.id], fields: [media.userId] }),
+export const communicationAttemptsRelations = relations(communicationAttempts, ({ one }) => ({
+  message: one(communicationMessages, { references: [communicationMessages.id], fields: [communicationAttempts.messageId] }),
+}));
+
+export const webcallbackEventsRelations = relations(webcallbackEvents, ({ one }) => ({
+  site: one(sites, { references: [sites.id], fields: [webcallbackEvents.siteId] }),
+}));
+
+export const webhookSubscriptionsRelations = relations(webhookSubscriptions, ({ one, many }) => ({
+  site: one(sites, { references: [sites.id], fields: [webhookSubscriptions.siteId] }),
+  deliveries: many(webhookDeliveries),
+}));
+
+export const webhookDeliveriesRelations = relations(webhookDeliveries, ({ one }) => ({
+  site: one(sites, { references: [sites.id], fields: [webhookDeliveries.siteId] }),
+  subscription: one(webhookSubscriptions, {
+    references: [webhookSubscriptions.id],
+    fields: [webhookDeliveries.subscriptionId],
+  }),
 }));
 
 export type SelectSite = typeof sites.$inferSelect;
-export type SelectPost = typeof posts.$inferSelect;
-export type SelectExample = typeof examples.$inferSelect;
+export type SelectPost = {
+  slug: string;
+  image: string | null;
+  imageBlurhash: string | null;
+  title: string | null;
+  description: string | null;
+  createdAt: Date;
+};

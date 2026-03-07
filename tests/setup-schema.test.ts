@@ -5,9 +5,9 @@ import {
 } from "@/lib/setup-schema";
 
 describe("setup schema table expectations", () => {
-  it("checks the live system settings table instead of the removed cms settings name", () => {
-    expect(REQUIRED_SETUP_TABLE_SUFFIXES).toContain("system_settings");
-    expect(ALL_EXPECTED_SETUP_TABLE_SUFFIXES).toContain("system_settings");
+  it("checks the live network system settings table instead of the removed cms settings name", () => {
+    expect(REQUIRED_SETUP_TABLE_SUFFIXES).toContain("network_system_settings");
+    expect(ALL_EXPECTED_SETUP_TABLE_SUFFIXES).toContain("network_system_settings");
     expect(REQUIRED_SETUP_TABLE_SUFFIXES).not.toContain("cms_settings");
     expect(ALL_EXPECTED_SETUP_TABLE_SUFFIXES).not.toContain("cms_settings");
   });

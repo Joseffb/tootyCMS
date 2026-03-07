@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
     createComment: vi.fn(),
     hasPostPasswordAccess: vi.fn(),
     cookies: vi.fn(),
+    getSiteDomainPostById: vi.fn(),
     db: {
       query: {
         domainPosts: {
@@ -62,6 +63,10 @@ vi.mock("@/lib/db", () => ({
   default: mocks.db,
 }));
 
+vi.mock("@/lib/site-domain-post-store", () => ({
+  getSiteDomainPostById: mocks.getSiteDomainPostById,
+}));
+
 import { GET, POST } from "@/app/api/comments/route";
 
 describe("comments route identity enforcement", () => {
@@ -75,6 +80,7 @@ describe("comments route identity enforcement", () => {
     mocks.createComment.mockReset();
     mocks.hasPostPasswordAccess.mockReset();
     mocks.cookies.mockReset();
+    mocks.getSiteDomainPostById.mockReset();
     mocks.db.query.domainPosts.findFirst.mockReset();
     mocks.db.query.userMeta.findFirst.mockReset();
     mocks.db.query.users.findFirst.mockReset();
@@ -91,6 +97,7 @@ describe("comments route identity enforcement", () => {
     mocks.listComments.mockResolvedValue([]);
     mocks.hasPostPasswordAccess.mockResolvedValue(false);
     mocks.cookies.mockResolvedValue(new Map());
+    mocks.getSiteDomainPostById.mockResolvedValue(null);
     mocks.db.query.domainPosts.findFirst.mockResolvedValue(null);
     mocks.verifyThemeBridgeToken.mockResolvedValue(null);
   });

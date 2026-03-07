@@ -31,9 +31,16 @@ function getTraceTier() {
   return "Dev";
 }
 
+function shouldEmitTraceToConsole(tier: string) {
+  if (tier !== "Test") return true;
+  const raw = String(process.env.TRACE_TEST_CONSOLE || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function traceEdge(scope: string, message: string, payload?: unknown) {
   if (!isDebugModeEdge()) return;
   const tier = getTraceTier();
+  if (!shouldEmitTraceToConsole(tier)) return;
   if (payload === undefined) {
     console.debug(`[trace:${tier}:${scope}] ${message}`);
     return;
@@ -48,18 +55,6 @@ function hasSessionCookie(req: NextRequest) {
       req.cookies.get("__Secure-authjs.session-token")?.value ||
       req.cookies.get("authjs.session-token")?.value,
   );
-}
-
-function isAllowedAppCallback(rawUrl: string) {
-  const value = String(rawUrl || "").trim();
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    const hostname = String(url.hostname || "").toLowerCase();
-    return hostname === "localhost" || hostname.endsWith(".localhost");
-  } catch {
-    return false;
-  }
 }
 
 function readLastSiteId(req: NextRequest) {
@@ -222,34 +217,20 @@ export default async function proxy(req: NextRequest) {
       traceEdge("middleware", "redirect unauthenticated admin-path user", { traceId, to: `${externalAdminBase}/login` });
       return redirectWithTrace(`${externalAdminBase}/login`);
     }
-    if (isAuthenticated && appPath === "/login") {
-      const callbackUrl = String(req.nextUrl.searchParams.get("callbackUrl") || "").trim();
-      if (callbackUrl && isAllowedAppCallback(callbackUrl)) {
-        traceEdge("middleware", "redirect authenticated admin-path user to callback", { traceId, to: callbackUrl });
-        const res = NextResponse.redirect(callbackUrl);
-        res.headers.set("x-trace-id", traceId);
-        return res;
-      }
-      traceEdge("middleware", "redirect authenticated admin-path user", { traceId, to: externalAdminBase });
-      return redirectWithTrace(externalAdminBase);
+    if (appPath === "/login") {
+      traceEdge("middleware", "preserve admin login path for server auth resolution", {
+        traceId,
+        hasCookie,
+        isAuthenticated,
+      });
+      return rewriteWithTrace(`/app/login${searchParams ? `?${searchParams}` : ""}`);
     }
     if (isAuthenticated && (appPath === "/" || appPath === "")) {
-      const lastAppPath = readLastAppPath(req);
-      if (lastAppPath) {
-        traceEdge("middleware", "redirect admin-path root to last path", {
-          traceId,
-          to: `${externalAdminBase}${lastAppPath}`,
-        });
-        return redirectWithTrace(`${externalAdminBase}${lastAppPath}`);
-      }
-      const lastSiteId = readLastSiteId(req);
-      if (lastSiteId) {
-        traceEdge("middleware", "redirect admin-path root to last site", {
-          traceId,
-          to: `${externalAdminBase}/site/${lastSiteId}`,
-        });
-        return redirectWithTrace(`${externalAdminBase}/site/${lastSiteId}`);
-      }
+      traceEdge("middleware", "preserve admin-path root for server dashboard routing", {
+        traceId,
+        to: "/app",
+      });
+      return rewriteWithTrace("/app");
     }
     if (
       isAuthenticated &&
@@ -277,6 +258,15 @@ export default async function proxy(req: NextRequest) {
     const cleanPath = normalizeAdminAliasPath(path, adminPathAlias);
     const target = `/app/${adminPathAlias}${cleanPath === "/" ? "" : cleanPath}${searchParams ? `?${searchParams}` : ""}`;
     traceEdge("middleware", "redirect internal app path to admin alias", { traceId, to: target });
+    return redirectWithTrace(target);
+  }
+
+  if (isRootDomain && path === "/login") {
+    const target = `${externalAdminBase}/login${searchParams ? `?${searchParams}` : ""}`;
+    traceEdge("middleware", "redirect root login path to canonical admin login", {
+      traceId,
+      to: target,
+    });
     return redirectWithTrace(target);
   }
 

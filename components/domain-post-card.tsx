@@ -5,6 +5,8 @@ import { getSitePublicUrl } from "@/lib/site-url";
 import Link from "next/link";
 import { DEFAULT_TOOTY_IMAGE } from "@/lib/tooty-images";
 
+type DomainPostCardSite = Pick<SelectSite, "id" | "subdomain" | "customDomain" | "isPrimary">;
+
 type DomainPostCardData = {
   id: string;
   title: string | null;
@@ -13,7 +15,7 @@ type DomainPostCardData = {
   image: string | null;
   imageBlurhash: string | null;
   published: boolean;
-  site?: SelectSite | null;
+  site?: DomainPostCardSite | null;
 };
 
 export default function DomainPostCard({

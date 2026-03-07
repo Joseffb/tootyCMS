@@ -6,7 +6,7 @@ import { getSiteUrlSetting } from "@/lib/cms-config";
 import CreateDomainPostButton from "@/components/create-domain-post-button";
 import DomainPosts from "@/components/domain-posts";
 import { pluralizeLabel } from "@/lib/data-domain-labels";
-import { getAuthorizedSiteForAnyCapability } from "@/lib/authorization";
+import { resolveAuthorizedSiteForAnyCapability } from "@/lib/admin-site-selection";
 
 type Props = {
   params: Promise<{
@@ -25,7 +25,7 @@ export default async function SiteDomainPosts({ params }: Props) {
   const siteId = decodeURIComponent(id);
   const resolvedDomainKey = decodeURIComponent(domainKey);
 
-  const site = await getAuthorizedSiteForAnyCapability(session.user.id, siteId, [
+  const { site } = await resolveAuthorizedSiteForAnyCapability(session.user.id, siteId, [
     "site.domain.list",
     "site.content.read",
     "site.content.create",
@@ -36,8 +36,9 @@ export default async function SiteDomainPosts({ params }: Props) {
   if (!site) {
     notFound();
   }
+  const effectiveSiteId = site.id;
 
-  const domain = await getSiteDataDomainByKey(siteId, resolvedDomainKey);
+  const domain = await getSiteDataDomainByKey(effectiveSiteId, resolvedDomainKey);
   if (!domain) {
     notFound();
   }
@@ -81,9 +82,9 @@ export default async function SiteDomainPosts({ params }: Props) {
             {publicHost} ↗
           </a>
         </div>
-        <CreateDomainPostButton siteId={siteId} domainKey={resolvedDomainKey} domainLabel={domain.label} />
+        <CreateDomainPostButton siteId={effectiveSiteId} domainKey={resolvedDomainKey} domainLabel={domain.label} />
       </div>
-      <DomainPosts siteId={siteId} domainKey={resolvedDomainKey} />
+      <DomainPosts siteId={effectiveSiteId} domainKey={resolvedDomainKey} />
     </>
   );
 }

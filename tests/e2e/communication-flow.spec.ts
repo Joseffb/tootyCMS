@@ -4,12 +4,13 @@ import { hashPassword } from "../../lib/password";
 import { encode } from "next-auth/jwt";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
-import { getAppHostname, getAppOrigin } from "./helpers/env";
+import { getAppOrigin } from "./helpers/env";
+import { addSessionTokenCookie } from "./helpers/auth";
+import { ensureNetworkSite, ensureNetworkUser, networkTableName, quotedIdentifier } from "./helpers/storage";
 
 const runId = `e2e-comm-${randomUUID()}`;
 const runCommunicationE2E = process.env.RUN_COMMUNICATION_E2E === "1";
 const appOrigin = getAppOrigin();
-const appHostname = getAppHostname();
 const userId = `${runId}-admin`;
 const siteId = `${runId}-site`;
 const email = `${runId}@example.com`;
@@ -23,8 +24,8 @@ async function upsertSiteSetting(siteId: string, key: string, value: string) {
 }
 
 async function ensureSchema() {
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_communication_messages (
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("communication_messages"))} (
       "id" text PRIMARY KEY,
       "siteId" text NULL,
       "channel" text NOT NULL,
@@ -44,9 +45,9 @@ async function ensureSchema() {
       "createdAt" timestamp NOT NULL DEFAULT now(),
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_communication_attempts (
+  `);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("communication_attempts"))} (
       "id" serial PRIMARY KEY,
       "messageId" text NOT NULL,
       "providerId" text NOT NULL,
@@ -56,9 +57,9 @@ async function ensureSchema() {
       "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
       "createdAt" timestamp NOT NULL DEFAULT now()
     )
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_webcallback_events (
+  `);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webcallback_events"))} (
       "id" serial PRIMARY KEY,
       "siteId" text NULL,
       "handlerId" text NOT NULL,
@@ -72,11 +73,11 @@ async function ensureSchema() {
       "createdAt" timestamp NOT NULL DEFAULT now(),
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
-  `;
-  await sql`ALTER TABLE tooty_communication_attempts ADD COLUMN IF NOT EXISTS "eventId" text NULL`;
-  await sql`ALTER TABLE tooty_webcallback_events ADD COLUMN IF NOT EXISTS "siteId" text NULL`;
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_webhook_subscriptions (
+  `);
+  await sql.query(`ALTER TABLE ${quotedIdentifier(networkTableName("communication_attempts"))} ADD COLUMN IF NOT EXISTS "eventId" text NULL`);
+  await sql.query(`ALTER TABLE ${quotedIdentifier(networkTableName("webcallback_events"))} ADD COLUMN IF NOT EXISTS "siteId" text NULL`);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webhook_subscriptions"))} (
       "id" serial PRIMARY KEY,
       "siteId" text NULL,
       "eventName" text NOT NULL,
@@ -89,9 +90,9 @@ async function ensureSchema() {
       "createdAt" timestamp NOT NULL DEFAULT now(),
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_webhook_deliveries (
+  `);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webhook_deliveries"))} (
       "id" text PRIMARY KEY,
       "subscriptionId" integer NOT NULL,
       "siteId" text NULL,
@@ -110,7 +111,7 @@ async function ensureSchema() {
       "createdAt" timestamp NOT NULL DEFAULT now(),
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
-  `;
+  `);
   await sql`
     DROP TABLE IF EXISTS tooty_domain_events_queue
   `;
@@ -131,27 +132,21 @@ async function ensureSchema() {
 
 async function ensureUserAndSite() {
   const passwordHash = await hashPassword("password123");
-  await sql`
-    INSERT INTO tooty_users ("id", "email", "name", "role", "authProvider", "passwordHash", "createdAt", "updatedAt")
-    VALUES (${userId}, ${email}, ${"Comm Admin"}, ${"administrator"}, 'native', ${passwordHash}, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "email" = EXCLUDED."email",
-        "name" = EXCLUDED."name",
-        "role" = EXCLUDED."role",
-        "authProvider" = EXCLUDED."authProvider",
-        "passwordHash" = EXCLUDED."passwordHash",
-        "updatedAt" = NOW()
-  `;
-  await sql`
-    INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${siteId}, ${userId}, ${"Comms Site"}, ${`${runId}-site`}, true, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "userId" = EXCLUDED."userId",
-        "name" = EXCLUDED."name",
-        "subdomain" = EXCLUDED."subdomain",
-        "isPrimary" = EXCLUDED."isPrimary",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkUser({
+    id: userId,
+    email,
+    name: "Comm Admin",
+    role: "administrator",
+    authProvider: "native",
+    passwordHash,
+  });
+  await ensureNetworkSite({
+    id: siteId,
+    userId,
+    name: "Comms Site",
+    subdomain: `${runId}-site`,
+    isPrimary: true,
+  });
 }
 
 async function authenticateAs(page: Page, authUserId: string) {
@@ -169,18 +164,11 @@ async function authenticateAs(page: Page, authUserId: string) {
     maxAge: 60 * 60 * 24,
   });
 
-  await page.context().addCookies([
-    {
-      name: "next-auth.session-token",
-      value: token,
-      domain: appHostname,
-      path: "/",
-      httpOnly: true,
-      secure: false,
-      sameSite: "Lax",
-      expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
-    },
-  ]);
+  await addSessionTokenCookie(page.context(), {
+    value: token,
+    origin: appOrigin,
+    expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+  });
 }
 
 test.describe.configure({ mode: "serial" });
@@ -223,8 +211,10 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   const sendJson = await sendRes.json();
   expect(sendJson.messageId).toBeTruthy();
 
-  const row =
-    await sql`SELECT "status", "providerId" FROM tooty_communication_messages WHERE "id" = ${sendJson.messageId} LIMIT 1`;
+  const row = await sql.query(
+    `SELECT "status", "providerId" FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "id" = $1 LIMIT 1`,
+    [sendJson.messageId],
+  );
   expect(row.rows[0]?.status).toBe("logged");
   expect(row.rows[0]?.providerId).toBe("native:null-provider");
 
@@ -246,8 +236,10 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   });
   expect(callbackRes.status()).toBe(202);
 
-  const updated =
-    await sql`SELECT "status" FROM tooty_communication_messages WHERE "id" = ${sendJson.messageId} LIMIT 1`;
+  const updated = await sql.query(
+    `SELECT "status" FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "id" = $1 LIMIT 1`,
+    [sendJson.messageId],
+  );
   expect(updated.rows[0]?.status).toBe("sent");
 
   const sentEventAfterCallback =
@@ -272,8 +264,9 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   });
   expect(genericCallbackRes.status()).toBe(404);
 
-  const event =
-    await sql`SELECT "status" FROM tooty_webcallback_events WHERE "handlerId" = 'no-handler' ORDER BY "id" DESC LIMIT 1`;
+  const event = await sql.query(
+    `SELECT "status" FROM ${quotedIdentifier(networkTableName("webcallback_events"))} WHERE "handlerId" = 'no-handler' ORDER BY "id" DESC LIMIT 1`,
+  );
   expect(event.rows[0]?.status).toBe("ignored");
 });
 
@@ -294,7 +287,10 @@ test("communication governance toggle and per-site rate limiting are enforced", 
   expect(disabledJson.code).toBe("disabled");
 
   await upsertSiteSetting(siteId, "communication_enabled", "true");
-  await sql`DELETE FROM tooty_communication_messages WHERE "siteId" = ${siteId}`;
+  await sql.query(
+    `DELETE FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "siteId" = $1`,
+    [siteId],
+  );
   await upsertSiteSetting(siteId, "communication_rate_limit_max", "1");
   await upsertSiteSetting(siteId, "communication_rate_limit_window_seconds", "3600");
 

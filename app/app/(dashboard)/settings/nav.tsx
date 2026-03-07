@@ -1,24 +1,15 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { buildGlobalSettingsNavItems } from "@/lib/admin-nav";
 import Link from "next/link";
 import { useSelectedLayoutSegment } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-const BASE_ITEMS = [
-  { name: "Sites", href: "/app/settings/sites", segment: "sites" },
-  { name: "Themes", href: "/app/settings/themes", segment: "themes" },
-  { name: "Plugins", href: "/app/settings/plugins", segment: "plugins" },
-  { name: "Messages", href: "/app/settings/messages", segment: "messages" },
-  { name: "Schedules", href: "/app/settings/schedules", segment: "schedules" },
-  { name: "Users", href: "/app/settings/users", segment: "users" },
-  { name: "User Roles", href: "/app/settings/rbac", segment: "rbac" },
-];
-
 export default function GlobalSettingsNav() {
   const segment = useSelectedLayoutSegment();
-  const [migrationRequired, setMigrationRequired] = useState(false);
-  const [singleSiteMode, setSingleSiteMode] = useState(false);
+  const [adminMode, setAdminMode] = useState<"single-site" | "multi-site">("multi-site");
+  const [mainSiteId, setMainSiteId] = useState<string | null>(null);
   const [canManageNetworkSettings, setCanManageNetworkSettings] = useState(false);
   const [canManageNetworkPlugins, setCanManageNetworkPlugins] = useState(false);
 
@@ -26,32 +17,28 @@ export default function GlobalSettingsNav() {
     fetch("/api/nav/context", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        const count = Number(json?.siteCount || 0);
-        setSingleSiteMode(count === 1);
-        setMigrationRequired(Boolean(json?.migrationRequired));
+        setAdminMode(json?.adminMode === "single-site" ? "single-site" : "multi-site");
+        setMainSiteId(json?.mainSiteId ? String(json.mainSiteId) : null);
         setCanManageNetworkSettings(Boolean(json?.canManageNetworkSettings));
         setCanManageNetworkPlugins(Boolean(json?.canManageNetworkPlugins));
       })
       .catch(() => {
-        setSingleSiteMode(false);
-        setMigrationRequired(false);
+        setAdminMode("multi-site");
+        setMainSiteId(null);
         setCanManageNetworkSettings(false);
         setCanManageNetworkPlugins(false);
       });
   }, []);
 
   const items = useMemo(
-    () => {
-      if (!canManageNetworkSettings) return [];
-      const base = BASE_ITEMS.filter((item) => {
-        if (singleSiteMode && item.name === "Sites") return false;
-        if (!canManageNetworkPlugins && item.name === "Messages") return false;
-        return true;
-      });
-      if (!migrationRequired) return base;
-      return [...base.slice(0, 3), { name: "Database", href: "/app/settings/database", segment: "database" }, ...base.slice(3)];
-    },
-    [migrationRequired, singleSiteMode, canManageNetworkPlugins, canManageNetworkSettings],
+    () =>
+      buildGlobalSettingsNavItems({
+        adminMode,
+        mainSiteId,
+        canManageNetworkSettings,
+        canManageNetworkPlugins,
+      }),
+    [adminMode, mainSiteId, canManageNetworkPlugins, canManageNetworkSettings],
   );
 
   return (

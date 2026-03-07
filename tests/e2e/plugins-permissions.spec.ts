@@ -4,13 +4,14 @@ import { hashPassword } from "../../lib/password";
 import { getAvailablePlugins } from "../../lib/plugins";
 import { randomUUID } from "node:crypto";
 import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
-import { getAppHostname, getAppOrigin } from "./helpers/env";
+import { getAppOrigin } from "./helpers/env";
+import { addSessionTokenCookie } from "./helpers/auth";
+import { ensureNetworkSession, ensureNetworkSite, ensureNetworkUser } from "./helpers/storage";
 
 const runId = `e2e-plugins-${randomUUID()}`;
 const password = "password123";
 let pluginId = "";
 const appOrigin = getAppOrigin();
-const appHostname = getAppHostname();
 const runPluginPermsE2E = process.env.RUN_PLUGIN_PERMS_E2E === "1";
 
 const singleEmail = `${runId}-single@example.com`;
@@ -49,17 +50,10 @@ async function ensureUser(params: {
   role: "administrator" | "editor" | "network admin";
   passwordHash: string;
 }) {
-  await sql`
-    INSERT INTO tooty_users ("id", "email", "name", "role", "authProvider", "passwordHash", "createdAt", "updatedAt")
-    VALUES (${params.id}, ${params.email}, ${params.name}, ${params.role}, 'native', ${params.passwordHash}, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "email" = EXCLUDED."email",
-        "name" = EXCLUDED."name",
-        "role" = EXCLUDED."role",
-        "authProvider" = EXCLUDED."authProvider",
-        "passwordHash" = EXCLUDED."passwordHash",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkUser({
+    ...params,
+    authProvider: "native",
+  });
 }
 
 async function ensureSite(params: {
@@ -69,39 +63,18 @@ async function ensureSite(params: {
   subdomain: string;
   isPrimary: boolean;
 }) {
-  await sql`
-    INSERT INTO tooty_sites ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
-    VALUES (${params.id}, ${params.userId}, ${params.name}, ${params.subdomain}, ${params.isPrimary}, NOW(), NOW())
-    ON CONFLICT ("id") DO UPDATE
-    SET "userId" = EXCLUDED."userId",
-        "name" = EXCLUDED."name",
-        "subdomain" = EXCLUDED."subdomain",
-        "isPrimary" = EXCLUDED."isPrimary",
-        "updatedAt" = NOW()
-  `;
+  await ensureNetworkSite(params);
 }
 
 async function authenticateAs(page: Page, userId: string) {
   const sessionToken = `e2e-${randomUUID()}`;
   const expires = new Date(Date.now() + 1000 * 60 * 60 * 24);
-  await sql`
-    INSERT INTO tooty_sessions ("sessionToken", "userId", "expires")
-    VALUES (${sessionToken}, ${userId}, ${expires.toISOString()})
-    ON CONFLICT ("sessionToken") DO UPDATE
-    SET "userId" = EXCLUDED."userId", "expires" = EXCLUDED."expires"
-  `;
-  await page.context().addCookies([
-    {
-      name: "next-auth.session-token",
-      value: sessionToken,
-      domain: appHostname,
-      path: "/",
-      httpOnly: true,
-      secure: false,
-      sameSite: "Lax",
-      expires: Math.floor(expires.getTime() / 1000),
-    },
-  ]);
+  await ensureNetworkSession(sessionToken, userId, expires);
+  await addSessionTokenCookie(page.context(), {
+    value: sessionToken,
+    origin: appOrigin,
+    expires: Math.floor(expires.getTime() / 1000),
+  });
 }
 
 test.describe.configure({ mode: "serial" });
@@ -195,14 +168,17 @@ test.beforeAll(async () => {
   });
 });
 
-test("single-site network admin: shows both network and site settings menus", async ({ page }) => {
+test("single-site network admin: shows a single merged settings menu", async ({ page }) => {
   await authenticateAs(page, networkSingleAdminUserId);
   await page.goto(`${appOrigin}/app`);
 
-  await expect(page.locator(`a[href="/site/${networkSingleSiteId}/settings"]`)).toBeVisible();
-  await expect(page.locator(`a[href="/settings"]`)).toBeVisible();
-  await expect(page.getByRole("link", { name: "System" })).toBeVisible();
+  await expect(page.locator(`a[href="/app/site/${networkSingleSiteId}/settings"]`)).toBeVisible();
   await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sites" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Network Dashboard" })).toHaveCount(0);
+  await expect(page.locator(`a[href="/app/settings"]`)).toHaveCount(0);
+  await expect(page.locator(`a[href="/app/site/${networkSingleSiteId}/settings/rbac"]`)).toBeVisible();
+  await expect(page.locator(`a[href="/app/site/${networkSingleSiteId}/settings/database"]`)).toBeVisible();
 });
 
 test("single-site plugins: can toggle enabled from site plugins view", async ({ page }) => {

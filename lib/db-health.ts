@@ -3,19 +3,15 @@ import { sql } from "drizzle-orm";
 import { trace } from "@/lib/debug";
 import { getTextSetting, setTextSetting } from "@/lib/cms-config";
 import { isCompatModeEnabled } from "@/lib/compat-mode";
-
-type RequiredColumn = {
-  tableSuffix: "site_posts" | "site_domain_posts" | "site_media" | "site_data_domains" | "site_term_taxonomies";
-  column:
-    | "image"
-    | "imageBlurhash"
-    | "password"
-    | "usePassword"
-    | "altText"
-    | "caption"
-    | "description"
-    | "siteId";
-};
+import { ensureSiteSettingsTable } from "@/lib/site-settings-tables";
+import { ensureSiteUserTables } from "@/lib/site-user-tables";
+import { ensureSiteCommentTables } from "@/lib/site-comment-tables";
+import { ensureSiteDataDomainTable } from "@/lib/site-data-domain-registry";
+import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import { ensureSiteDomainTypeTables } from "@/lib/site-domain-type-tables";
+import { ensureSiteMediaTable } from "@/lib/site-media-tables";
+import { ensureSiteMenuTables } from "@/lib/site-menu-tables";
+import { ensureSiteTaxonomyTables } from "@/lib/site-taxonomy-tables";
 
 export type MissingDbColumn = {
   table: string;
@@ -25,7 +21,78 @@ export type MissingDbColumn = {
 export const DB_SCHEMA_VERSION_KEY = "db_schema_version";
 export const DB_SCHEMA_TARGET_VERSION_KEY = "db_schema_target_version";
 export const DB_SCHEMA_UPDATED_AT_KEY = "db_schema_updated_at";
-export const TARGET_DB_SCHEMA_VERSION = "2026.03.04.3";
+export const TARGET_DB_SCHEMA_VERSION = "2026.03.05.2";
+
+const REQUIRED_NETWORK_TABLE_SUFFIXES = [
+  "network_accounts",
+  "network_communication_attempts",
+  "network_communication_messages",
+  "network_rbac_roles",
+  "network_sessions",
+  "network_sites",
+  "network_system_settings",
+  "network_user_meta",
+  "network_users",
+  "network_verification_tokens",
+  "network_webcallback_events",
+  "network_webhook_deliveries",
+  "network_webhook_subscriptions",
+] as const;
+
+const DISALLOWED_SHARED_OR_LEGACY_TABLE_SUFFIXES = [
+  "accounts",
+  "categories",
+  "comments",
+  "data_domains",
+  "domain_events_queue",
+  "domain_post_meta",
+  "domain_posts",
+  "examples",
+  "post_categories",
+  "post_meta",
+  "post_tags",
+  "posts",
+  "rbac_roles",
+  "sessions",
+  "site_comments",
+  "site_communication_attempts",
+  "site_communication_messages",
+  "site_data_domain_assignments",
+  "site_data_domains",
+  "site_domain_post_meta",
+  "site_domain_posts",
+  "site_examples",
+  "site_media",
+  "site_menu_item_meta",
+  "site_menu_items",
+  "site_menus",
+  "site_posts",
+  "site_term_relationships",
+  "site_term_taxonomies",
+  "site_term_taxonomy_domains",
+  "site_term_taxonomy_meta",
+  "site_terms",
+  "site_webcallback_events",
+  "site_webhook_deliveries",
+  "site_webhook_subscriptions",
+  "sites",
+  "system_settings",
+  "tags",
+  "term_relationships",
+  "term_taxonomies",
+  "term_taxonomy_domains",
+  "term_taxonomy_meta",
+  "terms",
+  "user_meta",
+  "users",
+  "verificationTokens",
+] as const;
+
+const OBSOLETE_REGISTRY_TABLE_SUFFIXES = [
+  "site_comment_table_registry",
+  "site_settings_table_registry",
+  "site_user_table_registry",
+] as const;
 
 async function safeGetSetting(key: string, fallback: string) {
   try {
@@ -35,201 +102,134 @@ async function safeGetSetting(key: string, fallback: string) {
   }
 }
 
-const REQUIRED_COLUMNS: RequiredColumn[] = [
-  { tableSuffix: "site_posts", column: "image" },
-  { tableSuffix: "site_posts", column: "imageBlurhash" },
-  { tableSuffix: "site_domain_posts", column: "image" },
-  { tableSuffix: "site_domain_posts", column: "imageBlurhash" },
-  { tableSuffix: "site_domain_posts", column: "password" },
-  { tableSuffix: "site_domain_posts", column: "usePassword" },
-  { tableSuffix: "site_media", column: "altText" },
-  { tableSuffix: "site_media", column: "caption" },
-  { tableSuffix: "site_media", column: "description" },
-  { tableSuffix: "site_data_domains", column: "description" },
-  { tableSuffix: "site_term_taxonomies", column: "siteId" },
-];
-
-const REQUIRED_TABLE_SUFFIXES = [
-  "site_media",
-  "site_menus",
-  "site_menu_items",
-  "site_menu_item_meta",
-  "site_communication_messages",
-  "site_communication_attempts",
-  "site_webcallback_events",
-  "site_webhook_subscriptions",
-  "site_webhook_deliveries",
-  "domain_events_queue",
-  "site_term_taxonomy_meta",
-] as const;
-
 function getPrefix() {
   const raw = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
   return raw.endsWith("_") ? raw : `${raw}_`;
 }
 
-function toTableName(suffix: RequiredColumn["tableSuffix"]) {
-  return `${getPrefix()}${suffix}`;
+function quoteIdentifier(input: string) {
+  return `"${input.replace(/"/g, "\"\"")}"`;
 }
 
-function hasMissingColumnsForTable(missing: MissingDbColumn[], tableSuffix: RequiredColumn["tableSuffix"]) {
-  const table = toTableName(tableSuffix);
-  return missing.some((entry) => entry.table === table);
+function stableIdentifierHash(input: string) {
+  let hash = BigInt("0xcbf29ce484222325");
+  const prime = BigInt("0x100000001b3");
+  const modulo = BigInt("0xffffffffffffffff");
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= BigInt(input.charCodeAt(index));
+    hash = (hash * prime) & modulo;
+  }
+  return hash.toString(16).padStart(16, "0").slice(0, 12);
 }
 
-function hasMissingContentColumns(missing: MissingDbColumn[]) {
-  return hasMissingColumnsForTable(missing, "site_posts") || hasMissingColumnsForTable(missing, "site_domain_posts");
+export function networkSequenceName(tableName: string, columnName = "id") {
+  const readable = `${String(tableName || "").trim()}_${String(columnName || "").trim()}_seq`;
+  if (readable.length <= 63) {
+    return readable;
+  }
+
+  const hash = stableIdentifierHash(readable);
+  const suffix = `_${hash}_seq`;
+  const maxBaseLength = 63 - suffix.length;
+  return `${readable.slice(0, maxBaseLength)}${suffix}`;
+}
+
+async function ensureOwnedSequence(tableName: string, columnName = "id") {
+  const sequenceName = networkSequenceName(tableName, columnName);
+  await db.execute(sql.raw(`
+    ALTER SEQUENCE ${quoteIdentifier(sequenceName)}
+    OWNED BY ${quoteIdentifier(tableName)}.${quoteIdentifier(columnName)}
+  `));
+  return sequenceName;
+}
+
+async function listExistingTables(tableNames: string[]) {
+  if (!tableNames.length) return new Set<string>();
+  const tableSql = sql.join(tableNames.map((name) => sql`${name}`), sql`,`);
+  const result = await db.execute<{ table_name: string }>(sql`
+    select table_name
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name in (${tableSql})
+  `);
+  return new Set(((result as any)?.rows ?? []).map((row: any) => String(row.table_name)));
+}
+
+async function listKnownSiteIds() {
+  const prefix = getPrefix();
+  const sitesTable = `${prefix}network_sites`;
+  const result = await db.execute<{ id: string }>(sql.raw(`SELECT "id" FROM ${quoteIdentifier(sitesTable)}`));
+  return (((result as any)?.rows ?? []) as Array<{ id?: string }>).map((row) => String(row.id || "").trim()).filter(Boolean);
+}
+
+async function ensureSiteScopedFeatureTables(siteId: string) {
+  await ensureSiteMediaTable(siteId);
+  await ensureSiteMenuTables(siteId);
+  await ensureSiteSettingsTable(siteId);
+  await ensureSiteUserTables(siteId);
+  await ensureSiteCommentTables(siteId);
+  await ensureSiteDataDomainTable(siteId);
+  await ensureDefaultCoreDataDomains(siteId);
+  await ensureSiteTaxonomyTables(siteId);
+  await ensureSiteDomainTypeTables(siteId, "post");
+  await ensureSiteDomainTypeTables(siteId, "page");
 }
 
 export async function getDatabaseHealthReport() {
   const prefix = getPrefix();
-  const tableNames = Array.from(new Set(REQUIRED_COLUMNS.map((entry) => toTableName(entry.tableSuffix))));
-  const tableNameSql = sql.join(tableNames.map((name) => sql`${name}`), sql`,`);
+  const requiredTables = REQUIRED_NETWORK_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`);
+  const existingRequired = await listExistingTables(requiredTables);
+  const missingTables = requiredTables.filter((name) => !existingRequired.has(name));
 
-  const result = await db.execute<{
-    table_name: string;
-    column_name: string;
-  }>(sql`
-    select table_name, column_name
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name in (${tableNameSql})
-  `);
+  const disallowedTables = DISALLOWED_SHARED_OR_LEGACY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`);
+  const disallowedFound = Array.from(await listExistingTables(disallowedTables));
 
-  const rows = (result as any)?.rows ?? [];
-  const existing = new Set(rows.map((row: any) => `${String(row.table_name)}.${String(row.column_name)}`));
+  const obsoleteRegistryTables = OBSOLETE_REGISTRY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`);
+  const obsoleteRegistryFound = Array.from(await listExistingTables(obsoleteRegistryTables));
 
-  const missing: MissingDbColumn[] = REQUIRED_COLUMNS.flatMap((entry) => {
-    const table = toTableName(entry.tableSuffix);
-    return existing.has(`${table}.${entry.column}`) ? [] : [{ table, column: entry.column }];
-  });
-
-  const requiredTables = REQUIRED_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`);
-  const requiredTableSql = sql.join(requiredTables.map((name) => sql`${name}`), sql`,`);
-  const tableResult = await db.execute<{ table_name: string }>(sql`
-    select table_name
-    from information_schema.tables
-    where table_schema = 'public'
-      and table_name in (${requiredTableSql})
-  `);
-  const existingTables = new Set(((tableResult as any)?.rows ?? []).map((row: any) => String(row.table_name)));
-  const missingTables = requiredTables.filter((name) => !existingTables.has(name));
-
-  const disallowedGlobalFeatureTables = [
-    `${prefix}data_domains`,
-    `${prefix}posts`,
-    `${prefix}post_meta`,
-    `${prefix}post_categories`,
-    `${prefix}post_tags`,
-    `${prefix}categories`,
-    `${prefix}tags`,
-    `${prefix}terms`,
-    `${prefix}term_taxonomies`,
-    `${prefix}term_relationships`,
-    `${prefix}term_taxonomy_domains`,
-    `${prefix}term_taxonomy_meta`,
-    `${prefix}comments`,
-    `${prefix}examples`,
-    `${prefix}domain_carousel`,
-    `${prefix}domain_carousel_meta`,
-    `${prefix}domain_carousel-slide`,
-    `${prefix}domain_carousel-slide_meta`,
-    `${prefix}domain_posts`,
-    `${prefix}domain_post_meta`,
-  ];
-  const disallowedTableSql = sql.join(disallowedGlobalFeatureTables.map((name) => sql`${name}`), sql`,`);
-  const disallowedResult = await db.execute<{ table_name: string }>(sql`
-    select table_name
-    from information_schema.tables
-    where table_schema = 'public'
-      and table_name in (${disallowedTableSql})
-  `);
-  const disallowedFound = ((disallowedResult as any)?.rows ?? []).map((row: any) => String(row.table_name));
-
-  if (missing.length > 0 || missingTables.length > 0) {
-    trace("db", "database update required", { missingColumns: missing, missingTables });
+  const missing: MissingDbColumn[] = [];
+  if (missingTables.length > 0) {
+    trace("db", "database update required", { missingTables });
   }
 
   const currentVersion = await safeGetSetting(DB_SCHEMA_VERSION_KEY, "");
   const targetVersion = TARGET_DB_SCHEMA_VERSION;
   const versionBehind = currentVersion !== targetVersion;
   const compatMode = isCompatModeEnabled();
-  const migrationRequired = missing.length > 0 || missingTables.length > 0 || disallowedFound.length > 0 || versionBehind;
+  const migrationRequired =
+    missingTables.length > 0 ||
+    disallowedFound.length > 0 ||
+    obsoleteRegistryFound.length > 0 ||
+    versionBehind;
+
   const pending = [
-    ...(missingTables.length > 0
-      ? [
-          {
-            id: "2026.02.26.1-required-tables",
-            title: "Create required communication/taxonomy compatibility tables",
-            reason: "Missing required communication queue/webhook and/or taxonomy meta tables.",
-          },
-        ]
+    ...(missingTables.length
+      ? [{
+          id: "2026.03.05.2-network-tables",
+          title: "Create required network tables",
+          reason: "Minimal network tables are missing for the current release contract.",
+        }]
       : []),
-    ...(missingTables.some((table) =>
-      [`${prefix}site_menus`, `${prefix}site_menu_items`, `${prefix}site_menu_item_meta`].includes(table),
-    )
-      ? [
-          {
-            id: "2026.03.02.1-native-menus",
-            title: "Create native menu tables",
-            reason: "Missing required native menu tables for the built-in menu spine.",
-          },
-        ]
+    ...(disallowedFound.length
+      ? [{
+          id: "2026.03.05.2-drop-shared-feature-tables",
+          title: "Drop shared feature tables",
+          reason: "Shared or legacy feature tables still exist and violate the site-physical storage contract.",
+        }]
       : []),
-    ...(hasMissingContentColumns(missing)
-      ? [
-          {
-            id: "2026.02.24.1-columns",
-            title: "Add required columns to content tables",
-            reason: "Missing required image/imageBlurhash/password/usePassword columns.",
-          },
-        ]
-      : []),
-    ...(hasMissingColumnsForTable(missing, "site_media")
-      ? [
-          {
-            id: "2026.03.02.1-media-metadata",
-            title: "Add required media metadata columns",
-            reason: "Missing required altText/caption/description columns on the media table.",
-          },
-        ]
-      : []),
-    ...(hasMissingColumnsForTable(missing, "site_data_domains")
-      ? [
-          {
-            id: "2026.03.04.1-site-domain-descriptions",
-            title: "Add site-scoped data domain description column",
-            reason: "Missing required description column on the site data domain mapping table.",
-          },
-        ]
-      : []),
-    ...(hasMissingColumnsForTable(missing, "site_term_taxonomies")
-      ? [
-          {
-            id: "2026.03.04.2-site-taxonomies",
-            title: "Migrate taxonomy records to strict site ownership",
-            reason: "Missing required siteId column on term taxonomies.",
-          },
-        ]
+    ...(obsoleteRegistryFound.length
+      ? [{
+          id: "2026.03.05.2-drop-obsolete-registries",
+          title: "Drop obsolete registry tables",
+          reason: "Legacy registry tables are obsolete under deterministic site table naming.",
+        }]
       : []),
     ...(versionBehind
-      ? [
-          {
-            id: "2026.03.02.1-version",
-            title: "Record schema version",
-            reason: "Installed schema version is not at current target.",
-          },
-        ]
-      : []),
-    ...(disallowedFound.length > 0
-      ? [
-          {
-            id: "2026.03.04.3-site-scope-hardening",
-            title: "Migrate feature data off global tables",
-            reason:
-              "Global feature tables detected; network/global schema must remain sparse and admin-only by contract.",
-          },
-        ]
+      ? [{
+          id: "2026.03.05.2-version",
+          title: "Record schema version",
+          reason: "Installed schema version is behind the current target.",
+        }]
       : []),
   ];
 
@@ -243,747 +243,245 @@ export async function getDatabaseHealthReport() {
     missing,
     missingTables,
     disallowedFound,
+    obsoleteRegistryFound,
   };
-}
-
-function quoteIdentifier(input: string) {
-  return `"${input.replace(/"/g, "\"\"")}"`;
 }
 
 export async function applyDatabaseCompatibilityFixes() {
   const prefix = getPrefix();
-  const postsTable = toTableName("site_posts");
-  const domainPostsTable = toTableName("site_domain_posts");
-  const communicationMessagesTable = `${prefix}site_communication_messages`;
-  const communicationAttemptsTable = `${prefix}site_communication_attempts`;
-  const siteMenusTable = `${prefix}site_menus`;
-  const siteMenuItemsTable = `${prefix}site_menu_items`;
-  const siteMenuItemMetaTable = `${prefix}site_menu_item_meta`;
-  const webcallbackEventsTable = `${prefix}site_webcallback_events`;
-  const webhookSubscriptionsTable = `${prefix}site_webhook_subscriptions`;
-  const webhookDeliveriesTable = `${prefix}site_webhook_deliveries`;
-  const domainEventsQueueTable = `${prefix}domain_events_queue`;
-  const termTaxonomiesTable = `${prefix}site_term_taxonomies`;
-  const termTaxonomyDomainsTable = `${prefix}site_term_taxonomy_domains`;
-  const termRelationshipsTable = `${prefix}site_term_relationships`;
-  const sitesTable = `${prefix}sites`;
-  const termTaxonomyMetaTable = `${prefix}site_term_taxonomy_meta`;
-  const mediaTable = `${prefix}site_media`;
-  const siteDataDomainsTable = `${prefix}site_data_domains`;
+  const networkUsersTable = `${prefix}network_users`;
+  const networkUserMetaTable = `${prefix}network_user_meta`;
+  const networkSessionsTable = `${prefix}network_sessions`;
+  const networkVerificationTokensTable = `${prefix}network_verification_tokens`;
+  const networkSystemSettingsTable = `${prefix}network_system_settings`;
+  const networkRbacRolesTable = `${prefix}network_rbac_roles`;
+  const networkSitesTable = `${prefix}network_sites`;
+  const networkAccountsTable = `${prefix}network_accounts`;
+  const networkCommunicationMessagesTable = `${prefix}network_communication_messages`;
+  const networkCommunicationAttemptsTable = `${prefix}network_communication_attempts`;
+  const networkWebcallbackEventsTable = `${prefix}network_webcallback_events`;
+  const networkWebhookSubscriptionsTable = `${prefix}network_webhook_subscriptions`;
+  const networkWebhookDeliveriesTable = `${prefix}network_webhook_deliveries`;
+  const networkUserMetaIdSequence = networkSequenceName(networkUserMetaTable);
+  const networkCommunicationAttemptsIdSequence = networkSequenceName(networkCommunicationAttemptsTable);
+  const networkWebcallbackEventsIdSequence = networkSequenceName(networkWebcallbackEventsTable);
+  const networkWebhookSubscriptionsIdSequence = networkSequenceName(networkWebhookSubscriptionsTable);
 
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(mediaTable)} (
-        "id" serial PRIMARY KEY,
-        "siteId" text NULL,
-        "userId" text NULL,
-        "provider" text NOT NULL DEFAULT 'blob',
-        "bucket" text NULL,
-        "objectKey" text NOT NULL,
-        "url" text NOT NULL,
-        "label" text NULL,
-        "altText" text NULL,
-        "caption" text NULL,
-        "description" text NULL,
-        "mimeType" text NULL,
-        "size" integer NULL,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenusTable)} (
-        "id" text PRIMARY KEY,
-        "siteId" text NOT NULL,
-        "key" text NOT NULL,
-        "title" text NOT NULL,
-        "description" text NOT NULL DEFAULT '',
-        "location" text NULL,
-        "sortOrder" integer NOT NULL DEFAULT 10,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenuItemsTable)} (
-        "id" text PRIMARY KEY,
-        "menuId" text NOT NULL,
-        "parentId" text NULL,
-        "title" text NOT NULL,
-        "href" text NOT NULL,
-        "description" text NOT NULL DEFAULT '',
-        "mediaId" integer NULL,
-        "target" text NULL,
-        "rel" text NULL,
-        "external" boolean NOT NULL DEFAULT false,
-        "enabled" boolean NOT NULL DEFAULT true,
-        "sortOrder" integer NOT NULL DEFAULT 10,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(siteMenuItemMetaTable)} (
-        "id" serial PRIMARY KEY,
-        "menuItemId" text NOT NULL,
-        "key" text NOT NULL,
-        "value" text NOT NULL DEFAULT '',
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(mediaTable)}
-          ADD CONSTRAINT "${mediaTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(siteMenusTable)}
-          ADD CONSTRAINT "${siteMenusTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(siteMenuItemsTable)}
-          ADD CONSTRAINT "${siteMenuItemsTable}_menuId_fkey"
-          FOREIGN KEY ("menuId") REFERENCES ${quoteIdentifier(siteMenusTable)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(siteMenuItemsTable)}
-          ADD CONSTRAINT "${siteMenuItemsTable}_mediaId_fkey"
-          FOREIGN KEY ("mediaId") REFERENCES ${quoteIdentifier(mediaTable)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(siteMenuItemMetaTable)}
-          ADD CONSTRAINT "${siteMenuItemMetaTable}_menuItemId_fkey"
-          FOREIGN KEY ("menuItemId") REFERENCES ${quoteIdentifier(siteMenuItemsTable)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(mediaTable)}
-          ADD CONSTRAINT "${mediaTable}_userId_fkey"
-          FOREIGN KEY ("userId") REFERENCES ${quoteIdentifier(`${prefix}users`)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${mediaTable}_objectKey_idx" ON ${quoteIdentifier(mediaTable)} ("objectKey")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "altText" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "caption" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(mediaTable)} ADD COLUMN IF NOT EXISTS "description" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(siteDataDomainsTable)} ADD COLUMN IF NOT EXISTS "description" text NOT NULL DEFAULT ''`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(termTaxonomiesTable)} ADD COLUMN IF NOT EXISTS "siteId" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ DECLARE idx_name text; BEGIN
-        FOR idx_name IN
-          SELECT indexname
-          FROM pg_indexes
-          WHERE schemaname = 'public'
-            AND tablename = '${termTaxonomiesTable.replace(/'/g, "''")}'
-            AND indexdef ILIKE '%UNIQUE%'
-            AND indexdef ILIKE '%("termId", "taxonomy")%'
-        LOOP
-          EXECUTE format('DROP INDEX IF EXISTS %I', idx_name);
-        END LOOP;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `WITH primary_site AS (
-        SELECT COALESCE(
-          (SELECT id FROM ${quoteIdentifier(sitesTable)} WHERE "isPrimary" = true ORDER BY "createdAt" ASC LIMIT 1),
-          (SELECT id FROM ${quoteIdentifier(sitesTable)} WHERE subdomain = 'main' ORDER BY "createdAt" ASC LIMIT 1),
-          (SELECT id FROM ${quoteIdentifier(sitesTable)} ORDER BY "createdAt" ASC LIMIT 1)
-        ) AS id
-      ),
-      usage_map AS (
-        SELECT tr."termTaxonomyId" AS taxonomy_id, MIN(dp."siteId") AS site_id
-        FROM ${quoteIdentifier(termRelationshipsTable)} tr
-        INNER JOIN ${quoteIdentifier(domainPostsTable)} dp ON dp.id = tr."objectId"
-        WHERE dp."siteId" IS NOT NULL
-        GROUP BY tr."termTaxonomyId"
-      )
-      UPDATE ${quoteIdentifier(termTaxonomiesTable)} tt
-      SET "siteId" = COALESCE(
-        (
-          SELECT usage_map.site_id
-          FROM usage_map
-          WHERE usage_map.taxonomy_id = tt.id
-          LIMIT 1
-        ),
-        primary_site.id
-      )
-      FROM primary_site
-      WHERE tt."siteId" IS NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `INSERT INTO ${quoteIdentifier(termTaxonomiesTable)} ("siteId", "termId", "taxonomy", "description", "parentId", "count", "createdAt", "updatedAt")
-      SELECT DISTINCT
-        dp."siteId",
-        source."termId",
-        source."taxonomy",
-        source."description",
-        NULL::integer,
-        source."count",
-        NOW(),
-        NOW()
-      FROM ${quoteIdentifier(termRelationshipsTable)} tr
-      INNER JOIN ${quoteIdentifier(domainPostsTable)} dp ON dp.id = tr."objectId"
-      INNER JOIN ${quoteIdentifier(termTaxonomiesTable)} source ON source.id = tr."termTaxonomyId"
-      LEFT JOIN ${quoteIdentifier(termTaxonomiesTable)} existing
-        ON existing."siteId" = dp."siteId"
-       AND existing."termId" = source."termId"
-       AND existing."taxonomy" = source."taxonomy"
-      WHERE dp."siteId" IS NOT NULL
-        AND existing.id IS NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `UPDATE ${quoteIdentifier(termRelationshipsTable)} tr
-      SET "termTaxonomyId" = target.id
-      FROM ${quoteIdentifier(domainPostsTable)} dp
-      INNER JOIN ${quoteIdentifier(termTaxonomiesTable)} source ON true
-      INNER JOIN ${quoteIdentifier(termTaxonomiesTable)} target ON true
-      WHERE dp.id = tr."objectId"
-        AND dp."siteId" IS NOT NULL
-        AND source.id = tr."termTaxonomyId"
-        AND target."siteId" = dp."siteId"
-        AND target."termId" = source."termId"
-        AND target."taxonomy" = source."taxonomy"
-        AND tr."termTaxonomyId" <> target.id`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `INSERT INTO ${quoteIdentifier(termTaxonomyMetaTable)} ("termTaxonomyId", "key", "value", "createdAt", "updatedAt")
-      SELECT DISTINCT
-        target.id,
-        source_meta."key",
-        source_meta."value",
-        NOW(),
-        NOW()
-      FROM ${quoteIdentifier(termTaxonomiesTable)} source
-      INNER JOIN ${quoteIdentifier(termTaxonomyMetaTable)} source_meta ON source_meta."termTaxonomyId" = source.id
-      INNER JOIN ${quoteIdentifier(termTaxonomiesTable)} target
-        ON target."termId" = source."termId"
-       AND target."taxonomy" = source."taxonomy"
-      LEFT JOIN ${quoteIdentifier(termTaxonomyMetaTable)} existing
-        ON existing."termTaxonomyId" = target.id
-       AND existing."key" = source_meta."key"
-      WHERE existing.id IS NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `INSERT INTO ${quoteIdentifier(termTaxonomyDomainsTable)} ("dataDomainId", "termTaxonomyId")
-      SELECT DISTINCT
-        source_domains."dataDomainId",
-        target.id
-      FROM ${quoteIdentifier(termTaxonomiesTable)} source
-      INNER JOIN ${quoteIdentifier(termTaxonomyDomainsTable)} source_domains ON source_domains."termTaxonomyId" = source.id
-      INNER JOIN ${quoteIdentifier(termTaxonomiesTable)} target
-        ON target."termId" = source."termId"
-       AND target."taxonomy" = source."taxonomy"
-      LEFT JOIN ${quoteIdentifier(termTaxonomyDomainsTable)} existing
-        ON existing."dataDomainId" = source_domains."dataDomainId"
-       AND existing."termTaxonomyId" = target.id
-      WHERE existing."termTaxonomyId" IS NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(termTaxonomiesTable)} ALTER COLUMN "siteId" SET NOT NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(termTaxonomiesTable)}
-          ADD CONSTRAINT "${termTaxonomiesTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(sitesTable)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${termTaxonomiesTable}_site_term_taxonomy_unique_idx" ON ${quoteIdentifier(termTaxonomiesTable)} ("siteId", "termId", "taxonomy")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${termTaxonomiesTable}_site_taxonomy_idx" ON ${quoteIdentifier(termTaxonomiesTable)} ("siteId", "taxonomy")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(postsTable)} ADD COLUMN IF NOT EXISTS "image" text DEFAULT ''`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(postsTable)} ADD COLUMN IF NOT EXISTS "imageBlurhash" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "image" text DEFAULT ''`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "imageBlurhash" text`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "password" text DEFAULT ''`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(domainPostsTable)} ADD COLUMN IF NOT EXISTS "usePassword" boolean NOT NULL DEFAULT false`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(communicationMessagesTable)} (
-        "id" text PRIMARY KEY,
-        "siteId" text NULL,
-        "channel" text NOT NULL,
-        "to" text NOT NULL,
-        "subject" text NULL,
-        "body" text NOT NULL,
-        "category" text NOT NULL DEFAULT 'transactional',
-        "status" text NOT NULL DEFAULT 'queued',
-        "providerId" text NULL,
-        "externalId" text NULL,
-        "attemptCount" integer NOT NULL DEFAULT 0,
-        "maxAttempts" integer NOT NULL DEFAULT 3,
-        "nextAttemptAt" timestamp NULL,
-        "lastError" text NULL,
-        "metadata" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "createdByUserId" text NULL,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(communicationAttemptsTable)} (
-        "id" serial PRIMARY KEY,
-        "messageId" text NOT NULL,
-        "providerId" text NOT NULL,
-        "eventId" text NULL,
-        "status" text NOT NULL,
-        "error" text NULL,
-        "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "createdAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(webcallbackEventsTable)} (
-        "id" serial PRIMARY KEY,
-        "siteId" text NULL,
-        "handlerId" text NOT NULL,
-        "pluginId" text NULL,
-        "status" text NOT NULL DEFAULT 'received',
-        "requestBody" text NOT NULL DEFAULT '',
-        "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "requestQuery" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "error" text NULL,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(webhookSubscriptionsTable)} (
-        "id" serial PRIMARY KEY,
-        "siteId" text NULL,
-        "eventName" text NOT NULL,
-        "endpointUrl" text NOT NULL,
-        "secret" text NULL,
-        "enabled" boolean NOT NULL DEFAULT true,
-        "maxRetries" integer NOT NULL DEFAULT 4,
-        "backoffBaseSeconds" integer NOT NULL DEFAULT 30,
-        "headers" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(webhookDeliveriesTable)} (
-        "id" text PRIMARY KEY,
-        "subscriptionId" integer NOT NULL,
-        "siteId" text NULL,
-        "eventId" text NOT NULL,
-        "eventName" text NOT NULL,
-        "endpointUrl" text NOT NULL,
-        "status" text NOT NULL DEFAULT 'queued',
-        "attemptCount" integer NOT NULL DEFAULT 0,
-        "maxAttempts" integer NOT NULL DEFAULT 4,
-        "nextAttemptAt" timestamp NULL,
-        "lastError" text NULL,
-        "requestBody" text NOT NULL DEFAULT '',
-        "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
-        "responseStatus" integer NULL,
-        "responseBody" text NULL,
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(webcallbackEventsTable)} ADD COLUMN IF NOT EXISTS "siteId" text NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `ALTER TABLE ${quoteIdentifier(communicationAttemptsTable)} ADD COLUMN IF NOT EXISTS "eventId" text NULL`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(domainEventsQueueTable)} (
-        "id" text PRIMARY KEY,
-        "event" jsonb NOT NULL,
-        "status" text NOT NULL DEFAULT 'queued',
-        "attempts" integer NOT NULL DEFAULT 0,
-        "available_at" timestamptz NOT NULL DEFAULT now(),
-        "last_error" text NULL,
-        "processed_at" timestamptz NULL,
-        "created_at" timestamptz NOT NULL DEFAULT now(),
-        "updated_at" timestamptz NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(termTaxonomyMetaTable)} (
-        "id" serial PRIMARY KEY,
-        "termTaxonomyId" integer NOT NULL REFERENCES ${quoteIdentifier(`${prefix}site_term_taxonomies`)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
-        "key" text NOT NULL,
-        "value" text NOT NULL DEFAULT '',
-        "createdAt" timestamp NOT NULL DEFAULT now(),
-        "updatedAt" timestamp NOT NULL DEFAULT now()
-      )`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(communicationMessagesTable)}
-          ADD CONSTRAINT "${communicationMessagesTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(communicationMessagesTable)}
-          ADD CONSTRAINT "${communicationMessagesTable}_createdByUserId_fkey"
-          FOREIGN KEY ("createdByUserId") REFERENCES ${quoteIdentifier(`${prefix}users`)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(communicationAttemptsTable)}
-          ADD CONSTRAINT "${communicationAttemptsTable}_messageId_fkey"
-          FOREIGN KEY ("messageId") REFERENCES ${quoteIdentifier(communicationMessagesTable)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(webcallbackEventsTable)}
-          ADD CONSTRAINT "${webcallbackEventsTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(webhookSubscriptionsTable)}
-          ADD CONSTRAINT "${webhookSubscriptionsTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(webhookDeliveriesTable)}
-          ADD CONSTRAINT "${webhookDeliveriesTable}_subscriptionId_fkey"
-          FOREIGN KEY ("subscriptionId") REFERENCES ${quoteIdentifier(webhookSubscriptionsTable)}("id")
-          ON UPDATE CASCADE ON DELETE CASCADE;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `DO $$ BEGIN
-        ALTER TABLE ${quoteIdentifier(webhookDeliveriesTable)}
-          ADD CONSTRAINT "${webhookDeliveriesTable}_siteId_fkey"
-          FOREIGN KEY ("siteId") REFERENCES ${quoteIdentifier(`${prefix}sites`)}("id")
-          ON UPDATE CASCADE ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${communicationMessagesTable}_status_idx" ON ${quoteIdentifier(communicationMessagesTable)} ("status")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${siteMenusTable}_site_key_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "key")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenusTable}_site_location_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "location")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenusTable}_site_sort_idx" ON ${quoteIdentifier(siteMenusTable)} ("siteId", "sortOrder")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_menu_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("menuId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_parent_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("parentId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenuItemsTable}_menu_sort_idx" ON ${quoteIdentifier(siteMenuItemsTable)} ("menuId", "sortOrder")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${siteMenuItemMetaTable}_menuItemId_idx" ON ${quoteIdentifier(siteMenuItemMetaTable)} ("menuItemId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${siteMenuItemMetaTable}_menu_item_key_idx" ON ${quoteIdentifier(siteMenuItemMetaTable)} ("menuItemId", "key")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${communicationMessagesTable}_nextAttemptAt_idx" ON ${quoteIdentifier(communicationMessagesTable)} ("nextAttemptAt")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${communicationAttemptsTable}_messageId_idx" ON ${quoteIdentifier(communicationAttemptsTable)} ("messageId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${communicationAttemptsTable}_provider_event_idx" ON ${quoteIdentifier(communicationAttemptsTable)} ("providerId", "eventId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webcallbackEventsTable}_siteId_idx" ON ${quoteIdentifier(webcallbackEventsTable)} ("siteId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webcallbackEventsTable}_handlerId_idx" ON ${quoteIdentifier(webcallbackEventsTable)} ("handlerId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webhookSubscriptionsTable}_siteId_idx" ON ${quoteIdentifier(webhookSubscriptionsTable)} ("siteId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webhookSubscriptionsTable}_eventName_idx" ON ${quoteIdentifier(webhookSubscriptionsTable)} ("eventName")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${webhookSubscriptionsTable}_site_event_endpoint_idx" ON ${quoteIdentifier(webhookSubscriptionsTable)} ("siteId", "eventName", "endpointUrl")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webhookDeliveriesTable}_subscriptionId_idx" ON ${quoteIdentifier(webhookDeliveriesTable)} ("subscriptionId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webhookDeliveriesTable}_status_idx" ON ${quoteIdentifier(webhookDeliveriesTable)} ("status")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${webhookDeliveriesTable}_nextAttemptAt_idx" ON ${quoteIdentifier(webhookDeliveriesTable)} ("nextAttemptAt")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${webhookDeliveriesTable}_subscription_event_idx" ON ${quoteIdentifier(webhookDeliveriesTable)} ("subscriptionId", "eventId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${domainEventsQueueTable}_status_due_idx" ON ${quoteIdentifier(domainEventsQueueTable)} ("status", "available_at")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${termTaxonomyMetaTable}_termTaxonomyId_idx" ON ${quoteIdentifier(termTaxonomyMetaTable)} ("termTaxonomyId")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "${termTaxonomyMetaTable}_term_taxonomy_key_idx" ON ${quoteIdentifier(termTaxonomyMetaTable)} ("termTaxonomyId", "key")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${domainPostsTable}_site_domain_published_updated_idx" ON ${quoteIdentifier(domainPostsTable)} ("siteId", "dataDomainId", "published", "updatedAt")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${domainPostsTable}_site_slug_idx" ON ${quoteIdentifier(domainPostsTable)} ("siteId", "slug")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${domainPostsTable}_site_domain_slug_idx" ON ${quoteIdentifier(domainPostsTable)} ("siteId", "dataDomainId", "slug")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${mediaTable}_site_createdAt_idx" ON ${quoteIdentifier(mediaTable)} ("siteId", "createdAt")`,
-    ),
-  );
-  await db.execute(
-    sql.raw(
-      `CREATE INDEX IF NOT EXISTS "${prefix}site_term_relationships_object_id_idx" ON ${quoteIdentifier(`${prefix}site_term_relationships`)} ("objectId")`,
-    ),
-  );
+  await db.execute(sql.raw(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkUserMetaIdSequence)}`));
+  await db.execute(sql.raw(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkCommunicationAttemptsIdSequence)}`));
+  await db.execute(sql.raw(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkWebcallbackEventsIdSequence)}`));
+  await db.execute(sql.raw(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkWebhookSubscriptionsIdSequence)}`));
+
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkUsersTable)} (
+      "id" text PRIMARY KEY,
+      "name" text NULL,
+      "username" text NULL,
+      "gh_username" text NULL,
+      "email" text NOT NULL UNIQUE,
+      "emailVerified" timestamp NULL,
+      "image" text NULL,
+      "authProvider" text NOT NULL DEFAULT 'native',
+      "passwordHash" text NULL,
+      "role" text NOT NULL DEFAULT 'author',
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkUserMetaTable)} (
+      "id" integer PRIMARY KEY DEFAULT nextval('${networkUserMetaIdSequence}'::regclass),
+      "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "key" text NOT NULL,
+      "value" text NOT NULL DEFAULT '',
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now(),
+      UNIQUE ("userId", "key")
+    )
+  `));
+  await ensureOwnedSequence(networkUserMetaTable);
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSessionsTable)} (
+      "sessionToken" text PRIMARY KEY,
+      "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "expires" timestamp NOT NULL
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkVerificationTokensTable)} (
+      "identifier" text NOT NULL,
+      "token" text NOT NULL UNIQUE,
+      "expires" timestamp NOT NULL,
+      PRIMARY KEY ("identifier", "token")
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSystemSettingsTable)} (
+      "key" text PRIMARY KEY,
+      "value" text NOT NULL,
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkRbacRolesTable)} (
+      "role" text PRIMARY KEY,
+      "capabilities" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "isSystem" boolean NOT NULL DEFAULT false,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSitesTable)} (
+      "id" text PRIMARY KEY,
+      "name" text NULL,
+      "description" text NULL,
+      "logo" text NULL DEFAULT '',
+      "font" text NOT NULL DEFAULT 'font-cal',
+      "image" text NULL DEFAULT '/tooty-soccer.svg',
+      "imageBlurhash" text NULL DEFAULT '',
+      "subdomain" text UNIQUE,
+      "customDomain" text UNIQUE,
+      "message404" text NULL DEFAULT 'Blimey! You''ve found a page that doesn''t exist.',
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now(),
+      "userId" text NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "seriesCards" jsonb NULL DEFAULT '[]'::jsonb,
+      "layout" text NULL DEFAULT 'default',
+      "heroImage" text NULL,
+      "heroTitle" text NULL,
+      "heroSubtitle" text NULL,
+      "heroCtaText" text NULL,
+      "heroCtaUrl" text NULL,
+      "isPrimary" boolean NOT NULL DEFAULT false
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkAccountsTable)} (
+      "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "type" text NOT NULL,
+      "provider" text NOT NULL,
+      "providerAccountId" text NOT NULL,
+      "refresh_token" text NULL,
+      "refresh_token_expires_in" integer NULL,
+      "access_token" text NULL,
+      "expires_at" integer NULL,
+      "token_type" text NULL,
+      "scope" text NULL,
+      "id_token" text NULL,
+      "session_state" text NULL,
+      "oauth_token_secret" text NULL,
+      "oauth_token" text NULL,
+      PRIMARY KEY ("provider", "providerAccountId")
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkCommunicationMessagesTable)} (
+      "id" text PRIMARY KEY,
+      "siteId" text NULL,
+      "channel" text NOT NULL,
+      "to" text NOT NULL,
+      "subject" text NULL,
+      "body" text NOT NULL,
+      "category" text NOT NULL DEFAULT 'transactional',
+      "status" text NOT NULL DEFAULT 'queued',
+      "providerId" text NULL,
+      "externalId" text NULL,
+      "attemptCount" integer NOT NULL DEFAULT 0,
+      "maxAttempts" integer NOT NULL DEFAULT 3,
+      "nextAttemptAt" timestamp NULL,
+      "lastError" text NULL,
+      "metadata" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "createdByUserId" text NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkCommunicationAttemptsTable)} (
+      "id" integer PRIMARY KEY DEFAULT nextval('${networkCommunicationAttemptsIdSequence}'::regclass),
+      "messageId" text NOT NULL REFERENCES ${quoteIdentifier(networkCommunicationMessagesTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "providerId" text NOT NULL,
+      "eventId" text NULL,
+      "status" text NOT NULL,
+      "error" text NULL,
+      "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "createdAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await ensureOwnedSequence(networkCommunicationAttemptsTable);
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebcallbackEventsTable)} (
+      "id" integer PRIMARY KEY DEFAULT nextval('${networkWebcallbackEventsIdSequence}'::regclass),
+      "siteId" text NULL,
+      "handlerId" text NOT NULL,
+      "pluginId" text NULL,
+      "status" text NOT NULL DEFAULT 'received',
+      "requestBody" text NOT NULL DEFAULT '',
+      "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "requestQuery" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "error" text NULL,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await ensureOwnedSequence(networkWebcallbackEventsTable);
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebhookSubscriptionsTable)} (
+      "id" integer PRIMARY KEY DEFAULT nextval('${networkWebhookSubscriptionsIdSequence}'::regclass),
+      "siteId" text NULL,
+      "eventName" text NOT NULL,
+      "endpointUrl" text NOT NULL,
+      "secret" text NULL,
+      "enabled" boolean NOT NULL DEFAULT true,
+      "maxRetries" integer NOT NULL DEFAULT 4,
+      "backoffBaseSeconds" integer NOT NULL DEFAULT 30,
+      "headers" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+  await ensureOwnedSequence(networkWebhookSubscriptionsTable);
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebhookDeliveriesTable)} (
+      "id" text PRIMARY KEY,
+      "subscriptionId" integer NOT NULL REFERENCES ${quoteIdentifier(networkWebhookSubscriptionsTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "siteId" text NULL,
+      "eventId" text NOT NULL,
+      "eventName" text NOT NULL,
+      "endpointUrl" text NOT NULL,
+      "status" text NOT NULL DEFAULT 'queued',
+      "attemptCount" integer NOT NULL DEFAULT 0,
+      "maxAttempts" integer NOT NULL DEFAULT 4,
+      "nextAttemptAt" timestamp NULL,
+      "lastError" text NULL,
+      "requestBody" text NOT NULL DEFAULT '',
+      "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "responseStatus" integer NULL,
+      "responseBody" text NULL,
+      "createdAt" timestamp NOT NULL DEFAULT now(),
+      "updatedAt" timestamp NOT NULL DEFAULT now()
+    )
+  `));
+
+  const siteIds = await listKnownSiteIds().catch(() => []);
+  for (const siteId of siteIds) {
+    await ensureSiteScopedFeatureTables(siteId);
+  }
+
+  const dropTables = [
+    ...DISALLOWED_SHARED_OR_LEGACY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`),
+    ...OBSOLETE_REGISTRY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`),
+  ];
+  for (const tableName of dropTables) {
+    await db.execute(sql.raw(`DROP TABLE IF EXISTS ${quoteIdentifier(tableName)} CASCADE`));
+  }
 
   trace("db", "database compatibility fixes applied", {
     tables: [
-      postsTable,
-      domainPostsTable,
-      communicationMessagesTable,
-      communicationAttemptsTable,
-      siteMenusTable,
-      siteMenuItemsTable,
-      siteMenuItemMetaTable,
-      webcallbackEventsTable,
-      webhookSubscriptionsTable,
-      webhookDeliveriesTable,
-      domainEventsQueueTable,
-      termTaxonomyMetaTable,
-      mediaTable,
+      ...REQUIRED_NETWORK_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`),
+      ...dropTables,
     ],
   });
 
@@ -993,8 +491,6 @@ export async function applyDatabaseCompatibilityFixes() {
 }
 
 export async function applyPendingDatabaseMigrations() {
-  // Pre-v1 default remains strict no-compat mode. This flow still runs forward
-  // schema migrations so operators can repair/install schema safely.
   await applyDatabaseCompatibilityFixes();
 }
 

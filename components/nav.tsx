@@ -18,6 +18,11 @@ import {
 import { useParams, usePathname, useSelectedLayoutSegments } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import {
+  buildSidebarTabs,
+  type AdminNavContext,
+  type AdminSidebarIcon,
+} from "@/lib/admin-nav";
 import { getSitePublicUrl } from "@/lib/site-url";
 
 const externalLinks: any[] = [];
@@ -25,7 +30,7 @@ type NavTab = {
   name: string;
   href: string;
   isActive?: boolean;
-  icon: ReactNode;
+  icon: AdminSidebarIcon;
   isChild?: boolean;
   childLevel?: 1 | 2;
 };
@@ -92,16 +97,44 @@ function parseDataDomainTabs(items: any[]): Array<{ name: string; singular: stri
     .filter((item: any) => item.name && item.listHref && item.addHref);
 }
 
-const GLOBAL_SETTINGS_TABS: Array<{ name: string; href: string; match: string }> = [
-  { name: "Sites", href: "/app/sites", match: "/sites" },
-  { name: "Themes", href: "/app/settings/themes", match: "/settings/themes" },
-  { name: "Plugins", href: "/app/settings/plugins", match: "/settings/plugins" },
-  { name: "Messages", href: "/app/settings/messages", match: "/settings/messages" },
-  { name: "Migrations", href: "/app/settings/database", match: "/settings/database" },
-  { name: "Schedules", href: "/app/settings/schedules", match: "/settings/schedules" },
-  { name: "Users", href: "/app/settings/users", match: "/settings/users" },
-  { name: "User Roles", href: "/app/settings/rbac", match: "/settings/rbac" },
-];
+const EMPTY_NAV_CONTEXT: AdminNavContext = {
+  siteCount: 0,
+  mainSiteId: null,
+  effectiveSiteId: null,
+  adminMode: "multi-site",
+  activeScope: "network",
+  migrationRequired: false,
+  canManageNetworkSettings: false,
+  canManageNetworkPlugins: false,
+  canManageSiteSettings: false,
+  canReadSiteAnalytics: false,
+  canCreateSiteContent: false,
+  sites: [],
+};
+
+function renderNavIcon(icon: AdminSidebarIcon) {
+  switch (icon) {
+    case "back":
+      return <ArrowLeft width={18} />;
+    case "analytics":
+      return <BarChart3 width={18} />;
+    case "dashboard":
+      return <LayoutDashboard width={18} />;
+    case "network-settings":
+      return <Globe width={18} />;
+    case "plugin":
+      return <Edit3 width={18} />;
+    case "profile":
+      return <User width={18} />;
+    case "site":
+    case "content":
+      return <Globe width={18} />;
+    case "site-settings":
+      return <Monitor width={18} />;
+    default:
+      return <Settings width={18} />;
+  }
+}
 
 export default function Nav({ children }: { children: ReactNode }) {
   const tootyHomeHref = getSitePublicUrl({ isPrimary: true, subdomain: "main" });
@@ -114,27 +147,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const [dataDomainTabs, setDataDomainTabs] = useState<
     Array<{ name: string; singular: string; listHref: string; addHref: string; order?: number }>
   >([]);
-  const [navContext, setNavContext] = useState<{
-    siteCount: number;
-    mainSiteId: string | null;
-    migrationRequired: boolean;
-    canManageNetworkSettings: boolean;
-    canManageNetworkPlugins: boolean;
-    canManageSiteSettings: boolean;
-    canReadSiteAnalytics: boolean;
-    canCreateSiteContent: boolean;
-    sites: Array<{ id: string; name: string }>;
-  }>({
-    siteCount: 0,
-    mainSiteId: null,
-    migrationRequired: false,
-    canManageNetworkSettings: false,
-    canManageNetworkPlugins: false,
-    canManageSiteSettings: false,
-    canReadSiteAnalytics: false,
-    canCreateSiteContent: false,
-    sites: [],
-  });
+  const [navContext, setNavContext] = useState<AdminNavContext>(EMPTY_NAV_CONTEXT);
   const [environmentBadge, setEnvironmentBadge] = useState<{
     show: boolean;
     label: string;
@@ -153,8 +166,7 @@ export default function Nav({ children }: { children: ReactNode }) {
   const [teetyAnimationRun, setTeetyAnimationRun] = useState(0);
   const adminUiRequestRef = useRef(0);
   const currentSiteId = segments[0] === "site" && id ? id : null;
-  const singleSiteMode = navContext.siteCount === 1 && Boolean(navContext.mainSiteId);
-  const effectiveSiteId = currentSiteId || (singleSiteMode ? navContext.mainSiteId : null);
+  const effectiveSiteId = navContext.effectiveSiteId || currentSiteId || navContext.mainSiteId;
   const teetyQuote = useMemo(
     () => floatingWidgets.find((widget) => widget.id === "hello-teety-quote")?.content || "",
     [floatingWidgets],
@@ -231,6 +243,14 @@ export default function Nav({ children }: { children: ReactNode }) {
         setNavContext({
           siteCount: Number(nextNavContext?.siteCount || 0),
           mainSiteId: nextNavContext?.mainSiteId ? String(nextNavContext.mainSiteId) : null,
+          effectiveSiteId: nextNavContext?.effectiveSiteId ? String(nextNavContext.effectiveSiteId) : null,
+          adminMode: nextNavContext?.adminMode === "single-site" ? "single-site" : "multi-site",
+          activeScope:
+            nextNavContext?.activeScope === "site"
+              ? "site"
+              : nextNavContext?.activeScope === "merged-single-site"
+                ? "merged-single-site"
+                : "network",
           migrationRequired: Boolean(nextNavContext?.migrationRequired),
           canManageNetworkSettings: Boolean(nextNavContext?.canManageNetworkSettings),
           canManageNetworkPlugins: Boolean(nextNavContext?.canManageNetworkPlugins),
@@ -283,17 +303,7 @@ export default function Nav({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (controller.signal.aborted || requestId !== adminUiRequestRef.current) return;
-        setNavContext({
-          siteCount: 0,
-          mainSiteId: null,
-          migrationRequired: false,
-          canManageNetworkSettings: false,
-          canManageNetworkPlugins: false,
-          canManageSiteSettings: false,
-          canReadSiteAnalytics: false,
-          canCreateSiteContent: false,
-          sites: [],
-        });
+        setNavContext(EMPTY_NAV_CONTEXT);
         setPluginTabs([]);
         setDataDomainTabs([]);
         setHasAnalyticsProviders(false);
@@ -385,41 +395,6 @@ export default function Nav({ children }: { children: ReactNode }) {
     };
   }, [teetyDisplayQuoteStyled, teetyImageLoaded, teetyAnimationRun]);
 
-  const globalSettingsWithChildren = useMemo<NavTab[]>(() => {
-    const parent: NavTab = {
-      name: "Settings",
-      href: "/app/settings",
-      isActive: segments[0] === "settings",
-      icon: <Globe width={18} />,
-    };
-    const filteredTabs = GLOBAL_SETTINGS_TABS.filter((item) => {
-      if (singleSiteMode && item.name === "Sites") return false;
-      if (!navContext.canManageNetworkPlugins && item.name === "Messages") return false;
-      return true;
-    });
-    const settingsChildren: NavTab[] = filteredTabs.flatMap((item) => {
-      const base: NavTab = {
-        name: item.name,
-        href: item.href,
-        isActive: pathname?.includes(item.match),
-        icon: <Settings width={18} />,
-        isChild: true,
-        childLevel: 1 as const,
-      };
-      if (item.name !== "Plugins") return [base];
-      const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
-        name: plugin.name,
-        href: plugin.href,
-        isActive: pathname?.includes(plugin.href),
-        icon: <Settings width={18} />,
-        isChild: true,
-        childLevel: 2 as const,
-      }));
-      return [base, ...pluginChildren];
-    });
-    return [parent, ...settingsChildren];
-  }, [pathname, pluginTabs, segments, singleSiteMode, navContext.migrationRequired, navContext.canManageNetworkPlugins]);
-
   const tabs = useMemo<NavTab[]>(() => {
     const domainPostMatch = pathname?.match(
       /^\/(?:app\/)?site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
@@ -432,321 +407,78 @@ export default function Nav({ children }: { children: ReactNode }) {
         {
           name: "Back to Entries",
           href: `/app/site/${id}/domain/${domainKey}`,
-          icon: <ArrowLeft width={18} />,
+          icon: "back",
         },
         {
           name: "Editor",
           href: baseHref,
           isActive: pathname === baseHref,
-          icon: <Edit3 width={18} />,
+          icon: "plugin",
         },
         {
           name: "Settings",
           href: `${baseHref}/settings`,
           isActive: pathname === `${baseHref}/settings`,
-          icon: <Monitor width={18} />,
+          icon: "site-settings",
         },
       ];
     }
-
-    const buildContentTabs = (siteId: string): NavTab[] => {
-      const dedupedByListHref = new Map<
-        string,
-        { name: string; singular: string; listHref: string; addHref: string; order?: number }
-      >();
-      const entries = [
-        {
-          name: "Posts",
-          singular: "Post",
-          listHref: `/app/site/${siteId}/domain/post`,
-          addHref: `/app/site/${siteId}/domain/post/create`,
-          order: undefined as number | undefined,
-        },
-        ...dataDomainTabs,
-      ];
-      for (const item of entries) {
-        if (!dedupedByListHref.has(item.listHref)) {
-          dedupedByListHref.set(item.listHref, item);
-        }
-      }
-      return Array.from(dedupedByListHref.values())
-        .sort((a, b) => {
-          const aHasOrder = Number.isFinite(a.order);
-          const bHasOrder = Number.isFinite(b.order);
-          if (aHasOrder && bHasOrder) return Number(a.order) - Number(b.order);
-          if (aHasOrder) return -1;
-          if (bHasOrder) return 1;
-          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        })
-        .flatMap((item) => ([
-        {
-          name: item.name,
-          href: item.listHref,
-          isActive: pathname?.includes(item.listHref) && !pathname?.includes(`${item.listHref}/create`),
-          icon: <Globe width={18} />,
-        },
-        {
-          name: `List ${item.name}`,
-          href: item.listHref,
-          isActive: pathname?.includes(item.listHref) && !pathname?.includes(`${item.listHref}/create`),
-          icon: <Globe width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-        {
-          name: `Add ${item.singular}`,
-          href: item.addHref,
-          isActive: pathname?.includes(item.addHref),
-          icon: <Globe width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        },
-      ]));
-    };
-
-    if (segments[0] === "site" && id) {
-      const siteSettingsChildren: NavTab[] = [
-        { name: "General", href: `/app/site/${id}/settings`, match: `/app/site/${id}/settings` },
-        { name: "Categories", href: `/app/site/${id}/settings/categories`, match: `/app/site/${id}/settings/categories` },
-        { name: "Post-Types", href: `/app/site/${id}/settings/domains`, match: `/app/site/${id}/settings/domains` },
-        { name: "Reading", href: `/app/site/${id}/settings/reading`, match: `/app/site/${id}/settings/reading` },
-        { name: "SEO & Social", href: `/app/site/${id}/settings/seo`, match: `/app/site/${id}/settings/seo` },
-        { name: "Writing", href: `/app/site/${id}/settings/writing`, match: `/app/site/${id}/settings/writing` },
-        { name: "Menus", href: `/app/site/${id}/settings/menus`, match: `/app/site/${id}/settings/menus` },
-        { name: "Themes", href: `/app/site/${id}/settings/themes`, match: `/app/site/${id}/settings/themes` },
-        {
-          name: "Plugins",
-          href: `/app/site/${id}/settings/plugins`,
-          match: `/app/site/${id}/settings/plugins`,
-        },
-        {
-          name: "Messages",
-          href: `/app/site/${id}/settings/messages`,
-          match: `/app/site/${id}/settings/messages`,
-        },
-        {
-          name: "Comments",
-          href: `/app/site/${id}/settings/comments`,
-          match: `/app/site/${id}/settings/comments`,
-        },
-        {
-          name: "Users",
-          href: `/app/site/${id}/settings/users`,
-          match: `/app/site/${id}/settings/users`,
-        },
-      ].flatMap((item) => {
-        const base: NavTab = {
-          name: item.name,
-          href: item.href,
-          isActive: pathname?.includes(item.match),
-          icon: <Settings width={18} />,
-          isChild: true as const,
-          childLevel: 1 as const,
-        };
-        if (item.name !== "Plugins") return [base];
-        const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
-          name: plugin.name,
-          href: plugin.href,
-          isActive: pathname?.includes(plugin.href),
-          icon: <Settings width={18} />,
-          isChild: true,
-          childLevel: 2 as const,
-        }));
-        return [base, ...pluginChildren];
-      });
-
-      const siteTabs: NavTab[] = [
-        {
-          name: "Profile",
-          href: "/app/profile",
-          isActive: pathname?.startsWith("/app/profile"),
-          icon: <User width={18} />,
-        },
-        ...(navContext.canCreateSiteContent ? buildContentTabs(id) : []),
-        ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
-          ? [
-              {
-                name: "Analytics",
-                href: `/app/site/${id}/analytics`,
-                isActive: segments.includes("analytics"),
-                icon: <BarChart3 width={18} />,
-              },
-            ]
-          : []),
-        ...rootPluginTabs.map((plugin) => ({
-          name: plugin.name,
-          href: plugin.href,
-          isActive: pathname?.includes(plugin.href),
-          icon: <Edit3 width={18} />,
-        })),
-        ...(navContext.canManageSiteSettings
-          ? [
-              {
-                name: singleSiteMode ? "System" : "Settings",
-                href: `/app/site/${id}/settings`,
-                isActive: segments.includes("settings"),
-                icon: <Monitor width={18} />,
-              },
-              ...siteSettingsChildren,
-            ]
-          : []),
-        ...(singleSiteMode && navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
-      ];
-
-      return singleSiteMode
-        ? siteTabs
-        : [{ name: "Back to All Sites", href: "/app/sites", icon: <ArrowLeft width={18} /> }, ...siteTabs];
-    }
-
-    if (singleSiteMode && navContext.mainSiteId) {
-      const singleSiteTabs: NavTab[] = [
-        {
-          name: "Profile",
-          href: "/app/profile",
-          isActive: pathname?.startsWith("/app/profile"),
-          icon: <User width={18} />,
-        },
-        ...(navContext.canCreateSiteContent ? buildContentTabs(navContext.mainSiteId) : []),
-        ...(hasAnalyticsProviders && navContext.canReadSiteAnalytics
-          ? [
-              {
-                name: "Analytics",
-                href: `/app/site/${navContext.mainSiteId}/analytics`,
-                isActive: pathname?.includes(`/app/site/${navContext.mainSiteId}/analytics`),
-                icon: <BarChart3 width={18} />,
-              } as NavTab,
-            ]
-          : []),
-        ...rootPluginTabs.map((plugin) => ({
-          name: plugin.name,
-          href: plugin.href,
-          isActive: pathname?.includes(plugin.href),
-          icon: <Edit3 width={18} />,
-        })),
-        ...(navContext.canManageSiteSettings
-          ? [
-              {
-                name: "System",
-                href: `/app/site/${navContext.mainSiteId}/settings`,
-                isActive: pathname?.includes(`/app/site/${navContext.mainSiteId}/settings`),
-                icon: <Monitor width={18} />,
-              },
-              ...[
-          { name: "General", href: `/app/site/${navContext.mainSiteId}/settings`, match: `/app/site/${navContext.mainSiteId}/settings` },
-          { name: "Categories", href: `/app/site/${navContext.mainSiteId}/settings/categories`, match: `/app/site/${navContext.mainSiteId}/settings/categories` },
-          { name: "Post-Types", href: `/app/site/${navContext.mainSiteId}/settings/domains`, match: `/app/site/${navContext.mainSiteId}/settings/domains` },
-          { name: "Reading", href: `/app/site/${navContext.mainSiteId}/settings/reading`, match: `/app/site/${navContext.mainSiteId}/settings/reading` },
-          { name: "SEO & Social", href: `/app/site/${navContext.mainSiteId}/settings/seo`, match: `/app/site/${navContext.mainSiteId}/settings/seo` },
-          { name: "Writing", href: `/app/site/${navContext.mainSiteId}/settings/writing`, match: `/app/site/${navContext.mainSiteId}/settings/writing` },
-          { name: "Menus", href: `/app/site/${navContext.mainSiteId}/settings/menus`, match: `/app/site/${navContext.mainSiteId}/settings/menus` },
-          { name: "Themes", href: `/app/site/${navContext.mainSiteId}/settings/themes`, match: `/app/site/${navContext.mainSiteId}/settings/themes` },
-          { name: "Plugins", href: `/app/site/${navContext.mainSiteId}/settings/plugins`, match: `/app/site/${navContext.mainSiteId}/settings/plugins` },
-          { name: "Messages", href: `/app/site/${navContext.mainSiteId}/settings/messages`, match: `/app/site/${navContext.mainSiteId}/settings/messages` },
-          { name: "Comments", href: `/app/site/${navContext.mainSiteId}/settings/comments`, match: `/app/site/${navContext.mainSiteId}/settings/comments` },
-          { name: "Users", href: `/app/site/${navContext.mainSiteId}/settings/users`, match: `/app/site/${navContext.mainSiteId}/settings/users` },
-          { name: "Migrations", href: `/app/site/${navContext.mainSiteId}/settings/database`, match: `/app/site/${navContext.mainSiteId}/settings/database` },
-          { name: "RBAC", href: `/app/site/${navContext.mainSiteId}/settings/rbac`, match: `/app/site/${navContext.mainSiteId}/settings/rbac` },
-          { name: "Schedules", href: `/app/site/${navContext.mainSiteId}/settings/schedules`, match: `/app/site/${navContext.mainSiteId}/settings/schedules` },
-        ].flatMap((item) => {
-          const base: NavTab = {
-            name: item.name,
-            href: item.href,
-            isActive: pathname?.includes(item.match),
-            icon: <Settings width={18} />,
-            isChild: true as const,
-            childLevel: 1 as const,
-          };
-          if (item.name !== "Plugins") return [base];
-          const pluginChildren: NavTab[] = pluginTabs.map((plugin) => ({
-            name: plugin.name,
-            href: plugin.href,
-            isActive: pathname?.includes(plugin.href),
-            icon: <Settings width={18} />,
-            isChild: true,
-            childLevel: 2 as const,
-          }));
-          return [base, ...pluginChildren];
-        }),
-            ]
-          : []),
-        ...(navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
-      ];
-      return singleSiteTabs;
-    }
-
-    return [
-      {
-        name: "Profile",
-        href: "/app/profile",
-        isActive: pathname?.startsWith("/app/profile"),
-        icon: <User width={18} />,
-      },
-      {
-        name: "Overview",
-        href: "/app",
-        isActive: pathname === "/app" || pathname === "/app/cp",
-        icon: <LayoutDashboard width={18} />,
-      },
-      {
-        name: "Sites",
-        href: "/app/sites",
-        isActive: segments[0] === "sites",
-        icon: <Globe width={18} />,
-      },
-      ...[...navContext.sites]
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-        .map((site) => ({
-        name: site.name,
-        href: `/app/site/${site.id}`,
-        isActive: pathname?.includes(`/app/site/${site.id}`),
-        icon: <Globe width={18} />,
-        isChild: true,
-        childLevel: 1 as const,
-      })),
-      ...rootPluginTabs.map((plugin) => ({
-        name: plugin.name,
-        href: plugin.href,
-        isActive: pathname?.includes(plugin.href),
-        icon: <Edit3 width={18} />,
-      })),
-      ...(navContext.canManageNetworkSettings ? globalSettingsWithChildren : []),
-    ];
-  }, [segments, id, pathname, dataDomainTabs, hasAnalyticsProviders, navContext.mainSiteId, navContext.sites, navContext.canManageNetworkSettings, navContext.canManageSiteSettings, navContext.canReadSiteAnalytics, navContext.canCreateSiteContent, singleSiteMode, pluginTabs, rootPluginTabs, globalSettingsWithChildren]);
+    if (!pathname) return [];
+    return buildSidebarTabs({
+      pathname,
+      navContext,
+      currentSiteId,
+      dataDomainTabs,
+      hasAnalyticsProviders,
+      pluginTabs,
+      rootPluginTabs,
+    });
+  }, [currentSiteId, dataDomainTabs, hasAnalyticsProviders, id, navContext, pathname, pluginTabs, rootPluginTabs, segments]);
 
   const [showSidebar, setShowSidebar] = useState(false);
   const [collapsedByHref, setCollapsedByHref] = useState<Record<string, boolean>>({});
 
   const renderedTabs = useMemo(() => {
-    let currentLevel0Href: string | null = null;
-    let currentLevel1Href: string | null = null;
+    return tabs.reduce<{
+      items: Array<NavTab & { level: number; hasChildren: boolean; visible: boolean }>;
+      currentLevel0Href: string | null;
+      currentLevel1Href: string | null;
+    }>(
+      (state, tab, idx) => {
+        const level = tab.childLevel ?? 0;
+        const currentLevel0Href = level === 0 ? tab.href : state.currentLevel0Href;
+        const currentLevel1Href = level === 1 ? tab.href : level === 0 ? null : state.currentLevel1Href;
+        const nextLevel = tabs[idx + 1]?.childLevel ?? 0;
+        const hasChildren = nextLevel > level;
+        const level0Collapsed = currentLevel0Href ? (collapsedByHref[currentLevel0Href] ?? true) : false;
+        const level1Collapsed = currentLevel1Href ? (collapsedByHref[currentLevel1Href] ?? true) : false;
+        const visible =
+          level === 0
+            ? true
+            : level === 1
+              ? !level0Collapsed
+              : !level0Collapsed && !level1Collapsed;
 
-    return tabs.map((tab, idx) => {
-      const level = tab.childLevel ?? 0;
-      if (level === 0) {
-        currentLevel0Href = tab.href;
-        currentLevel1Href = null;
-      } else if (level === 1) {
-        currentLevel1Href = tab.href;
-      }
-
-      const nextLevel = tabs[idx + 1]?.childLevel ?? 0;
-      const hasChildren = nextLevel > level;
-      const level0Collapsed = currentLevel0Href ? (collapsedByHref[currentLevel0Href] ?? true) : false;
-      const level1Collapsed = currentLevel1Href ? (collapsedByHref[currentLevel1Href] ?? true) : false;
-      const visible =
-        level === 0
-          ? true
-          : level === 1
-            ? !level0Collapsed
-            : !level0Collapsed && !level1Collapsed;
-
-      return {
-        ...tab,
-        level,
-        hasChildren,
-        visible,
-      };
-    });
+        return {
+          currentLevel0Href,
+          currentLevel1Href,
+          items: [
+            ...state.items,
+            {
+              ...tab,
+              level,
+              hasChildren,
+              visible,
+            },
+          ],
+        };
+      },
+      {
+        items: [],
+        currentLevel0Href: null,
+        currentLevel1Href: null,
+      },
+    ).items;
   }, [tabs, collapsedByHref]);
 
   useEffect(() => {
@@ -858,7 +590,7 @@ export default function Nav({ children }: { children: ReactNode }) {
                     !isChild ? "" : childLevel === 2 ? "ml-10" : "ml-5"
                   }`}
                 >
-                  <span className="mt-0.5">{icon}</span>
+                  <span className="mt-0.5">{renderNavIcon(icon)}</span>
                   <span className="flex-1 text-sm font-medium leading-tight">{name}</span>
                   {hasChildren ? (
                     <button

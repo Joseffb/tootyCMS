@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   usersFindFirst: vi.fn(),
   sitesFindFirst: vi.fn(),
   sitesFindMany: vi.fn(),
-  domainPostsFindFirst: vi.fn(),
+  findDomainPostForMutation: vi.fn(),
   getSiteUserRole: vi.fn(),
   isAdministrator: vi.fn(),
   roleHasCapability: vi.fn(),
@@ -49,9 +49,12 @@ vi.mock("@/lib/db", () => ({
         findFirst: mocks.sitesFindFirst,
         findMany: mocks.sitesFindMany,
       },
-      domainPosts: { findFirst: mocks.domainPostsFindFirst },
     },
   },
+}));
+
+vi.mock("@/lib/site-domain-post-store", () => ({
+  findDomainPostForMutation: mocks.findDomainPostForMutation,
 }));
 
 vi.mock("@/lib/site-user-tables", () => ({
@@ -79,7 +82,7 @@ describe("authorization helpers", () => {
     mocks.usersFindFirst.mockReset();
     mocks.sitesFindFirst.mockReset();
     mocks.sitesFindMany.mockReset();
-    mocks.domainPostsFindFirst.mockReset();
+    mocks.findDomainPostForMutation.mockReset();
     mocks.getSiteUserRole.mockReset();
     mocks.isAdministrator.mockReset();
     mocks.roleHasCapability.mockReset();
@@ -88,6 +91,13 @@ describe("authorization helpers", () => {
     mocks.isAdministrator.mockReturnValue(false);
     mocks.getSiteUserRole.mockResolvedValue("editor");
     mocks.roleHasCapability.mockResolvedValue(true);
+    mocks.findDomainPostForMutation.mockResolvedValue({
+      id: "post-1",
+      siteId: "site-1",
+      userId: "user-1",
+      slug: "hello",
+      published: true,
+    });
   });
 
   it("treats users with network.rbac.manage as super admin", async () => {
@@ -131,7 +141,7 @@ describe("authorization helpers", () => {
   });
 
   it("permits edit via content.edit.any even for non-owner", async () => {
-    mocks.domainPostsFindFirst.mockResolvedValue({
+    mocks.findDomainPostForMutation.mockResolvedValue({
       id: "post-1",
       siteId: "site-1",
       userId: "another-user",
@@ -146,7 +156,7 @@ describe("authorization helpers", () => {
   });
 
   it("denies delete when only own capability is present for non-owner", async () => {
-    mocks.domainPostsFindFirst.mockResolvedValue({
+    mocks.findDomainPostForMutation.mockResolvedValue({
       id: "post-2",
       siteId: "site-1",
       userId: "owner-user",

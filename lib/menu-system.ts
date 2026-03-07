@@ -4,13 +4,16 @@ import type { MenuItem, MenuLocation } from "@/lib/kernel";
 import type { SitePermalinkSettings } from "@/lib/permalink";
 import { buildArchivePath } from "@/lib/permalink";
 import {
-  media,
-  siteMenuItemMeta,
-  siteMenuItems,
-  siteMenus,
 } from "@/lib/schema";
 import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
+import {
+  ensureSiteMenuTables,
+  getSiteMenuTables,
+  resetSiteMenuTablesCache,
+  siteMenuTablesReady,
+} from "@/lib/site-menu-tables";
 
 export type NativeMenuLocation = MenuLocation | "unassigned";
 export const NATIVE_MENU_LOCATIONS: MenuLocation[] = ["header", "footer", "dashboard"];
@@ -180,7 +183,31 @@ function isLegacyDefaultHeaderMenu(items: MenuItem[]) {
 
 function isMissingMenuTablesError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  return message.includes("site_menus") || message.includes("site_menu_items") || message.includes("site_menu_item_meta");
+  return (
+    message.includes("site_menus") ||
+    message.includes("site_menu_items") ||
+    message.includes("site_menu_item_meta") ||
+    message.includes("menu_item_meta_id_seq") ||
+    /relation ".*_menus" does not exist/i.test(message) ||
+    /relation ".*_menu_items" does not exist/i.test(message) ||
+    /relation ".*_menu_item_meta" does not exist/i.test(message) ||
+    /relation ".*_menu_item_meta_id_seq" does not exist/i.test(message) ||
+    /relation ".*_media" does not exist/i.test(message)
+  );
+}
+
+async function withSiteMenuTableRecovery<T>(siteId: string, run: () => Promise<T>) {
+  try {
+    await ensureSiteMenuTables(siteId);
+    await ensureSiteMediaTable(siteId);
+    return await run();
+  } catch (error) {
+    if (!isMissingMenuTablesError(error)) throw error;
+    resetSiteMenuTablesCache(siteId);
+    await ensureSiteMenuTables(siteId);
+    await ensureSiteMediaTable(siteId);
+    return run();
+  }
 }
 
 type MutableMenuNode = MenuItem & { __children: MutableMenuNode[] };
@@ -289,38 +316,42 @@ function flattenMenuItemsForLegacy(items: MenuItem[], depth = 0): MenuItem[] {
 }
 
 async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]> {
+  if (!(await siteMenuTablesReady(siteId))) {
+    return [];
+  }
   try {
-    const menus = await db.query.siteMenus.findMany({
-      where: eq(siteMenus.siteId, siteId),
-      orderBy: (table, { asc }) => [asc(table.sortOrder), asc(table.createdAt)],
-    });
+    const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
+
+    const menus = await db
+      .select()
+      .from(menusTable)
+      .orderBy(asc(menusTable.sortOrder), asc(menusTable.createdAt));
 
     if (!menus.length) return [];
 
     const menuIds = menus.map((menu) => menu.id);
-    const items = await db.query.siteMenuItems.findMany({
-      where: inArray(siteMenuItems.menuId, menuIds),
-      orderBy: (table, { asc }) => [asc(table.sortOrder), asc(table.createdAt)],
-    });
+    const items = await db
+      .select()
+      .from(menuItemsTable)
+      .where(inArray(menuItemsTable.menuId, menuIds))
+      .orderBy(asc(menuItemsTable.sortOrder), asc(menuItemsTable.createdAt));
 
     const itemIds = items.map((item) => item.id);
     const mediaIds = Array.from(
       new Set(items.map((item) => item.mediaId).filter((value): value is number => typeof value === "number")),
     );
 
-    const [metaRows, mediaRows] = await Promise.all([
-      itemIds.length
-        ? db.query.siteMenuItemMeta.findMany({
-            where: inArray(siteMenuItemMeta.menuItemId, itemIds),
-            orderBy: (table, { asc }) => [asc(table.id)],
-          })
-        : Promise.resolve([]),
-      mediaIds.length
-        ? db.query.media.findMany({
-            where: and(inArray(media.id, mediaIds), eq(media.siteId, siteId)),
-          })
-        : Promise.resolve([]),
-    ]);
+    const metaRows = itemIds.length
+      ? await db.select().from(menuItemMetaTable).where(inArray(menuItemMetaTable.menuItemId, itemIds)).orderBy(asc(menuItemMetaTable.id))
+      : [];
+    const mediaRows =
+      mediaIds.length > 0
+        ? await (async () => {
+            await ensureSiteMediaTable(siteId);
+            const media = getSiteMediaTable(siteId);
+            return db.select().from(media).where(inArray(media.id, mediaIds));
+          })()
+        : [];
 
     const mediaById = new Map(mediaRows.map((row) => [String(row.id), row]));
     const metaByItemId = new Map<string, Record<string, string>>();
@@ -355,7 +386,7 @@ async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]
 
     return menus.map((menu) => ({
       id: menu.id,
-      siteId: menu.siteId,
+      siteId,
       key: menu.key,
       title: menu.title,
       description: menu.description || "",
@@ -367,6 +398,7 @@ async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]
     }));
   } catch (error) {
     if (isMissingMenuTablesError(error)) {
+      resetSiteMenuTablesCache(siteId);
       trace("menu", "native menu tables unavailable, falling back to legacy settings", { siteId });
       return [];
     }
@@ -389,17 +421,17 @@ function normalizeLocationForStorage(location: NativeMenuLocation) {
 
 async function clearDuplicateLocationAssignments(siteId: string, location: NativeMenuLocation, keepMenuId?: string) {
   if (location === "unassigned") return;
-  const where = keepMenuId
-    ? and(eq(siteMenus.siteId, siteId), eq(siteMenus.location, location))
-    : and(eq(siteMenus.siteId, siteId), eq(siteMenus.location, location));
-  const rows = await db.query.siteMenus.findMany({
-    where,
-  });
+  await ensureSiteMenuTables(siteId);
+  const { menusTable } = getSiteMenuTables(siteId);
+  const rows = await db
+    .select()
+    .from(menusTable)
+    .where(eq(menusTable.location, location));
   const duplicates = rows.filter((row) => row.id !== keepMenuId);
   if (!duplicates.length) return;
   await Promise.all(
     duplicates.map((row) =>
-      db.update(siteMenus).set({ location: null }).where(eq(siteMenus.id, row.id)),
+      db.update(menusTable).set({ location: null }).where(eq(menusTable.id, row.id)),
     ),
   );
 }
@@ -451,165 +483,176 @@ export async function getSiteMenu(siteId: string, location: MenuLocation) {
 }
 
 export async function createSiteMenu(siteId: string, input: UpsertMenuInput) {
-  const key = input.key.trim();
-  const title = input.title.trim();
-  const location = normalizeLocation(input.location);
-  if (!key || !title) throw new Error("Menu key and title are required.");
+  return withSiteMenuTableRecovery(siteId, async () => {
+    const { menusTable } = getSiteMenuTables(siteId);
+    const key = input.key.trim();
+    const title = input.title.trim();
+    const location = normalizeLocation(input.location);
+    if (!key || !title) throw new Error("Menu key and title are required.");
 
-  const [created] = await db
-    .insert(siteMenus)
-    .values({
-      siteId,
-      key,
-      title,
-      description: String(input.description || "").trim(),
-      location: normalizeLocationForStorage(location),
-      sortOrder: normalizeOrder(input.sortOrder, 10),
-    })
-    .returning();
+    const [created] = await db
+      .insert(menusTable)
+      .values({
+        key,
+        title,
+        description: String(input.description || "").trim(),
+        location: normalizeLocationForStorage(location),
+        sortOrder: normalizeOrder(input.sortOrder, 10),
+      })
+      .returning();
 
-  await clearDuplicateLocationAssignments(siteId, location, created.id);
-  return created;
+    await clearDuplicateLocationAssignments(siteId, location, created.id);
+    return created;
+  });
 }
 
 export async function updateSiteMenu(siteId: string, menuId: string, input: UpsertMenuInput) {
-  const key = input.key.trim();
-  const title = input.title.trim();
-  const location = normalizeLocation(input.location);
-  if (!key || !title) throw new Error("Menu key and title are required.");
+  return withSiteMenuTableRecovery(siteId, async () => {
+    const { menusTable } = getSiteMenuTables(siteId);
+    const key = input.key.trim();
+    const title = input.title.trim();
+    const location = normalizeLocation(input.location);
+    if (!key || !title) throw new Error("Menu key and title are required.");
 
-  const [updated] = await db
-    .update(siteMenus)
-    .set({
-      key,
-      title,
-      description: String(input.description || "").trim(),
-      location: normalizeLocationForStorage(location),
-      sortOrder: normalizeOrder(input.sortOrder, 10),
-    })
-    .where(and(eq(siteMenus.id, menuId), eq(siteMenus.siteId, siteId)))
-    .returning();
+    const [updated] = await db
+      .update(menusTable)
+      .set({
+        key,
+        title,
+        description: String(input.description || "").trim(),
+        location: normalizeLocationForStorage(location),
+        sortOrder: normalizeOrder(input.sortOrder, 10),
+      })
+      .where(eq(menusTable.id, menuId))
+      .returning();
 
-  if (!updated) throw new Error("Menu not found.");
-  await clearDuplicateLocationAssignments(siteId, location, updated.id);
-  return updated;
+    if (!updated) throw new Error("Menu not found.");
+    await clearDuplicateLocationAssignments(siteId, location, updated.id);
+    return updated;
+  });
 }
 
 export async function deleteSiteMenu(siteId: string, menuId: string) {
-  await db.delete(siteMenus).where(and(eq(siteMenus.id, menuId), eq(siteMenus.siteId, siteId)));
+  await withSiteMenuTableRecovery(siteId, async () => {
+    const { menusTable } = getSiteMenuTables(siteId);
+    await db.delete(menusTable).where(eq(menusTable.id, menuId));
+  });
 }
 
 export async function createSiteMenuItem(siteId: string, menuId: string, input: UpsertMenuItemInput) {
-  const menu = await db.query.siteMenus.findFirst({
-    where: and(eq(siteMenus.id, menuId), eq(siteMenus.siteId, siteId)),
-    columns: { id: true },
+  return withSiteMenuTableRecovery(siteId, async () => {
+    await ensureSiteMediaTable(siteId);
+    const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
+    const media = getSiteMediaTable(siteId);
+    const menuRows = await db.select({ id: menusTable.id }).from(menusTable).where(eq(menusTable.id, menuId)).limit(1);
+    const menu = menuRows[0];
+    if (!menu) throw new Error("Menu not found.");
+
+    let resolvedMediaId: number | null = null;
+    if (input.mediaId) {
+      const requestedMediaId = Number(input.mediaId);
+      if (!Number.isFinite(requestedMediaId)) {
+        throw new Error("Invalid media id.");
+      }
+      const mediaRows = await db.select({ id: media.id }).from(media).where(eq(media.id, requestedMediaId)).limit(1);
+      const mediaRow = mediaRows[0];
+      if (!mediaRow) {
+        throw new Error("Media item not found for this site.");
+      }
+      resolvedMediaId = mediaRow.id;
+    }
+
+    const [created] = await db
+      .insert(menuItemsTable)
+      .values({
+        menuId,
+        parentId: input.parentId || null,
+        title: input.title.trim(),
+        href: input.href.trim(),
+        description: String(input.description || "").trim(),
+        mediaId: resolvedMediaId,
+        target: String(input.target || "").trim() || null,
+        rel: String(input.rel || "").trim() || null,
+        external: Boolean(input.external),
+        enabled: input.enabled !== false,
+        sortOrder: normalizeOrder(input.sortOrder, 10),
+      })
+      .returning();
+
+    const meta = normalizeMenuMeta(input.meta);
+    const rows = Object.entries(meta).map(([key, value]) => ({
+      menuItemId: created.id,
+      key,
+      value,
+    }));
+    if (rows.length) await db.insert(menuItemMetaTable).values(rows);
+    return created;
   });
-  if (!menu) throw new Error("Menu not found.");
-
-  let resolvedMediaId: number | null = null;
-  if (input.mediaId) {
-    const requestedMediaId = Number(input.mediaId);
-    if (!Number.isFinite(requestedMediaId)) {
-      throw new Error("Invalid media id.");
-    }
-    const mediaRow = await db.query.media.findFirst({
-      where: and(eq(media.id, requestedMediaId), eq(media.siteId, siteId)),
-      columns: { id: true },
-    });
-    if (!mediaRow) {
-      throw new Error("Media item not found for this site.");
-    }
-    resolvedMediaId = mediaRow.id;
-  }
-
-  const [created] = await db
-    .insert(siteMenuItems)
-    .values({
-      menuId,
-      parentId: input.parentId || null,
-      title: input.title.trim(),
-      href: input.href.trim(),
-      description: String(input.description || "").trim(),
-      mediaId: resolvedMediaId,
-      target: String(input.target || "").trim() || null,
-      rel: String(input.rel || "").trim() || null,
-      external: Boolean(input.external),
-      enabled: input.enabled !== false,
-      sortOrder: normalizeOrder(input.sortOrder, 10),
-    })
-    .returning();
-
-  const meta = normalizeMenuMeta(input.meta);
-  const rows = Object.entries(meta).map(([key, value]) => ({
-    menuItemId: created.id,
-    key,
-    value,
-  }));
-  if (rows.length) await db.insert(siteMenuItemMeta).values(rows);
-  return created;
 }
 
 export async function updateSiteMenuItem(siteId: string, menuId: string, itemId: string, input: UpsertMenuItemInput) {
-  const menu = await db.query.siteMenus.findFirst({
-    where: and(eq(siteMenus.id, menuId), eq(siteMenus.siteId, siteId)),
-    columns: { id: true },
+  return withSiteMenuTableRecovery(siteId, async () => {
+    await ensureSiteMediaTable(siteId);
+    const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
+    const media = getSiteMediaTable(siteId);
+    const menuRows = await db.select({ id: menusTable.id }).from(menusTable).where(eq(menusTable.id, menuId)).limit(1);
+    const menu = menuRows[0];
+    if (!menu) throw new Error("Menu not found.");
+
+    let resolvedMediaId: number | null = null;
+    if (input.mediaId) {
+      const requestedMediaId = Number(input.mediaId);
+      if (!Number.isFinite(requestedMediaId)) {
+        throw new Error("Invalid media id.");
+      }
+      const mediaRows = await db.select({ id: media.id }).from(media).where(eq(media.id, requestedMediaId)).limit(1);
+      const mediaRow = mediaRows[0];
+      if (!mediaRow) {
+        throw new Error("Media item not found for this site.");
+      }
+      resolvedMediaId = mediaRow.id;
+    }
+
+    const [updated] = await db
+      .update(menuItemsTable)
+      .set({
+        parentId: input.parentId || null,
+        title: input.title.trim(),
+        href: input.href.trim(),
+        description: String(input.description || "").trim(),
+        mediaId: resolvedMediaId,
+        target: String(input.target || "").trim() || null,
+        rel: String(input.rel || "").trim() || null,
+        external: Boolean(input.external),
+        enabled: input.enabled !== false,
+        sortOrder: normalizeOrder(input.sortOrder, 10),
+      })
+      .where(and(eq(menuItemsTable.id, itemId), eq(menuItemsTable.menuId, menuId)))
+      .returning();
+
+    if (!updated) throw new Error("Menu item not found.");
+
+    await db.delete(menuItemMetaTable).where(eq(menuItemMetaTable.menuItemId, itemId));
+    const meta = normalizeMenuMeta(input.meta);
+    const rows = Object.entries(meta).map(([key, value]) => ({
+      menuItemId: itemId,
+      key,
+      value,
+    }));
+    if (rows.length) await db.insert(menuItemMetaTable).values(rows);
+
+    return updated;
   });
-  if (!menu) throw new Error("Menu not found.");
-
-  let resolvedMediaId: number | null = null;
-  if (input.mediaId) {
-    const requestedMediaId = Number(input.mediaId);
-    if (!Number.isFinite(requestedMediaId)) {
-      throw new Error("Invalid media id.");
-    }
-    const mediaRow = await db.query.media.findFirst({
-      where: and(eq(media.id, requestedMediaId), eq(media.siteId, siteId)),
-      columns: { id: true },
-    });
-    if (!mediaRow) {
-      throw new Error("Media item not found for this site.");
-    }
-    resolvedMediaId = mediaRow.id;
-  }
-
-  const [updated] = await db
-    .update(siteMenuItems)
-    .set({
-      parentId: input.parentId || null,
-      title: input.title.trim(),
-      href: input.href.trim(),
-      description: String(input.description || "").trim(),
-      mediaId: resolvedMediaId,
-      target: String(input.target || "").trim() || null,
-      rel: String(input.rel || "").trim() || null,
-      external: Boolean(input.external),
-      enabled: input.enabled !== false,
-      sortOrder: normalizeOrder(input.sortOrder, 10),
-    })
-    .where(and(eq(siteMenuItems.id, itemId), eq(siteMenuItems.menuId, menuId)))
-    .returning();
-
-  if (!updated) throw new Error("Menu item not found.");
-
-  await db.delete(siteMenuItemMeta).where(eq(siteMenuItemMeta.menuItemId, itemId));
-  const meta = normalizeMenuMeta(input.meta);
-  const rows = Object.entries(meta).map(([key, value]) => ({
-    menuItemId: itemId,
-    key,
-    value,
-  }));
-  if (rows.length) await db.insert(siteMenuItemMeta).values(rows);
-
-  return updated;
 }
 
 export async function deleteSiteMenuItem(siteId: string, menuId: string, itemId: string) {
-  const menu = await db.query.siteMenus.findFirst({
-    where: and(eq(siteMenus.id, menuId), eq(siteMenus.siteId, siteId)),
-    columns: { id: true },
+  await withSiteMenuTableRecovery(siteId, async () => {
+    const { menusTable, menuItemsTable } = getSiteMenuTables(siteId);
+    const menuRows = await db.select({ id: menusTable.id }).from(menusTable).where(eq(menusTable.id, menuId)).limit(1);
+    const menu = menuRows[0];
+    if (!menu) return;
+    await db.delete(menuItemsTable).where(and(eq(menuItemsTable.id, itemId), eq(menuItemsTable.menuId, menuId)));
   });
-  if (!menu) return;
-  await db.delete(siteMenuItems).where(and(eq(siteMenuItems.id, itemId), eq(siteMenuItems.menuId, menuId)));
 }
 
 export async function saveSiteMenu(siteId: string, location: MenuLocation, items: MenuItem[]) {
