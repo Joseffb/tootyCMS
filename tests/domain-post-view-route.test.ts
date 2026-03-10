@@ -14,7 +14,7 @@ vi.mock("@/lib/site-domain-post-store", () => ({
 }));
 
 import { POST } from "@/app/api/domain-posts/[postId]/view/route";
-import { VIEW_COUNT_COOKIE } from "@/lib/view-count";
+import { VIEW_COUNT_COOKIE, VIEW_COUNT_META_KEY } from "@/lib/view-count";
 
 function makeRequest(body: Record<string, unknown>, init?: { headers?: Record<string, string> }) {
   return new NextRequest("http://localhost/api/domain-posts/post-1/view", {
@@ -38,7 +38,7 @@ describe("POST /api/domain-posts/[postId]/view", () => {
       published: true,
       dataDomainKey: "post",
     });
-    mocks.listSiteDomainPostMeta.mockResolvedValue([{ key: "view_count", value: "4" }]);
+    mocks.listSiteDomainPostMeta.mockResolvedValue([{ key: VIEW_COUNT_META_KEY, value: "4" }]);
     mocks.upsertSiteDomainPostMeta.mockResolvedValue(undefined);
   });
 
@@ -95,9 +95,28 @@ describe("POST /api/domain-posts/[postId]/view", () => {
       siteId: "site-1",
       dataDomainKey: "post",
       postId: "post-1",
-      key: "view_count",
+      key: VIEW_COUNT_META_KEY,
       value: "5",
     });
     expect(response.headers.get("set-cookie")).toContain(VIEW_COUNT_COOKIE);
+  });
+
+  it("starts from zero when hidden view count meta is absent", async () => {
+    mocks.listSiteDomainPostMeta.mockResolvedValue([]);
+
+    const response = await POST(
+      makeRequest({ siteId: "site-1", dataDomainKey: "post" }),
+      { params: Promise.resolve({ postId: "post-1" }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ counted: true, viewCount: 1 });
+    expect(mocks.upsertSiteDomainPostMeta).toHaveBeenCalledWith({
+      siteId: "site-1",
+      dataDomainKey: "post",
+      postId: "post-1",
+      key: VIEW_COUNT_META_KEY,
+      value: "1",
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MANAGE_PLUGIN_CONTENT_META_CAPABILITY, pluginContentMetaCapability } from "@/lib/plugin-permissions";
 
 const mocks = vi.hoisted(() => ({
   usersFindFirst: vi.fn(),
@@ -38,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     "site.media.delete.own",
     "site.media.delete.any",
     "site.analytics.read",
+    "manage_plugin_content_meta",
   ],
 }));
 
@@ -69,6 +71,7 @@ vi.mock("@/lib/rbac", () => ({
 
 import {
   canUserAccessSiteCapability,
+  canUserManagePluginContentMeta,
   canUserManageNetworkCapability,
   canUserMutateDomainPost,
   getAuthorizedSiteForUser,
@@ -140,6 +143,25 @@ describe("authorization helpers", () => {
     expect(deniedWithoutSite).toBe(false);
   });
 
+  it("supports plugin-scoped content meta capabilities through userCan", async () => {
+    const capability = pluginContentMetaCapability("tooty-comments");
+    mocks.roleHasCapability.mockImplementation(async (_role: string, candidate: string) => candidate === capability);
+
+    const allowed = await userCan(capability, "user-1", { siteId: "site-1" });
+
+    expect(allowed).toBe(true);
+  });
+
+  it("accepts generic plugin content meta capability as fallback", async () => {
+    mocks.roleHasCapability.mockImplementation(
+      async (_role: string, candidate: string) => candidate === MANAGE_PLUGIN_CONTENT_META_CAPABILITY,
+    );
+
+    const allowed = await canUserManagePluginContentMeta("user-1", "site-1", "tooty-comments");
+
+    expect(allowed).toBe(true);
+  });
+
   it("permits edit via content.edit.any even for non-owner", async () => {
     mocks.findDomainPostForMutation.mockResolvedValue({
       id: "post-1",
@@ -168,5 +190,21 @@ describe("authorization helpers", () => {
     const result = await canUserMutateDomainPost("user-1", "post-2", "delete");
 
     expect(result.allowed).toBe(false);
+  });
+
+  it("passes the known site id hint through mutation authorization lookups", async () => {
+    mocks.findDomainPostForMutation.mockResolvedValue({
+      id: "post-3",
+      siteId: "site-9",
+      userId: "user-1",
+      slug: "hello",
+      published: false,
+    });
+    mocks.roleHasCapability.mockImplementation(async (_role: string, capability: string) => capability === "site.content.edit.own");
+
+    const result = await canUserMutateDomainPost("user-1", "post-3", "edit", "site-9");
+
+    expect(result.allowed).toBe(true);
+    expect(mocks.findDomainPostForMutation).toHaveBeenCalledWith("post-3", "site-9");
   });
 });

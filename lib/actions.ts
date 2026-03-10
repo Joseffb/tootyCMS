@@ -64,17 +64,21 @@ import {
   acquireSchedulerLock,
   createScheduleEntry,
   deleteScheduleEntry,
+  getScheduleEntryById,
   listScheduleEntries,
   listScheduleRunAudits,
   releaseSchedulerLock,
   runScheduleEntryNow,
   updateScheduleEntry,
   type ScheduleEntry,
+  type ScheduleScope,
   type SchedulerOwnerType,
 } from "./scheduler";
 import { emitDomainEvent } from "@/lib/domain-dispatch";
 import { hashPassword } from "@/lib/password";
+import { MAX_SEO_SLUG_LENGTH, normalizeSeoSlug } from "@/lib/slug";
 import { listSiteUsers, upsertSiteUserRole } from "@/lib/site-user-tables";
+import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
 import { createKernelForRequest, listPluginsWithState } from "@/lib/plugin-runtime";
 import type { ProfileSection, ProfileSectionRow } from "@/lib/profile-contracts";
 import { getUserMetaValue, setUserMetaValue } from "@/lib/user-meta";
@@ -120,6 +124,7 @@ import {
 import {
   countSiteDomainPostUsageByDomain,
   createSiteDomainPost as createSiteScopedDomainPost,
+  deleteSiteDomainPostMeta,
   deleteSiteDomainPostById,
   findDomainPostForMutation,
   getSiteDomainPostById,
@@ -133,6 +138,7 @@ import {
 import {
   ensureSiteTaxonomyTables,
   getSiteTaxonomyTables,
+  resetSiteTaxonomyTablesCache,
   withSiteTaxonomyTableRecovery,
 } from "@/lib/site-taxonomy-tables";
 
@@ -153,6 +159,91 @@ function emitCmsLifecycleEvent(input: {
       source: "server_action",
     },
   }).catch(() => undefined);
+}
+
+const HIDDEN_PUBLISH_AT_META_KEY = "_publish_at";
+const CORE_CONTENT_PUBLISH_ACTION_KEY = "core.content.publish";
+
+function contentPublishScheduleOwnerId(postId: string) {
+  return `domain-post:${String(postId || "").trim()}`;
+}
+
+function normalizeScheduledPublishAt(raw: unknown) {
+  const value = String(raw || "").trim();
+  if (!value) return { ok: true as const, value: null as string | null };
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return { ok: false as const, error: "Invalid scheduled publish date." };
+  }
+  return { ok: true as const, value: parsed.toISOString() };
+}
+
+async function findContentPublishScheduleForPost(postId: string) {
+  const ownerId = contentPublishScheduleOwnerId(postId);
+  const entries = await listScheduleEntries({
+    ownerType: "core",
+    ownerId,
+    includeDisabled: true,
+  });
+  return entries.find((entry: ScheduleEntry) => entry.actionKey === CORE_CONTENT_PUBLISH_ACTION_KEY) || null;
+}
+
+async function syncContentPublishScheduleForPost(input: {
+  post: Awaited<ReturnType<typeof findDomainPostForMutation>>;
+  publishAt: string | null;
+  createIfMissing: boolean;
+}) {
+  const post = input.post;
+  if (!post) return null;
+  const existing = await findContentPublishScheduleForPost(post.id);
+  if (!input.publishAt) {
+    if (existing) {
+      await deleteScheduleEntry(existing.id, { isAdmin: true });
+    }
+    return null;
+  }
+
+  const nextRunAt = new Date(input.publishAt);
+  if (Number.isNaN(nextRunAt.getTime()) || nextRunAt.getTime() <= Date.now()) {
+    if (existing) {
+      await deleteScheduleEntry(existing.id, { isAdmin: true });
+    }
+    return null;
+  }
+
+  const name = `Publish ${String(post.title || post.slug || post.id).trim()}`;
+  const payload = {
+    domainPostId: post.id,
+    contentId: post.id,
+    siteId: post.siteId,
+    runOnce: true,
+  };
+
+  if (existing) {
+    return updateScheduleEntry(
+      existing.id,
+      {
+        siteId: post.siteId || null,
+        name,
+        actionKey: CORE_CONTENT_PUBLISH_ACTION_KEY,
+        payload,
+        enabled: true,
+        nextRunAt,
+      },
+      { isAdmin: true },
+    );
+  }
+
+  if (!input.createIfMissing) return null;
+
+  return createScheduleEntry("core", contentPublishScheduleOwnerId(post.id), {
+    siteId: post.siteId || null,
+    name,
+    actionKey: CORE_CONTENT_PUBLISH_ACTION_KEY,
+    payload,
+    enabled: true,
+    nextRunAt,
+  });
 }
 
 const normalizeSiteScope = (siteId: string) => String(siteId || "").trim();
@@ -180,6 +271,55 @@ async function withResolvedSiteTaxonomyTables<T>(
   });
 }
 
+function isRetryableSiteTaxonomyForeignKeyError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; detail?: string; table?: string; message?: string };
+  if (candidate.code !== "23503") return false;
+  const table = String(candidate.table || "");
+  const detail = String(candidate.detail || "");
+  const message = String(candidate.message || "");
+  return table.includes("_term_tax") && (detail.includes("_terms") || message.includes("_terms"));
+}
+
+function isRetryableSiteWriteLockError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string };
+  return candidate.code === "40P01" || candidate.code === "55P03";
+}
+
+async function withRetryableSiteWrite<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isRetryableSiteWriteLockError(error) || attempt === attempts) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+async function withTaxonomyWriteRecovery<T>(siteId: string, run: () => Promise<T>): Promise<T> {
+  const normalizedSiteId = normalizeSiteScope(siteId);
+  if (!normalizedSiteId) {
+    throw new Error("siteId is required");
+  }
+  try {
+    return await run();
+  } catch (error) {
+    if (!isRetryableSiteTaxonomyForeignKeyError(error)) {
+      throw error;
+    }
+    resetSiteTaxonomyTablesCache(normalizedSiteId);
+    await ensureSiteTaxonomyTables(normalizedSiteId);
+    return run();
+  }
+}
+
 export const getAllCategories = async (siteId: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return [];
@@ -204,44 +344,72 @@ export const createCategoryByName = async (siteId: string, name: string, parentI
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const createdTaxonomy = await withResolvedSiteTaxonomyTables(
-    normalizedSiteId,
-    async ({ termsTable, termTaxonomiesTable }) => {
-      const existing = await db
-        .select({
-          id: termTaxonomiesTable.id,
-          name: termsTable.name,
-        })
-        .from(termTaxonomiesTable)
-        .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
-        .where(
-          and(
-            eq(termTaxonomiesTable.taxonomy, "category"),
-            eq(termsTable.slug, slug),
-          ),
-        )
-        .limit(1);
-      if (existing[0]) return existing[0];
+  const createdTaxonomy = await withTaxonomyWriteRecovery(normalizedSiteId, async () =>
+    withResolvedSiteTaxonomyTables(
+      normalizedSiteId,
+      async ({ termsTable, termTaxonomiesTable }) => {
+        return db.transaction(async (tx) => {
+        const advisoryKey = `${normalizedSiteId}:taxonomy:category:${slug || trimmed.toLowerCase()}`;
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
+        const existing = await tx
+          .select({
+            id: termTaxonomiesTable.id,
+            name: termsTable.name,
+          })
+          .from(termTaxonomiesTable)
+          .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+          .where(
+            and(
+              eq(termTaxonomiesTable.taxonomy, "category"),
+              eq(termsTable.slug, slug),
+            ),
+          )
+          .limit(1);
+        if (existing[0]) return existing[0];
 
-      const [reusedTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
-      const [createdTerm] = await db
-        .insert(termsTable)
-        .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-        .returning()
-        .catch(async () => db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1));
-      const term = reusedTerm || createdTerm;
-      if (!term) return { error: "Failed to create category term" } as const;
+        const [reusedTerm] = await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+        const [createdTerm] = await tx
+          .insert(termsTable)
+          .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+          .onConflictDoNothing()
+          .returning();
+        const [resolvedTerm] = reusedTerm
+          ? [reusedTerm]
+          : createdTerm
+            ? [createdTerm]
+            : await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+        const term = resolvedTerm;
+        if (!term) return { error: "Failed to create category term" } as const;
 
-      const [taxonomyRow] = await db
-        .insert(termTaxonomiesTable)
-        .values({
-          termId: term.id,
-          taxonomy: "category",
-          parentId: parentId ?? null,
-        })
-        .returning();
-      return { id: taxonomyRow.id, name: term.name };
-    },
+        const [taxonomyRow] = await tx
+          .insert(termTaxonomiesTable)
+          .values({
+            termId: term.id,
+            taxonomy: "category",
+            parentId: parentId ?? null,
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (taxonomyRow) return { id: taxonomyRow.id, name: term.name };
+
+        const [existingTaxonomyRow] = await tx
+          .select({
+            id: termTaxonomiesTable.id,
+            name: termsTable.name,
+          })
+          .from(termTaxonomiesTable)
+          .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+          .where(
+            and(
+              eq(termTaxonomiesTable.termId, term.id),
+              eq(termTaxonomiesTable.taxonomy, "category"),
+            ),
+          )
+          .limit(1);
+        return existingTaxonomyRow ?? { error: "Failed to create category taxonomy" };
+        });
+      },
+    ),
   );
   if ("error" in createdTaxonomy) return createdTaxonomy;
 
@@ -272,38 +440,61 @@ export const createTagByName = async (siteId: string, name: string) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const createdTaxonomy = await withResolvedSiteTaxonomyTables(
-    normalizedSiteId,
-    async ({ termsTable, termTaxonomiesTable }) => {
-      const existing = await db
-        .select({
-          id: termTaxonomiesTable.id,
-          name: termsTable.name,
-        })
-        .from(termTaxonomiesTable)
-        .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
-        .where(and(eq(termTaxonomiesTable.taxonomy, "tag"), eq(termsTable.slug, slug)))
-        .limit(1);
-      if (existing[0]) return existing[0];
+  const createdTaxonomy = await withTaxonomyWriteRecovery(normalizedSiteId, async () =>
+    withResolvedSiteTaxonomyTables(
+      normalizedSiteId,
+      async ({ termsTable, termTaxonomiesTable }) => {
+        return db.transaction(async (tx) => {
+        const advisoryKey = `${normalizedSiteId}:taxonomy:tag:${slug || trimmed.toLowerCase()}`;
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
+        const existing = await tx
+          .select({
+            id: termTaxonomiesTable.id,
+            name: termsTable.name,
+          })
+          .from(termTaxonomiesTable)
+          .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+          .where(and(eq(termTaxonomiesTable.taxonomy, "tag"), eq(termsTable.slug, slug)))
+          .limit(1);
+        if (existing[0]) return existing[0];
 
-      const [reusedTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
-      const [createdTerm] = await db
-        .insert(termsTable)
-        .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
-        .returning()
-        .catch(async () => db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1));
-      const term = reusedTerm || createdTerm;
-      if (!term) return { error: "Failed to create tag term" } as const;
+        const [reusedTerm] = await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+        const [createdTerm] = await tx
+          .insert(termsTable)
+          .values({ name: trimmed, slug: slug || `term-${nanoid().toLowerCase()}` })
+          .onConflictDoNothing()
+          .returning();
+        const [resolvedTerm] = reusedTerm
+          ? [reusedTerm]
+          : createdTerm
+            ? [createdTerm]
+            : await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+        const term = resolvedTerm;
+        if (!term) return { error: "Failed to create tag term" } as const;
 
-      const [taxonomyRow] = await db
-        .insert(termTaxonomiesTable)
-        .values({
-          termId: term.id,
-          taxonomy: "tag",
-        })
-        .returning();
-      return { id: taxonomyRow.id, name: term.name };
-    },
+        const [taxonomyRow] = await tx
+          .insert(termTaxonomiesTable)
+          .values({
+            termId: term.id,
+            taxonomy: "tag",
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (taxonomyRow) return { id: taxonomyRow.id, name: term.name };
+
+        const [existingTaxonomyRow] = await tx
+          .select({
+            id: termTaxonomiesTable.id,
+            name: termsTable.name,
+          })
+          .from(termTaxonomiesTable)
+          .innerJoin(termsTable, eq(termTaxonomiesTable.termId, termsTable.id))
+          .where(and(eq(termTaxonomiesTable.termId, term.id), eq(termTaxonomiesTable.taxonomy, "tag")))
+          .limit(1);
+        return existingTaxonomyRow ?? { error: "Failed to create tag taxonomy" };
+        });
+      },
+    ),
   );
   if ("error" in createdTaxonomy) return createdTaxonomy;
 
@@ -898,6 +1089,11 @@ async function ensureDefaultCategoryTaxonomy(siteId: string) {
   });
 }
 
+const DEFAULT_TAXONOMY_OVERVIEW_ROWS = [
+  { taxonomy: "category", termCount: 0, usageCount: 0 },
+  { taxonomy: "tag", termCount: 0, usageCount: 0 },
+] as const;
+
 export const getTaxonomyOverview = async (siteId: string) => {
   const normalizedSiteId = normalizeSiteScope(siteId);
   if (!normalizedSiteId) return [];
@@ -916,8 +1112,10 @@ export const getTaxonomyOverview = async (siteId: string) => {
 
   const merged = new Map<string, { taxonomy: string; termCount: number; usageCount: number }>();
   for (const row of rows) merged.set(row.taxonomy, row);
-  if (!merged.has("category")) {
-    merged.set("category", { taxonomy: "category", termCount: 0, usageCount: 0 });
+  for (const row of DEFAULT_TAXONOMY_OVERVIEW_ROWS) {
+    if (!merged.has(row.taxonomy)) {
+      merged.set(row.taxonomy, { ...row });
+    }
   }
 
   const labelRows = await listSettingsByLikePatterns(["taxonomy_label_%"]);
@@ -941,6 +1139,8 @@ export const getTaxonomyOverview = async (siteId: string) => {
         labelMap.get(row.taxonomy) ||
         (row.taxonomy === "category"
           ? "Category"
+          : row.taxonomy === "tag"
+            ? "Tags"
           : row.taxonomy
               .split(/[_:-]/g)
               .filter(Boolean)
@@ -1157,51 +1357,65 @@ export const createTaxonomyTerm = async (input: {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  const existing = await withResolvedSiteTaxonomyTables(siteId, async ({ termsTable, termTaxonomiesTable }) => {
-    const [existingTerm] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
-    const term =
-      existingTerm ??
-      (
-        await db
+  const existing = await withTaxonomyWriteRecovery(siteId, async () =>
+    withResolvedSiteTaxonomyTables(siteId, async ({ termsTable, termTaxonomiesTable }) => {
+      return db.transaction(async (tx) => {
+      const advisoryKey = `${siteId}:taxonomy:${taxonomy}:${slug || label.toLowerCase()}`;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
+      const [existingTerm] = await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      const [createdTerm] = existingTerm
+        ? [null]
+        : await tx
           .insert(termsTable)
           .values({
             name: label,
             slug: slug || `term-${nanoid().toLowerCase()}`,
           })
-          .returning()
-      )[0];
-
-    if (parentId !== null) {
-      const [parent] = await db
-        .select({ id: termTaxonomiesTable.id })
-        .from(termTaxonomiesTable)
-        .where(and(eq(termTaxonomiesTable.id, parentId), eq(termTaxonomiesTable.taxonomy, taxonomy)))
-        .limit(1);
-      if (!parent) {
-        return { error: "Parent term does not exist in this taxonomy." } as const;
+          .onConflictDoNothing()
+          .returning();
+      const [resolvedTerm] = existingTerm
+        ? [existingTerm]
+        : createdTerm
+          ? [createdTerm]
+          : await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      const term = resolvedTerm;
+      if (!term) {
+        return { error: "Failed to create term" } as const;
       }
-    }
 
-    const [created] = await db
-      .insert(termTaxonomiesTable)
-      .values({
-        termId: term.id,
-        taxonomy,
-        description: input.description ?? "",
-        parentId,
-      })
-      .onConflictDoNothing()
-      .returning();
-    if (created) {
-      return created;
-    }
-    const [existingRow] = await db
-      .select()
-      .from(termTaxonomiesTable)
-      .where(and(eq(termTaxonomiesTable.termId, term.id), eq(termTaxonomiesTable.taxonomy, taxonomy)))
-      .limit(1);
-    return existingRow ?? { error: "Failed to create term taxonomy" };
-  });
+      if (parentId !== null) {
+        const [parent] = await tx
+          .select({ id: termTaxonomiesTable.id })
+          .from(termTaxonomiesTable)
+          .where(and(eq(termTaxonomiesTable.id, parentId), eq(termTaxonomiesTable.taxonomy, taxonomy)))
+          .limit(1);
+        if (!parent) {
+          return { error: "Parent term does not exist in this taxonomy." } as const;
+        }
+      }
+
+      const [created] = await tx
+        .insert(termTaxonomiesTable)
+        .values({
+          termId: term.id,
+          taxonomy,
+          description: input.description ?? "",
+          parentId,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (created) {
+        return created;
+      }
+      const [existingRow] = await tx
+        .select()
+        .from(termTaxonomiesTable)
+        .where(and(eq(termTaxonomiesTable.termId, term.id), eq(termTaxonomiesTable.taxonomy, taxonomy)))
+        .limit(1);
+      return existingRow ?? { error: "Failed to create term taxonomy" };
+      });
+    }),
+  );
   if ("error" in existing) return existing;
   if (existing) revalidateDomainAndTaxonomyCaches();
   return existing;
@@ -1329,19 +1543,8 @@ const nanoid = customAlphabet(
   7,
 ); // 7-character random string
 
-const MAX_SEO_SLUG_LENGTH = 80;
-
 function toSeoSlug(input: string) {
-  const normalized = input
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, MAX_SEO_SLUG_LENGTH)
-    .replace(/-+$/g, "");
+  const normalized = normalizeSeoSlug(input).slice(0, MAX_SEO_SLUG_LENGTH);
 
   return normalized || `post-${nanoid().toLowerCase()}`;
 }
@@ -1566,7 +1769,7 @@ export const getSiteFromDomainPostId = async (postId: string) => {
 };
 
 export const createDomainPost = withSiteAuth(
-  async (_: FormData, site: SelectSite, domainKey: string | null) => {
+  async (formData: FormData | null, site: SelectSite, domainKey: string | null) => {
     const session = await getSession();
     if (!session?.user.id) {
       return {
@@ -1586,16 +1789,43 @@ export const createDomainPost = withSiteAuth(
       };
     }
 
+    const requestedDraftNonce = String(formData?.get("draftNonce") || "")
+      .trim()
+      .toLowerCase();
+    const draftId =
+      requestedDraftNonce && /^[a-z0-9][a-z0-9_-]{7,127}$/.test(requestedDraftNonce)
+        ? requestedDraftNonce
+        : nanoid();
     const useRandomDefaultImages = await isRandomDefaultImagesEnabled();
-    const response = await createSiteScopedDomainPost({
-      siteId: site.id,
-      userId: session.user.id,
-      dataDomainId: domain.id,
-      dataDomainKey: domain.key,
-      slug: toSeoSlug(`${domain.key}-${nanoid()}`),
-      published: false,
-      image: useRandomDefaultImages ? pickRandomTootyImage() : "",
-    });
+    const draftSlug = toSeoSlug(`${domain.key}-${draftId}`);
+    let response = null;
+    let createdFresh = false;
+    try {
+      response = await createSiteScopedDomainPost({
+        siteId: site.id,
+        userId: session.user.id,
+        dataDomainId: domain.id,
+        dataDomainKey: domain.key,
+        id: draftId,
+        slug: draftSlug,
+        published: false,
+        image: useRandomDefaultImages ? pickRandomTootyImage() : "",
+      });
+      createdFresh = true;
+    } catch (error: any) {
+      if (error?.code !== "23505" || !requestedDraftNonce) {
+        throw error;
+      }
+      for (let attempt = 1; attempt <= 24; attempt += 1) {
+        response = await getSiteDomainPostById({
+          siteId: site.id,
+          dataDomainKey: domain.key,
+          postId: draftId,
+        });
+        if (response) break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250 * attempt, 2_000)));
+      }
+    }
     if (!response) {
       return { error: "Failed to create content entry." };
     }
@@ -1603,15 +1833,17 @@ export const createDomainPost = withSiteAuth(
     // Intentionally skip revalidateTag here: this action is invoked from a render-time
     // create-and-redirect page, and Next.js disallows render-phase revalidation calls.
 
-    await emitCmsLifecycleEvent({
-      name: "custom_event",
-      siteId: site.id,
-      payload: {
-        event: "content_created",
-        contentType: domain.key,
-        contentId: response.id,
-      },
-    });
+    if (createdFresh) {
+      await emitCmsLifecycleEvent({
+        name: "custom_event",
+        siteId: site.id,
+        payload: {
+          event: "content_created",
+          contentType: domain.key,
+          contentId: response.id,
+        },
+      });
+    }
 
     return response;
   },
@@ -1623,13 +1855,15 @@ export const updateDomainPost = async (
     id: string;
     title?: string | null;
     description?: string | null;
+    slug?: string;
     content?: string | null;
     password?: string | null;
     usePassword?: boolean | null;
     layout?: string | null;
-    categoryIds?: number[];
-    tagIds?: number[];
-    taxonomyIds?: number[];
+    categoryIds?: Array<number | string>;
+    tagIds?: Array<number | string>;
+    taxonomyIds?: Array<number | string>;
+    selectedTermsByTaxonomy?: Record<string, Array<number | string>>;
     metaEntries?: Array<{ key: string; value: string }>;
   },
 ) => {
@@ -1645,6 +1879,45 @@ export const updateDomainPost = async (
   }
 
   try {
+    const normalizeTaxonomyIds = (...sources: Array<Array<number | string> | undefined>) =>
+      Array.from(
+        new Set(
+          sources
+            .flatMap((source) => source ?? [])
+            .map((value) => (typeof value === "number" ? value : Number(String(value).trim())))
+            .filter((value): value is number => Number.isFinite(value)),
+        ),
+      );
+
+    const requestedTaxonomyIds = Array.from(
+      new Set(
+        normalizeTaxonomyIds(
+          Array.isArray(data.taxonomyIds) ? data.taxonomyIds : undefined,
+          Array.isArray(data.categoryIds) ? data.categoryIds : undefined,
+          Array.isArray(data.tagIds) ? data.tagIds : undefined,
+          ...Object.values(data.selectedTermsByTaxonomy ?? {}),
+        ),
+      ),
+    );
+
+    if (requestedTaxonomyIds.length > 0) {
+      const validTaxonomyIds = Array.from(
+        new Set(
+          (
+            await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termTaxonomiesTable }) =>
+              db
+                .select({ id: termTaxonomiesTable.id })
+                .from(termTaxonomiesTable)
+                .where(inArray(termTaxonomiesTable.id, requestedTaxonomyIds)),
+            )
+          ).map((row) => row.id),
+        ),
+      );
+      if (validTaxonomyIds.length !== requestedTaxonomyIds.length) {
+        return { error: "One or more taxonomy terms are invalid for this site." };
+      }
+    }
+
     const postRecord = await updateSiteDomainPostById({
       siteId: existing.siteId,
       postId: data.id,
@@ -1652,6 +1925,7 @@ export const updateDomainPost = async (
       patch: {
         title: data.title,
         description: data.description,
+        ...(typeof data.slug === "string" ? { slug: toSeoSlug(data.slug) } : {}),
         content: data.content,
         password: data.password ?? "",
         ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
@@ -1662,35 +1936,38 @@ export const updateDomainPost = async (
       return { error: "Post not found or not authorized" };
     }
 
-    await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) => {
-      await db.transaction(async (tx) => {
-        await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, data.id));
-        const taxonomyIds = Array.from(
-          new Set(
-            Array.isArray(data.taxonomyIds)
-              ? data.taxonomyIds
-              : [...(data.categoryIds ?? []), ...(data.tagIds ?? [])],
-          ),
-        );
-        if (taxonomyIds.length > 0) {
-          const validTaxonomyIds = (
+    await withRetryableSiteWrite(() =>
+      withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) => {
+        await db.transaction(async (tx) => {
+          // Site taxonomy relationship writes share one physical table per site.
+          // Serialize them site-wide to avoid deadlocks under concurrent editor saves.
+          const advisoryKey = `${existing.siteId}:domain-post-taxonomies`;
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
+          await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, data.id));
+          if (requestedTaxonomyIds.length > 0) {
+            const validTaxonomyIds = Array.from(
+              new Set(
+                (
+                  await tx
+                    .select({ id: termTaxonomiesTable.id })
+                    .from(termTaxonomiesTable)
+                    .where(inArray(termTaxonomiesTable.id, requestedTaxonomyIds))
+                ).map((row) => row.id),
+              ),
+            );
             await tx
-              .select({ id: termTaxonomiesTable.id })
-              .from(termTaxonomiesTable)
-              .where(inArray(termTaxonomiesTable.id, taxonomyIds))
-          ).map((row) => row.id);
-          if (validTaxonomyIds.length !== taxonomyIds.length) {
-            throw new Error("One or more taxonomy terms are invalid for this site.");
+              .insert(termRelationshipsTable)
+              .values(
+                validTaxonomyIds.map((termTaxonomyId) => ({
+                  objectId: data.id,
+                  termTaxonomyId,
+                })),
+              )
+              .onConflictDoNothing();
           }
-          await tx.insert(termRelationshipsTable).values(
-            validTaxonomyIds.map((termTaxonomyId) => ({
-              objectId: data.id,
-              termTaxonomyId,
-            })),
-          );
-        }
-      });
-    });
+        });
+      }),
+    );
 
     if (Array.isArray(data.metaEntries)) {
       const normalizedMeta = data.metaEntries
@@ -1818,6 +2095,40 @@ export const updateDomainPostMetadata = async (
       } else {
         return { error: "No valid image upload or URL provided" };
       }
+    } else if (key === HIDDEN_PUBLISH_AT_META_KEY) {
+      const normalized = normalizeScheduledPublishAt(formData.get("publishAt") ?? formData.get(key));
+      if (!normalized.ok) {
+        return { error: normalized.error };
+      }
+
+      const currentMeta = await listSiteDomainPostMeta({
+        siteId: post.siteId,
+        dataDomainKey: post.dataDomainKey,
+        postId: post.id,
+      });
+      const nextMeta = normalized.value
+        ? [
+            ...currentMeta.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY),
+            { key: HIDDEN_PUBLISH_AT_META_KEY, value: normalized.value },
+          ]
+        : currentMeta.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY);
+
+      await replaceSiteDomainPostMeta({
+        siteId: post.siteId,
+        dataDomainKey: post.dataDomainKey,
+        postId: post.id,
+        entries: nextMeta,
+      });
+      await syncContentPublishScheduleForPost({
+        post,
+        publishAt: normalized.value,
+        createIfMissing: false,
+      });
+      response = {
+        ok: true,
+        publishAt: normalized.value,
+        published: Boolean(post.published),
+      };
     } else {
       const value = formData.get(key) as string;
       const nextValue = key === "slug" ? toSeoSlug(value) : value;
@@ -1847,21 +2158,91 @@ export const updateDomainPostMetadata = async (
 
       if (key === "published") {
         const nextPublished = value === "true";
-        const result = await setDomainPostPublishedState({
+        const currentMeta = await listSiteDomainPostMeta({
+          siteId: post.siteId,
+          dataDomainKey: post.dataDomainKey,
           postId: post.id,
-          nextPublished,
-          actorType: "admin",
-          actorId: session.user.id,
-          userId: session.user.id,
         });
-        if (!result.ok) {
-          return {
-            error: result.reason === "transition_blocked"
-              ? `Transition blocked: ${result.from} -> ${result.to}`
-              : "Failed to update publish status",
+        const publishAtEntry = currentMeta.find((entry) => entry.key === HIDDEN_PUBLISH_AT_META_KEY);
+        const normalizedPublishAt = normalizeScheduledPublishAt(publishAtEntry?.value);
+        if (!normalizedPublishAt.ok) {
+          return { error: normalizedPublishAt.error };
+        }
+
+        if (nextPublished) {
+          const scheduledAt = normalizedPublishAt.value;
+          const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
+          const scheduleInFuture = Boolean(scheduledDate && scheduledDate.getTime() > Date.now());
+          if (scheduleInFuture) {
+            await syncContentPublishScheduleForPost({
+              post,
+              publishAt: scheduledAt,
+              createIfMissing: true,
+            });
+            response = {
+              ok: true,
+              published: false,
+              scheduled: true,
+              publishAt: scheduledAt,
+            };
+          } else {
+            await syncContentPublishScheduleForPost({
+              post,
+              publishAt: null,
+              createIfMissing: false,
+            });
+            const result = await setDomainPostPublishedState({
+              postId: post.id,
+              nextPublished,
+              actorType: "admin",
+              actorId: session.user.id,
+              userId: session.user.id,
+            });
+            if (!result.ok) {
+              return {
+                error: result.reason === "transition_blocked"
+                  ? `Transition blocked: ${result.from} -> ${result.to}`
+                  : "Failed to update publish status",
+              };
+            }
+            if (scheduledAt) {
+              await deleteSiteDomainPostMeta({
+                siteId: post.siteId,
+                dataDomainKey: post.dataDomainKey,
+                postId: post.id,
+                key: HIDDEN_PUBLISH_AT_META_KEY,
+              });
+            }
+            response = {
+              ...result.post,
+              publishAt: null,
+            };
+          }
+        } else {
+          await syncContentPublishScheduleForPost({
+            post,
+            publishAt: null,
+            createIfMissing: false,
+          });
+          const result = await setDomainPostPublishedState({
+            postId: post.id,
+            nextPublished,
+            actorType: "admin",
+            actorId: session.user.id,
+            userId: session.user.id,
+          });
+          if (!result.ok) {
+            return {
+              error: result.reason === "transition_blocked"
+                ? `Transition blocked: ${result.from} -> ${result.to}`
+                : "Failed to update publish status",
+            };
+          }
+          response = {
+            ...result.post,
+            publishAt: normalizedPublishAt.value,
           };
         }
-        response = result.post;
       } else {
         response = await updateSiteDomainPostById({
           siteId: post.siteId,
@@ -1914,13 +2295,6 @@ export const updateDomainPostMetadata = async (
 };
 
 export const deleteDomainPost = async (formData: FormData, postId: string) => {
-  const confirmation = String(formData.get("confirm") ?? "").trim().toLowerCase();
-  if (confirmation !== "delete") {
-    return {
-      error: "Type delete to confirm post deletion.",
-    };
-  }
-
   const session = await getSession();
   if (!session?.user.id) {
     return { error: "Not authenticated" };
@@ -1930,6 +2304,20 @@ export const deleteDomainPost = async (formData: FormData, postId: string) => {
   const post = mutation.post;
   if (!post || !mutation.allowed) {
     return { error: "Post not found" };
+  }
+
+  const expectedConfirmation = String(post.title || "").trim() || "delete";
+  const rawConfirmation = String(formData.get("confirm") ?? "").trim();
+  const confirmationMatches = expectedConfirmation === "delete"
+    ? rawConfirmation.toLowerCase() === "delete"
+    : rawConfirmation === expectedConfirmation;
+
+  if (!confirmationMatches) {
+    return {
+      error: expectedConfirmation === "delete"
+        ? "Type delete to confirm post deletion."
+        : `Type "${expectedConfirmation}" to confirm post deletion.`,
+    };
   }
 
   try {
@@ -2060,6 +2448,12 @@ function revalidateSettingsPath(path: string) {
   revalidatePath(path);
   const appPath = path.startsWith("/app") ? path : `/app${path}`;
   revalidatePath(appPath);
+  const adminAlias = getAdminPathAlias();
+  if (!path.startsWith("/app")) {
+    revalidatePath(`/app/${adminAlias}${path}`);
+  } else if (adminAlias && adminAlias !== "app") {
+    revalidatePath(path.replace(/^\/app/, `/app/${adminAlias}`));
+  }
 }
 
 function revalidatePublicContentCache() {
@@ -2079,10 +2473,6 @@ function revalidateDomainAndTaxonomyCaches(options?: { siteId?: string | null })
     revalidateSettingsPath(`/site/${siteId}/settings/domains`);
     revalidateSettingsPath(`/site/${siteId}/settings/categories`);
   }
-  revalidatePath("/site/[id]/settings/domains", "page");
-  revalidatePath("/app/site/[id]/settings/domains", "page");
-  revalidatePath("/site/[id]/settings/categories", "page");
-  revalidatePath("/app/site/[id]/settings/categories", "page");
   revalidateSettingsPath("/settings/sites");
   revalidatePublicContentCache();
 }
@@ -3039,81 +3429,84 @@ function normalizeScheduleActionOptions(input: unknown): ScheduleActionOption[] 
     .filter(Boolean) as ScheduleActionOption[];
 }
 
-async function getScheduleActionCatalog(): Promise<ScheduleActionOption[]> {
-  const core: ScheduleActionOption[] = [
-    {
-      key: "core.ping_sitemap",
-      label: "Ping Sitemap",
-      description: "Fetches /sitemap.xml for configured site URL.",
-    },
-    {
-      key: "core.http_ping",
-      label: "HTTP Ping",
-      description: "Requests payload.url with payload.method (default GET).",
-    },
-    {
-      key: "core.communication.retry",
-      label: "Retry Communication Queue",
-      description: "Retries pending outbound communication records.",
-    },
-    {
-      key: "core.communication.purge",
-      label: "Purge Communication Queue",
-      description: "Deletes old communication audit/queue rows.",
-    },
-    {
-      key: "core.webcallbacks.purge",
-      label: "Purge Webcallbacks",
-      description: "Deletes old webcallback delivery/audit rows.",
-    },
-    {
-      key: "core.webhooks.retry",
-      label: "Retry Webhook Deliveries",
-      description: "Retries queued/retrying outbound webhook deliveries.",
-    },
-    {
-      key: "core.media.cleanup",
-      label: "Cleanup Media Records",
-      description: "Deletes media index rows older than payload.olderThanDays (default 30).",
-    },
-    {
-      key: "core.content.publish",
-      label: "Publish Content",
-      description: "Publishes a domain content record from payload.domainPostId.",
-    },
-    {
-      key: "core.content.unpublish",
-      label: "Unpublish Content",
-      description: "Unpublishes a domain content record from payload.domainPostId.",
-    },
-  ];
+async function getScheduleActionCatalog(scope: ScheduleScope): Promise<ScheduleActionOption[]> {
+  const core: Record<ScheduleScope, ScheduleActionOption[]> = {
+    network: [
+      {
+        key: "core.ping_sitemap",
+        label: "Ping Sitemap",
+        description: "Fetches /sitemap.xml for configured network or primary site URL.",
+      },
+      {
+        key: "core.http_ping",
+        label: "HTTP Ping",
+        description: "Requests payload.url with payload.method (default GET).",
+      },
+      {
+        key: "core.communication.retry",
+        label: "Retry Communication Queue",
+        description: "Retries pending outbound communication records.",
+      },
+      {
+        key: "core.communication.purge",
+        label: "Purge Communication Queue",
+        description: "Deletes old communication audit/queue rows.",
+      },
+      {
+        key: "core.webcallbacks.purge",
+        label: "Purge Webcallbacks",
+        description: "Deletes old webcallback delivery/audit rows.",
+      },
+      {
+        key: "core.webhooks.retry",
+        label: "Retry Webhook Deliveries",
+        description: "Retries queued/retrying outbound webhook deliveries.",
+      },
+    ],
+    site: [
+      {
+        key: "core.media.cleanup",
+        label: "Cleanup Media Records",
+        description: "Deletes old site media index rows older than payload.olderThanDays (default 30).",
+      },
+      {
+        key: "core.content.publish",
+        label: "Publish Content",
+        description: "Publishes a scheduled site content record from payload.domainPostId.",
+      },
+      {
+        key: "core.content.unpublish",
+        label: "Unpublish Content",
+        description: "Unpublishes a site content record from payload.domainPostId.",
+      },
+    ],
+  };
 
   try {
     const kernel = await createKernelForRequest(undefined);
-    const filtered = await kernel.applyFilters<ScheduleActionOption[]>("admin:schedule-actions", core, {
-      scope: "global",
+    const filtered = await kernel.applyFilters<ScheduleActionOption[]>("admin:schedule-actions", core[scope], {
+      scope,
     });
     const normalized = normalizeScheduleActionOptions(filtered);
-    if (normalized.length === 0) return core;
+    if (normalized.length === 0) return core[scope];
     const deduped = new Map<string, ScheduleActionOption>();
     for (const item of normalized) deduped.set(item.key, item);
     return Array.from(deduped.values()).sort((a, b) => a.label.localeCompare(b.label));
   } catch {
-    return core;
+    return core[scope];
   }
 }
 
-export const getScheduleSettingsAdmin = async () => {
-  await requireAdminSession();
-  const [settings, schedules, allSites, actionOptions] = await Promise.all([
-    getScheduleSettings(),
-    listScheduleEntries({ includeDisabled: true }),
+async function hydrateScheduleRows(
+  schedules: ScheduleEntry[],
+  sitesList?: Array<{ id: string; name: string | null; subdomain: string | null; customDomain: string | null; isPrimary: boolean }>
+) {
+  const allSites = sitesList ||
     db.query.sites.findMany({
       columns: { id: true, name: true, subdomain: true, customDomain: true, isPrimary: true },
       orderBy: (table, { asc }) => [asc(table.name)],
-    }),
-    getScheduleActionCatalog(),
-  ]);
+    });
+  const resolvedSites = Array.isArray(allSites) ? allSites : await allSites;
 
   const runAuditsBySchedule = new Map(
     await Promise.all(
@@ -3121,7 +3514,7 @@ export const getScheduleSettingsAdmin = async () => {
     ),
   );
 
-  const siteById = new Map(allSites.map((site) => [site.id, site]));
+  const siteById = new Map(resolvedSites.map((site) => [site.id, site]));
   const rows = schedules.map((entry: ScheduleEntry) => ({
     ...entry,
     runAudits: runAuditsBySchedule.get(entry.id) ?? [],
@@ -3132,9 +3525,57 @@ export const getScheduleSettingsAdmin = async () => {
   }));
 
   return {
+    rows,
+    sites: resolvedSites,
+  };
+}
+
+async function requireSiteScheduleSession(siteId: string) {
+  const session = await getSession();
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated");
+  }
+  const { site } = await resolveAuthorizedSiteForUser(session.user.id, siteId, "site.settings.write");
+  if (!site) {
+    throw new Error("Not authorized");
+  }
+  return { session, site };
+}
+
+export const getScheduleSettingsAdmin = async () => {
+  await requireAdminSession();
+  const [settings, schedules, allSites, actionOptions] = await Promise.all([
+    getScheduleSettings(),
+    listScheduleEntries({ includeDisabled: true, scope: "network" }),
+    db.query.sites.findMany({
+      columns: { id: true, name: true, subdomain: true, customDomain: true, isPrimary: true },
+      orderBy: (table, { asc }) => [asc(table.name)],
+    }),
+    getScheduleActionCatalog("network"),
+  ]);
+  const hydrated = await hydrateScheduleRows(schedules, allSites);
+
+  return {
     ...settings,
-    schedules: rows,
-    sites: allSites,
+    schedules: hydrated.rows,
+    sites: hydrated.sites,
+    actionOptions,
+  };
+};
+
+export const getSiteScheduleSettingsAdmin = async (siteId: string) => {
+  const { site } = await requireSiteScheduleSession(siteId);
+  const [enabled, schedules, actionOptions] = await Promise.all([
+    getSiteBooleanSetting(site.id, SCHEDULES_ENABLED_KEY, true),
+    listScheduleEntries({ includeDisabled: true, scope: "site", siteId: site.id }),
+    getScheduleActionCatalog("site"),
+  ]);
+  const hydrated = await hydrateScheduleRows(schedules, [site]);
+
+  return {
+    enabled,
+    site,
+    schedules: hydrated.rows,
     actionOptions,
   };
 };
@@ -3152,6 +3593,14 @@ export const updateScheduleSettings = async (formData: FormData) => {
   revalidateSettingsPath("/settings/schedules");
 };
 
+export const updateSiteScheduleSettings = async (formData: FormData) => {
+  const siteId = String(formData.get("siteId") || "").trim();
+  const { site } = await requireSiteScheduleSession(siteId);
+  const schedulesEnabled = formData.get("schedules_enabled") === "on";
+  await setSiteBooleanSetting(site.id, SCHEDULES_ENABLED_KEY, schedulesEnabled);
+  revalidateSettingsPath(`/site/${site.id}/settings/schedules`);
+};
+
 function normalizeOwnerType(value: FormDataEntryValue | null): SchedulerOwnerType {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (raw === "plugin" || raw === "theme" || raw === "core") return raw;
@@ -3162,7 +3611,6 @@ export const createScheduledActionAdmin = async (formData: FormData) => {
   await requireAdminSession();
   const ownerType = normalizeOwnerType(formData.get("ownerType"));
   const ownerId = String(formData.get("ownerId") || "core").trim() || "core";
-  const siteIdRaw = String(formData.get("siteId") || "").trim();
   const name = String(formData.get("name") || "").trim();
   const actionKey = String(formData.get("actionKey") || "").trim();
   const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
@@ -3183,7 +3631,7 @@ export const createScheduledActionAdmin = async (formData: FormData) => {
     : {};
 
   await createScheduleEntry(ownerType, ownerId, {
-    siteId: siteIdRaw || null,
+    siteId: null,
     name,
     actionKey,
     payload,
@@ -3196,11 +3644,50 @@ export const createScheduledActionAdmin = async (formData: FormData) => {
   revalidateSettingsPath("/settings/schedules");
 };
 
+export const createSiteScheduledActionAdmin = async (formData: FormData) => {
+  const siteId = String(formData.get("siteId") || "").trim();
+  const { site } = await requireSiteScheduleSession(siteId);
+  const ownerType = normalizeOwnerType(formData.get("ownerType"));
+  const ownerId = String(formData.get("ownerId") || "core").trim() || "core";
+  const name = String(formData.get("name") || "").trim();
+  const actionKey = String(formData.get("actionKey") || "").trim();
+  const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const maxRetries = Number(formData.get("maxRetries") || "3");
+  const backoffBaseSeconds = Number(formData.get("backoffBaseSeconds") || "60");
+  const enabled = formData.get("enabled") === "on";
+  const payloadRaw = String(formData.get("payload") || "").trim();
+
+  const payload = payloadRaw
+    ? (() => {
+        try {
+          const parsed = JSON.parse(payloadRaw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          throw new Error("Payload must be valid JSON");
+        }
+      })()
+    : {};
+
+  await createScheduleEntry(ownerType, ownerId, {
+    siteId: site.id,
+    name,
+    actionKey,
+    payload,
+    enabled,
+    runEveryMinutes,
+    maxRetries,
+    backoffBaseSeconds,
+  });
+
+  revalidateSettingsPath(`/site/${site.id}/settings/schedules`);
+};
+
 export const updateScheduledActionAdmin = async (formData: FormData) => {
   await requireAdminSession();
   const id = String(formData.get("id") || "").trim();
   if (!id) throw new Error("Missing schedule id");
-  const siteIdRaw = String(formData.get("siteId") || "").trim();
+  const existing = await getScheduleEntryById(id);
+  if (!existing || existing.siteId) throw new Error("Network schedule not found");
   const name = String(formData.get("name") || "").trim();
   const actionKey = String(formData.get("actionKey") || "").trim();
   const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
@@ -3222,7 +3709,7 @@ export const updateScheduledActionAdmin = async (formData: FormData) => {
   await updateScheduleEntry(
     id,
     {
-      siteId: siteIdRaw || null,
+      siteId: null,
       name,
       actionKey,
       payload,
@@ -3236,18 +3723,75 @@ export const updateScheduledActionAdmin = async (formData: FormData) => {
   revalidateSettingsPath("/settings/schedules");
 };
 
+export const updateSiteScheduledActionAdmin = async (formData: FormData) => {
+  const id = String(formData.get("id") || "").trim();
+  const siteId = String(formData.get("siteId") || "").trim();
+  if (!id) throw new Error("Missing schedule id");
+  const { site } = await requireSiteScheduleSession(siteId);
+  const existing = await getScheduleEntryById(id);
+  if (!existing || existing.siteId !== site.id) throw new Error("Site schedule not found");
+  const name = String(formData.get("name") || "").trim();
+  const actionKey = String(formData.get("actionKey") || "").trim();
+  const runEveryMinutes = Number(formData.get("runEveryMinutes") || "60");
+  const maxRetries = Number(formData.get("maxRetries") || "3");
+  const backoffBaseSeconds = Number(formData.get("backoffBaseSeconds") || "60");
+  const enabled = formData.get("enabled") === "on";
+  const payloadRaw = String(formData.get("payload") || "").trim();
+  const payload = payloadRaw
+    ? (() => {
+        try {
+          const parsed = JSON.parse(payloadRaw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          throw new Error("Payload must be valid JSON");
+        }
+      })()
+    : {};
+
+  await updateScheduleEntry(
+    id,
+    {
+      siteId: site.id,
+      name,
+      actionKey,
+      payload,
+      enabled,
+      runEveryMinutes,
+      maxRetries,
+      backoffBaseSeconds,
+    },
+    { isAdmin: true },
+  );
+  revalidateSettingsPath(`/site/${site.id}/settings/schedules`);
+};
+
 export const deleteScheduledActionAdmin = async (formData: FormData) => {
   await requireAdminSession();
   const id = String(formData.get("id") || "").trim();
   if (!id) return;
+  const existing = await getScheduleEntryById(id);
+  if (existing?.siteId) throw new Error("Site schedules must be deleted from site settings");
   await deleteScheduleEntry(id, { isAdmin: true });
   revalidateSettingsPath("/settings/schedules");
+};
+
+export const deleteSiteScheduledActionAdmin = async (formData: FormData) => {
+  const id = String(formData.get("id") || "").trim();
+  const siteId = String(formData.get("siteId") || "").trim();
+  if (!id) return;
+  const { site } = await requireSiteScheduleSession(siteId);
+  const existing = await getScheduleEntryById(id);
+  if (!existing || existing.siteId !== site.id) throw new Error("Site schedule not found");
+  await deleteScheduleEntry(id, { isAdmin: true });
+  revalidateSettingsPath(`/site/${site.id}/settings/schedules`);
 };
 
 export const runScheduledActionNowAdmin = async (formData: FormData) => {
   await requireAdminSession();
   const id = String(formData.get("id") || "").trim();
   if (!id) throw new Error("Missing schedule id");
+  const existing = await getScheduleEntryById(id);
+  if (!existing || existing.siteId) throw new Error("Network schedule not found");
 
   const gotLock = await acquireSchedulerLock();
   if (!gotLock) throw new Error("Scheduler runner lock busy. Try again.");
@@ -3259,4 +3803,24 @@ export const runScheduledActionNowAdmin = async (formData: FormData) => {
   }
 
   revalidateSettingsPath("/settings/schedules");
+};
+
+export const runSiteScheduledActionNowAdmin = async (formData: FormData) => {
+  const id = String(formData.get("id") || "").trim();
+  const siteId = String(formData.get("siteId") || "").trim();
+  if (!id) throw new Error("Missing schedule id");
+  const { site } = await requireSiteScheduleSession(siteId);
+  const existing = await getScheduleEntryById(id);
+  if (!existing || existing.siteId !== site.id) throw new Error("Site schedule not found");
+
+  const gotLock = await acquireSchedulerLock();
+  if (!gotLock) throw new Error("Scheduler runner lock busy. Try again.");
+
+  try {
+    await runScheduleEntryNow(id);
+  } finally {
+    await releaseSchedulerLock();
+  }
+
+  revalidateSettingsPath(`/site/${site.id}/settings/schedules`);
 };

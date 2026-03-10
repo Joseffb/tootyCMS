@@ -87,6 +87,17 @@ function normalizeLocation(location: string | null | undefined): NativeMenuLocat
   return "unassigned";
 }
 
+function resolveNativeMenuLocation(
+  location: string | null | undefined,
+  key: string | null | undefined,
+): NativeMenuLocation {
+  const normalizedLocation = normalizeLocation(location);
+  if (normalizedLocation !== "unassigned") return normalizedLocation;
+  const normalizedKey = String(key || "").trim().toLowerCase();
+  if (NATIVE_MENU_LOCATIONS.includes(normalizedKey as MenuLocation)) return normalizedKey as MenuLocation;
+  return "unassigned";
+}
+
 function normalizeOrder(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -321,81 +332,8 @@ async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]
   }
   try {
     const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
-
-    const menus = await db
-      .select()
-      .from(menusTable)
-      .orderBy(asc(menusTable.sortOrder), asc(menusTable.createdAt));
-
-    if (!menus.length) return [];
-
-    const menuIds = menus.map((menu) => menu.id);
-    const items = await db
-      .select()
-      .from(menuItemsTable)
-      .where(inArray(menuItemsTable.menuId, menuIds))
-      .orderBy(asc(menuItemsTable.sortOrder), asc(menuItemsTable.createdAt));
-
-    const itemIds = items.map((item) => item.id);
-    const mediaIds = Array.from(
-      new Set(items.map((item) => item.mediaId).filter((value): value is number => typeof value === "number")),
-    );
-
-    const metaRows = itemIds.length
-      ? await db.select().from(menuItemMetaTable).where(inArray(menuItemMetaTable.menuItemId, itemIds)).orderBy(asc(menuItemMetaTable.id))
-      : [];
-    const mediaRows =
-      mediaIds.length > 0
-        ? await (async () => {
-            await ensureSiteMediaTable(siteId);
-            const media = getSiteMediaTable(siteId);
-            return db.select().from(media).where(inArray(media.id, mediaIds));
-          })()
-        : [];
-
-    const mediaById = new Map(mediaRows.map((row) => [String(row.id), row]));
-    const metaByItemId = new Map<string, Record<string, string>>();
-    for (const row of metaRows) {
-      const existing = metaByItemId.get(row.menuItemId) || {};
-      existing[row.key] = row.value;
-      metaByItemId.set(row.menuItemId, existing);
-    }
-
-    const itemsByMenuId = new Map<string, SiteMenuItemRecord[]>();
-    for (const item of items) {
-      const record: SiteMenuItemRecord = {
-        id: item.id,
-        menuId: item.menuId,
-        parentId: item.parentId || null,
-        title: item.title,
-        href: item.href,
-        description: item.description || "",
-        mediaId: item.mediaId ? String(item.mediaId) : "",
-        image: item.mediaId ? mediaById.get(String(item.mediaId))?.url || "" : "",
-        target: item.target || "",
-        rel: item.rel || "",
-        external: Boolean(item.external),
-        enabled: item.enabled !== false,
-        sortOrder: item.sortOrder,
-        meta: metaByItemId.get(item.id) || {},
-      };
-      const current = itemsByMenuId.get(item.menuId) || [];
-      current.push(record);
-      itemsByMenuId.set(item.menuId, current);
-    }
-
-    return menus.map((menu) => ({
-      id: menu.id,
-      siteId,
-      key: menu.key,
-      title: menu.title,
-      description: menu.description || "",
-      location: normalizeLocation(menu.location),
-      sortOrder: menu.sortOrder,
-      items: (itemsByMenuId.get(menu.id) || []).sort(
-        (a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title),
-      ),
-    }));
+    const menus = await db.select().from(menusTable).orderBy(asc(menusTable.sortOrder), asc(menusTable.createdAt));
+    return hydrateNativeSiteMenus(siteId, menus, menuItemsTable, menuItemMetaTable);
   } catch (error) {
     if (isMissingMenuTablesError(error)) {
       resetSiteMenuTablesCache(siteId);
@@ -404,6 +342,90 @@ async function listNativeSiteMenus(siteId: string): Promise<SiteMenuDefinition[]
     }
     throw error;
   }
+}
+
+async function hydrateNativeSiteMenus(
+  siteId: string,
+  menus: Array<{
+    id: string;
+    key: string;
+    title: string;
+    description: string | null;
+    location: string | null;
+    sortOrder: number;
+  }>,
+  menuItemsTable = getSiteMenuTables(siteId).menuItemsTable,
+  menuItemMetaTable = getSiteMenuTables(siteId).menuItemMetaTable,
+): Promise<SiteMenuDefinition[]> {
+  if (!menus.length) return [];
+
+  const menuIds = menus.map((menu) => menu.id);
+  const items = await db
+    .select()
+    .from(menuItemsTable)
+    .where(inArray(menuItemsTable.menuId, menuIds))
+    .orderBy(asc(menuItemsTable.sortOrder), asc(menuItemsTable.createdAt));
+
+  const itemIds = items.map((item) => item.id);
+  const mediaIds = Array.from(
+    new Set(items.map((item) => item.mediaId).filter((value): value is number => typeof value === "number")),
+  );
+
+  const metaRows = itemIds.length
+    ? await db.select().from(menuItemMetaTable).where(inArray(menuItemMetaTable.menuItemId, itemIds)).orderBy(asc(menuItemMetaTable.id))
+    : [];
+  const mediaRows =
+    mediaIds.length > 0
+      ? await (async () => {
+          await ensureSiteMediaTable(siteId);
+          const media = getSiteMediaTable(siteId);
+          return db.select().from(media).where(inArray(media.id, mediaIds));
+        })()
+      : [];
+
+  const mediaById = new Map(mediaRows.map((row) => [String(row.id), row]));
+  const metaByItemId = new Map<string, Record<string, string>>();
+  for (const row of metaRows) {
+    const existing = metaByItemId.get(row.menuItemId) || {};
+    existing[row.key] = row.value;
+    metaByItemId.set(row.menuItemId, existing);
+  }
+
+  const itemsByMenuId = new Map<string, SiteMenuItemRecord[]>();
+  for (const item of items) {
+    const record: SiteMenuItemRecord = {
+      id: item.id,
+      menuId: item.menuId,
+      parentId: item.parentId || null,
+      title: item.title,
+      href: item.href,
+      description: item.description || "",
+      mediaId: item.mediaId ? String(item.mediaId) : "",
+      image: item.mediaId ? mediaById.get(String(item.mediaId))?.url || "" : "",
+      target: item.target || "",
+      rel: item.rel || "",
+      external: Boolean(item.external),
+      enabled: item.enabled !== false,
+      sortOrder: item.sortOrder,
+      meta: metaByItemId.get(item.id) || {},
+    };
+    const current = itemsByMenuId.get(item.menuId) || [];
+    current.push(record);
+    itemsByMenuId.set(item.menuId, current);
+  }
+
+  return menus.map((menu) => ({
+    id: menu.id,
+    siteId,
+    key: menu.key,
+    title: menu.title,
+    description: menu.description || "",
+    location: resolveNativeMenuLocation(menu.location, menu.key),
+    sortOrder: menu.sortOrder,
+    items: (itemsByMenuId.get(menu.id) || []).sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title),
+    ),
+  }));
 }
 
 async function listNativeSiteMenuTree(siteId: string, location: MenuLocation) {
@@ -448,15 +470,41 @@ export async function listSiteMenus(siteId: string) {
 }
 
 export async function getSiteMenuDefinition(siteId: string, menuId: string) {
-  const menus = await listNativeSiteMenus(siteId);
-  return menus.find((menu) => menu.id === menuId) || null;
+  if (!(await siteMenuTablesReady(siteId))) {
+    return null;
+  }
+  try {
+    const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
+    const rows = await db.select().from(menusTable).where(eq(menusTable.id, menuId)).limit(1);
+    const [menu] = await hydrateNativeSiteMenus(siteId, rows, menuItemsTable, menuItemMetaTable);
+    return menu || null;
+  } catch (error) {
+    if (isMissingMenuTablesError(error)) {
+      resetSiteMenuTablesCache(siteId);
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function getSiteMenuDefinitionByKey(siteId: string, key: string) {
   const normalizedKey = String(key || "").trim();
   if (!normalizedKey) return null;
-  const menus = await listNativeSiteMenus(siteId);
-  return menus.find((menu) => menu.key === normalizedKey) || null;
+  if (!(await siteMenuTablesReady(siteId))) {
+    return null;
+  }
+  try {
+    const { menusTable, menuItemsTable, menuItemMetaTable } = getSiteMenuTables(siteId);
+    const rows = await db.select().from(menusTable).where(eq(menusTable.key, normalizedKey)).limit(1);
+    const [menu] = await hydrateNativeSiteMenus(siteId, rows, menuItemsTable, menuItemMetaTable);
+    return menu || null;
+  } catch (error) {
+    if (isMissingMenuTablesError(error)) {
+      resetSiteMenuTablesCache(siteId);
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function getSiteMenuItemDefinitionById(siteId: string, key: string, itemId: string) {

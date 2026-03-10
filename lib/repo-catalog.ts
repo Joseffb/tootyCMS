@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import path from "path";
 import { getPluginsDir, getThemesDir } from "@/lib/extension-paths";
+import { validatePluginContract, validateThemeContract } from "@/lib/extension-contracts";
 
 type CatalogKind = "plugin" | "theme";
 
@@ -38,6 +39,12 @@ export type CatalogEntry = {
   version: string;
   directory: string;
   thumbnailUrl?: string;
+  permissions?: {
+    contentMeta?: {
+      requested?: boolean;
+      suggestedRoles?: string[];
+    };
+  };
 };
 
 const pluginRepo = parseRepoSlug(
@@ -157,18 +164,46 @@ async function fetchGithubBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(buf);
 }
 
-function parseManifest(raw: string, fallbackId: string) {
+function parseManifest(kind: CatalogKind, raw: string, fallbackId: string) {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (kind === "plugin") {
+      const plugin = validatePluginContract(parsed, fallbackId);
+      if (!plugin) return null;
+      return {
+        id: plugin.id,
+        name: plugin.name,
+        description: plugin.description,
+        version: plugin.version,
+        permissions: plugin.permissions,
+      };
+    }
+    const theme = validateThemeContract(parsed, fallbackId);
+    if (!theme) return null;
     return {
-      id: String(parsed.id || fallbackId),
-      name: String(parsed.name || fallbackId),
-      description: String(parsed.description || ""),
-      version: String(parsed.version || ""),
+      id: theme.id,
+      name: theme.name,
+      description: theme.description,
+      version: theme.version,
     };
   } catch {
     return null;
   }
+}
+
+async function readRepoManifestRaw(kind: CatalogKind, directory: string) {
+  const repo = DEFAULT_REPOS[kind];
+  const manifestFile = manifestName(kind);
+  const manifestFileObj = await fetchGithubJson<GithubContentItem>(
+    githubApiUrl(repo, `${directory}/${manifestFile}`),
+  );
+  if (manifestFileObj.content && manifestFileObj.encoding === "base64") {
+    return Buffer.from(manifestFileObj.content, "base64").toString("utf8");
+  }
+  if (manifestFileObj.download_url) {
+    return Buffer.from(await fetchGithubBytes(manifestFileObj.download_url)).toString("utf8");
+  }
+  return "";
 }
 
 export async function listLocalInstalledIds(kind: CatalogKind) {
@@ -215,14 +250,14 @@ export async function listRepoCatalog(kind: CatalogKind, query = ""): Promise<Ca
           continue;
         }
       }
-      const manifest = parseManifest(raw, directory);
+      const manifest = parseManifest(kind, raw, directory);
       if (!manifest) continue;
       const thumbnailObj = directoryContents.find((item) => item.type === "file" && item.name === "thumbnail.png");
       entries.push({
         id: manifest.id,
         name: manifest.name,
-        description: manifest.description,
-        version: manifest.version,
+        description: manifest.description || "",
+        version: manifest.version || "",
         directory,
         thumbnailUrl: thumbnailObj?.download_url || undefined,
       });
@@ -271,6 +306,23 @@ export async function installFromRepo(kind: CatalogKind, directory: string) {
   await downloadDirectoryRecursive(repo, directory, targetDir);
 }
 
+export async function readRepoCatalogEntry(kind: CatalogKind, directory: string): Promise<CatalogEntry | null> {
+  const normalizedDirectory = String(directory || "").trim();
+  if (!normalizedDirectory) return null;
+  const raw = await readRepoManifestRaw(kind, normalizedDirectory);
+  if (!raw) return null;
+  const manifest = parseManifest(kind, raw, normalizedDirectory);
+  if (!manifest) return null;
+  return {
+    id: manifest.id,
+    name: manifest.name,
+    description: manifest.description || "",
+    version: manifest.version || "",
+    permissions: "permissions" in manifest ? manifest.permissions : undefined,
+    directory: normalizedDirectory,
+  };
+}
+
 export function toRepoCatalogFriendlyError(rawError: string, errorCode?: string) {
   const code = (errorCode || "").trim();
   const raw = (rawError || "").trim();
@@ -296,13 +348,14 @@ export async function readLocalManifest(kind: CatalogKind, directory: string): P
   const file = path.join(destinationDir(kind), directory, manifestName(kind));
   try {
     const raw = await readFile(file, "utf8");
-    const manifest = parseManifest(raw, directory);
+    const manifest = parseManifest(kind, raw, directory);
     if (!manifest) return null;
     return {
       id: manifest.id,
       name: manifest.name,
-      description: manifest.description,
-      version: manifest.version,
+      description: manifest.description || "",
+      version: manifest.version || "",
+      permissions: "permissions" in manifest ? manifest.permissions : undefined,
       directory,
     };
   } catch {

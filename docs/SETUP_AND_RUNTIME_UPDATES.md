@@ -84,7 +84,8 @@ Setup behavior:
 - initializes schema when required
 - creates or updates the first native admin user (`email` + password hash) during setup
 - stores bootstrap admin metadata and marks setup complete
-- requires at least one OAuth provider (`ID + Secret` pair) during setup submission
+- does not require any OAuth provider to complete setup
+- allows native admin bootstrap first; external auth can be enabled later through auth plugins
 
 ## Setup Completion Gate
 
@@ -111,7 +112,7 @@ Bootstrap flow:
 
 Auth transport remains core-owned pre-v1 through the NextAuth transport layer.
 External OAuth providers are plugin-delivered capability extensions registered through the kernel auth provider registry.
-Current setup gate still requires one OAuth provider pair to complete setup.
+OAuth configuration is optional at setup time and is only required when a specific external auth plugin is enabled.
 
 Starter content seeding safety:
 - starter pages/posts are only seeded during explicit setup completion flow
@@ -189,12 +190,25 @@ Sidebar/settings contract:
 
 ## Editorial Popularity Counter (2026-03-06)
 
-`Most Popular Articles` now uses a narrow editorial `view_count` signal in domain post meta.
+`Most Popular Articles` now uses a narrow editorial hidden `_view_count` signal in domain post meta.
 
 Contract:
-- storage key: `view_count`
+- storage key: `_view_count`
 - storage location: site-physical `domain_post_meta`
 - purpose: coarse ranking only for editorial popularity lists
+- editor behavior: hidden from normal post meta editing surfaces
+
+Compatibility:
+- legacy `view_count` rows are migrated to `_view_count` by database compatibility fixes
+
+## Domain Event Queue Scope
+
+Domain event queues are site-physical, not shared/global.
+
+- canonical queue table shape: `<prefix>site_{id}_domain_events_queue`
+- network cron/scheduler may sweep all sites, but queued rows remain tenant-scoped in site-physical tables
+- legacy shared `<prefix>domain_events_queue` is obsolete and dropped by compatibility fixes
+- runtime code must not treat public `view_count` as a supported canonical key
 
 Guardrails:
 - not an analytics replacement
@@ -204,9 +218,26 @@ Guardrails:
 - repeat increments are throttled with a short client/server window
 
 Ranking order:
-- `view_count`
+- `_view_count`
 - approved comment count
 - recency
+
+## Scheduled Publish (2026-03-08)
+
+Core editor entries may store a scheduled publish timestamp in hidden post meta.
+
+Contract:
+- storage key: `_publish_at`
+- storage location: site-physical `domain_post_meta`
+- applies to all data domain types using the core editor
+- selecting a date/time does not publish by itself
+- the user must still click `Publish`
+
+Runtime behavior:
+- if `_publish_at` is empty, publish remains immediate
+- if `_publish_at` is in the future and the user clicks `Publish`, the entry remains unpublished and core registers or updates a scheduler job
+- scheduler execution publishes the entry when due and clears the stale `_publish_at` marker
+- if `_publish_at` is due or in the past when the user clicks `Publish`, core publishes immediately and clears any stale schedule entry
 
 ## Media Spine Baseline (2026-03-01)
 

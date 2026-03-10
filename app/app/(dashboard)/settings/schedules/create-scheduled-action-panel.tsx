@@ -8,12 +8,14 @@ type SiteOption = {
 };
 
 type Props = {
-  sites: SiteOption[];
+  scope: "network" | "site";
+  sites?: SiteOption[];
+  fixedSite?: SiteOption | null;
   actionOptions: Array<{ key: string; label: string; description?: string }>;
   action: (formData: FormData) => Promise<void>;
 };
 
-export default function CreateScheduledActionPanel({ sites, actionOptions, action }: Props) {
+export default function CreateScheduledActionPanel({ scope, sites = [], fixedSite = null, actionOptions, action }: Props) {
   const [open, setOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -38,6 +40,7 @@ export default function CreateScheduledActionPanel({ sites, actionOptions, actio
 
       {open ? (
         <form ref={formRef} action={action} className="mt-4 grid gap-3 md:grid-cols-2">
+          {scope === "site" && fixedSite ? <input type="hidden" name="siteId" value={fixedSite.id} /> : null}
           <label className="text-xs text-stone-600 dark:text-stone-300">
             Name
             <input
@@ -89,21 +92,16 @@ export default function CreateScheduledActionPanel({ sites, actionOptions, actio
               className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
             />
           </label>
-          <label className="text-xs text-stone-600 dark:text-stone-300">
-            Site
-            <select
-              name="siteId"
-              defaultValue=""
-              className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
-            >
-              <option value="">(global)</option>
-              {sites.map((site) => (
-                <option key={site.id} value={site.id}>
-                  {site.name || site.id}
-                </option>
-              ))}
-            </select>
-          </label>
+          {scope === "site" && fixedSite ? (
+            <label className="text-xs text-stone-600 dark:text-stone-300">
+              Site
+              <input
+                value={fixedSite.name || fixedSite.id}
+                disabled
+                className="mt-1 w-full rounded border border-stone-300 bg-stone-100 px-2 py-1 text-sm dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+              />
+            </label>
+          ) : null}
           <label className="text-xs text-stone-600 dark:text-stone-300">
             Every (minutes)
             <input

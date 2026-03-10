@@ -11,6 +11,23 @@ function normalizeConfiguredHost(value: string) {
     .toLowerCase();
 }
 
+function normalizeRequestHost(value: string) {
+  const raw = String(value || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (!raw) return "";
+
+  const bracketedMatch = raw.match(/^\[([^\]]+)\](?::\d+)?$/);
+  const hostOnly = bracketedMatch ? bracketedMatch[1] : raw.replace(/:\d+$/, "");
+
+  if (hostOnly === "::1" || hostOnly === "127.0.0.1" || hostOnly === "0.0.0.0") {
+    return "localhost";
+  }
+
+  return hostOnly;
+}
+
 function isTruthy(value: string) {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
@@ -141,6 +158,12 @@ export default async function proxy(req: NextRequest) {
     res.headers.set("x-trace-id", traceId);
     return res;
   };
+  const markAdminResponseNoStore = (res: NextResponse) => {
+    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.headers.set("Pragma", "no-cache");
+    res.headers.set("Expires", "0");
+    return res;
+  };
   const normalizedRootDomain =
     normalizeConfiguredHost(process.env.NEXT_PUBLIC_ROOT_DOMAIN || "") || "localhost";
   const adminPathAlias = getAdminPathAlias();
@@ -151,8 +174,9 @@ export default async function proxy(req: NextRequest) {
     host: req.headers.get("host"),
   });
 
-  const hostHeader = req.headers.get("host") || "";
-  let hostname = hostHeader.split(":")[0].toLowerCase();
+  const forwardedHost = req.headers.get("x-forwarded-host") || "";
+  const hostHeader = forwardedHost || req.headers.get("host") || "";
+  let hostname = normalizeRequestHost(hostHeader);
 
   // Normalize local subdomains for any localhost port.
   if (hostname.endsWith(".localhost")) {
@@ -215,7 +239,7 @@ export default async function proxy(req: NextRequest) {
     const isPublicBridgePath = appPath === "/theme-bridge-client" || appPath === "/theme-bridge-start";
     if (!isAuthenticated && appPath !== "/login" && !isPublicBridgePath) {
       traceEdge("middleware", "redirect unauthenticated admin-path user", { traceId, to: `${externalAdminBase}/login` });
-      return redirectWithTrace(`${externalAdminBase}/login`);
+      return markAdminResponseNoStore(redirectWithTrace(`${externalAdminBase}/login`));
     }
     if (appPath === "/login") {
       traceEdge("middleware", "preserve admin login path for server auth resolution", {
@@ -223,14 +247,16 @@ export default async function proxy(req: NextRequest) {
         hasCookie,
         isAuthenticated,
       });
-      return rewriteWithTrace(`/app/login${searchParams ? `?${searchParams}` : ""}`);
+      return markAdminResponseNoStore(
+        rewriteWithTrace(`/app/login${searchParams ? `?${searchParams}` : ""}`),
+      );
     }
     if (isAuthenticated && (appPath === "/" || appPath === "")) {
       traceEdge("middleware", "preserve admin-path root for server dashboard routing", {
         traceId,
         to: "/app",
       });
-      return rewriteWithTrace("/app");
+      return markAdminResponseNoStore(rewriteWithTrace("/app"));
     }
     if (
       isAuthenticated &&
@@ -242,7 +268,9 @@ export default async function proxy(req: NextRequest) {
         traceId,
         to: `${externalAdminBase}/settings/profile?forcePasswordChange=1`,
       });
-      return redirectWithTrace(`${externalAdminBase}/settings/profile?forcePasswordChange=1`);
+      return markAdminResponseNoStore(
+        redirectWithTrace(`${externalAdminBase}/settings/profile?forcePasswordChange=1`),
+      );
     }
 
     const rewritten = rewriteWithTrace(`/app${appPath === "/" ? "" : appFullPath}`);
@@ -251,14 +279,14 @@ export default async function proxy(req: NextRequest) {
       setLastSiteId(rewritten, decodeURIComponent(siteMatch[1]));
       setLastAppPath(rewritten, appPath);
     }
-    return rewritten;
+    return markAdminResponseNoStore(rewritten);
   }
 
   if (isRootDomain && (path === "/app" || path.startsWith("/app/"))) {
     const cleanPath = normalizeAdminAliasPath(path, adminPathAlias);
     const target = `/app/${adminPathAlias}${cleanPath === "/" ? "" : cleanPath}${searchParams ? `?${searchParams}` : ""}`;
     traceEdge("middleware", "redirect internal app path to admin alias", { traceId, to: target });
-    return redirectWithTrace(target);
+    return markAdminResponseNoStore(redirectWithTrace(target));
   }
 
   if (isRootDomain && path === "/login") {
@@ -267,7 +295,7 @@ export default async function proxy(req: NextRequest) {
       traceId,
       to: target,
     });
-    return redirectWithTrace(target);
+    return markAdminResponseNoStore(redirectWithTrace(target));
   }
 
   // Preserve direct dashboard routes on localhost/root domain.

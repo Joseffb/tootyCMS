@@ -3,6 +3,7 @@ import type { DomainEvent } from "@/lib/domain-events";
 import {
   claimDomainEventBatch,
   enqueueDomainEvent,
+  listKnownDomainQueueSiteIds,
   markDomainEventFailed,
   markDomainEventProcessed,
 } from "@/lib/domain-queue";
@@ -10,7 +11,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { fanoutDomainEventToWebhooks } from "@/lib/webhook-delivery";
 import { trace } from "@/lib/debug";
 
-let draining = false;
+const drainingSites = new Set<string>();
 
 export async function dispatchDomainEventImmediate(event: DomainEvent) {
   const kernel = await createKernelForRequest(event.siteId);
@@ -25,25 +26,27 @@ export async function dispatchDomainEventImmediate(event: DomainEvent) {
   });
 }
 
-export async function processDomainQueueBatch(limit = 25) {
-  if (draining) return { processed: 0 };
-  draining = true;
+export async function processDomainQueueBatch(siteId: string, limit = 25) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return { processed: 0 };
+  if (drainingSites.has(normalizedSiteId)) return { processed: 0 };
+  drainingSites.add(normalizedSiteId);
   try {
-    const rows = await claimDomainEventBatch(limit);
+    const rows = await claimDomainEventBatch(normalizedSiteId, limit);
     let processed = 0;
     for (const row of rows) {
       try {
         await dispatchDomainEventImmediate(row.event);
-        await markDomainEventProcessed(row.id);
+        await markDomainEventProcessed(row.siteId, row.id);
         processed += 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await markDomainEventFailed(row.id, row.attempts, message);
+        await markDomainEventFailed(row.siteId, row.id, row.attempts, message);
       }
     }
     return { processed };
   } finally {
-    draining = false;
+    drainingSites.delete(normalizedSiteId);
   }
 }
 
@@ -52,7 +55,29 @@ export async function emitDomainEvent(event: DomainEvent) {
     ...event,
     id: event.id || createId(),
   };
-  await enqueueDomainEvent(withId);
+  const siteId = String(withId.siteId || "").trim();
+  if (!siteId) {
+    await dispatchDomainEventImmediate(withId);
+    return;
+  }
+
+  await enqueueDomainEvent({
+    ...withId,
+    siteId,
+  });
   if (process.env.DOMAIN_EVENT_QUEUE_AUTODRAIN === "false") return;
-  await processDomainQueueBatch(25);
+  await processDomainQueueBatch(siteId, 25);
+}
+
+export async function processAllSiteDomainQueues(limitPerSite = 25) {
+  const siteIds = await listKnownDomainQueueSiteIds().catch(() => []);
+  let processed = 0;
+  for (const siteId of siteIds) {
+    const result = await processDomainQueueBatch(siteId, limitPerSite);
+    processed += result.processed;
+  }
+  return {
+    processed,
+    sitesChecked: siteIds.length,
+  };
 }

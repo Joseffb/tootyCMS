@@ -42,6 +42,14 @@ export default function CollectionOrderManager({
     return next;
   }
 
+  function buildMovedOrder(sourceList: SlideItem[], itemId: string, direction: -1 | 1) {
+    const sourceIndex = sourceList.findIndex((item) => item.id === itemId);
+    if (sourceIndex < 0) return null;
+    const targetIndex = sourceIndex + direction;
+    if (targetIndex < 0 || targetIndex >= sourceList.length) return null;
+    return buildNextOrder(sourceList, itemId, sourceList[targetIndex]?.id || "");
+  }
+
   function persistOrder(nextItems: SlideItem[]) {
     setItems(nextItems);
     setPreviewItems(null);
@@ -152,7 +160,37 @@ export default function CollectionOrderManager({
                     ) : null}
                   </div>
                 </div>
-                <div className="text-xs text-stone-500 dark:text-stone-400">Current: {item.sortOrder}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-stone-500 dark:text-stone-400">Current: {item.sortOrder}</div>
+                  <button
+                    type="button"
+                    aria-label={`Move ${item.title || "item"} up`}
+                    disabled={index === 0 || isPending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const nextItems = buildMovedOrder(items, item.id, -1);
+                      if (nextItems) persistOrder(nextItems);
+                    }}
+                    className="rounded border border-stone-300 bg-white px-2 py-1 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${item.title || "item"} down`}
+                    disabled={index === renderedItems.length - 1 || isPending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const nextItems = buildMovedOrder(items, item.id, 1);
+                      if (nextItems) persistOrder(nextItems);
+                    }}
+                    className="rounded border border-stone-300 bg-white px-2 py-1 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                  >
+                    Down
+                  </button>
+                </div>
               </Link>
             ) : (
               <div className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-1 py-1">
@@ -167,7 +205,33 @@ export default function CollectionOrderManager({
                     ) : null}
                   </div>
                 </div>
-                <div className="text-xs text-stone-500 dark:text-stone-400">Current: {item.sortOrder}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-stone-500 dark:text-stone-400">Current: {item.sortOrder}</div>
+                  <button
+                    type="button"
+                    aria-label={`Move ${item.title || "item"} up`}
+                    disabled={index === 0 || isPending}
+                    onClick={() => {
+                      const nextItems = buildMovedOrder(items, item.id, -1);
+                      if (nextItems) persistOrder(nextItems);
+                    }}
+                    className="rounded border border-stone-300 bg-white px-2 py-1 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${item.title || "item"} down`}
+                    disabled={index === renderedItems.length - 1 || isPending}
+                    onClick={() => {
+                      const nextItems = buildMovedOrder(items, item.id, 1);
+                      if (nextItems) persistOrder(nextItems);
+                    }}
+                    className="rounded border border-stone-300 bg-white px-2 py-1 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                  >
+                    Down
+                  </button>
+                </div>
               </div>
             )}
           </div>

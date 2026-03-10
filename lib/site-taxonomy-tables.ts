@@ -248,6 +248,12 @@ async function executeConstraintDdl(executor: SqlExecutor, statement: string) {
 
 type QueryRows<T> = { rows?: T[] };
 
+type ForeignKeyConstraintRow = {
+  constraint_name?: string;
+  referenced_table?: string;
+  columns?: string[] | null;
+};
+
 async function relationExistsWithExecutor(executor: SqlExecutor, relationName: string) {
   const result = (await executor.execute?.(
     sql`SELECT to_regclass(${`public.${relationName}`}) AS relation_name`,
@@ -258,6 +264,71 @@ async function relationExistsWithExecutor(executor: SqlExecutor, relationName: s
     return true;
   }
   return Boolean(result?.rows?.[0]?.relation_name);
+}
+
+async function repairForeignKeyConstraintTarget(
+  executor: SqlExecutor,
+  input: {
+    tableName: string;
+    columnName: string;
+    referencedTable: string;
+    expectedConstraintName: string;
+  },
+) {
+  if (typeof executor.execute !== "function") return;
+
+  const constraints = (await executor.execute(
+    sql`
+      SELECT
+        con.conname AS constraint_name,
+        confrel.relname AS referenced_table,
+        ARRAY_AGG(att.attname ORDER BY keys.ord) AS columns
+      FROM pg_constraint con
+      INNER JOIN pg_class rel
+        ON rel.oid = con.conrelid
+      INNER JOIN pg_namespace ns
+        ON ns.oid = rel.relnamespace
+      INNER JOIN pg_class confrel
+        ON confrel.oid = con.confrelid
+      INNER JOIN LATERAL UNNEST(con.conkey) WITH ORDINALITY AS keys(attnum, ord)
+        ON TRUE
+      INNER JOIN pg_attribute att
+        ON att.attrelid = rel.oid
+       AND att.attnum = keys.attnum
+      WHERE ns.nspname = 'public'
+        AND rel.relname = ${input.tableName}
+        AND con.contype = 'f'
+      GROUP BY con.conname, confrel.relname
+    `,
+  )) as QueryRows<ForeignKeyConstraintRow>;
+
+  if (!constraints || !Array.isArray(constraints.rows)) {
+    return;
+  }
+
+  for (const row of constraints.rows) {
+    const columns = Array.isArray(row.columns) ? row.columns : [];
+    if (columns.length !== 1 || columns[0] !== input.columnName) {
+      continue;
+    }
+    if (
+      row.constraint_name === input.expectedConstraintName &&
+      row.referenced_table === input.referencedTable
+    ) {
+      continue;
+    }
+    if (row.referenced_table === input.referencedTable) {
+      continue;
+    }
+    if (!row.constraint_name) {
+      continue;
+    }
+    await executor.execute(
+      sql.raw(
+        `ALTER TABLE ${quoted(input.tableName)} DROP CONSTRAINT IF EXISTS ${quoted(row.constraint_name)}`,
+      ),
+    );
+  }
 }
 
 async function waitForRelationVisible(executor: SqlExecutor, relationName: string, attempts = 10) {
@@ -507,6 +578,31 @@ async function ensurePhysicalSiteTaxonomyConstraints(executor: SqlExecutor, site
   const domainsTable = termTaxonomyDomainsTableName(siteId);
   const metaTable = termTaxonomyMetaTableName(siteId);
 
+  await repairForeignKeyConstraintTarget(executor, {
+    tableName: taxonomiesTable,
+    columnName: "termId",
+    referencedTable: termsTable,
+    expectedConstraintName: `${taxonomiesTable}_term_fk`,
+  });
+  await repairForeignKeyConstraintTarget(executor, {
+    tableName: relationshipsTable,
+    columnName: "termTaxonomyId",
+    referencedTable: taxonomiesTable,
+    expectedConstraintName: `${relationshipsTable}_taxonomy_fk`,
+  });
+  await repairForeignKeyConstraintTarget(executor, {
+    tableName: domainsTable,
+    columnName: "termTaxonomyId",
+    referencedTable: taxonomiesTable,
+    expectedConstraintName: `${domainsTable}_taxonomy_fk`,
+  });
+  await repairForeignKeyConstraintTarget(executor, {
+    tableName: metaTable,
+    columnName: "termTaxonomyId",
+    referencedTable: taxonomiesTable,
+    expectedConstraintName: `${metaTable}_taxonomy_fk`,
+  });
+
   await executeConstraintDdl(
     executor,
     `
@@ -552,6 +648,11 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
   const termsIdSequence = sitePhysicalSequenceName(normalizedPrefix, normalizedSiteId, "terms_id_seq");
   const taxonomiesIdSequence = sitePhysicalSequenceName(normalizedPrefix, normalizedSiteId, "term_taxonomies_id_seq");
   const metaIdSequence = sitePhysicalSequenceName(normalizedPrefix, normalizedSiteId, "term_taxonomy_meta_id_seq");
+
+  const ensureConstraints = async (executor: SqlExecutor) => {
+    await ensurePhysicalSiteTaxonomyConstraints(executor, normalizedSiteId);
+  };
+
   if (ensuredSites.has(normalizedSiteId)) {
     const hasRequiredRelations = await Promise.all([
       relationExistsWithExecutor(db, termsTable),
@@ -564,6 +665,7 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
       relationExistsWithExecutor(db, metaIdSequence),
     ]);
     if (hasRequiredRelations.every(Boolean)) {
+      await ensureConstraints(db);
       return getSiteTaxonomyTables(normalizedSiteId);
     }
     ensuredSites.delete(normalizedSiteId);
@@ -582,6 +684,7 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
       relationExistsWithExecutor(db, metaIdSequence),
     ]);
     if (hasRequiredRelations.every(Boolean)) {
+      await ensureConstraints(db);
       ensuredSites.add(normalizedSiteId);
       return cached;
     }
@@ -625,8 +728,8 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
     ]);
     if (!hasRequiredRelations.every(Boolean)) {
       await createPhysicalSiteTaxonomyTables(db, normalizedSiteId);
-      await ensurePhysicalSiteTaxonomyConstraints(db, normalizedSiteId);
     }
+    await ensureConstraints(db);
     const tables = getSiteTaxonomyTables(normalizedSiteId);
     ensuredSites.add(normalizedSiteId);
     return tables;
@@ -655,6 +758,7 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
       if (!(await verifyRelations(tx))) {
         await createPhysicalSiteTaxonomyTables(tx, normalizedSiteId);
       }
+      await ensureConstraints(tx);
       const tables = getSiteTaxonomyTables(normalizedSiteId);
       ensuredSites.add(normalizedSiteId);
       return tables;
@@ -667,7 +771,7 @@ export async function ensureSiteTaxonomyTables(siteId: string) {
       if (!(await verifyRelations(db))) {
         await createPhysicalSiteTaxonomyTables(db, normalizedSiteId);
       }
-      await ensurePhysicalSiteTaxonomyConstraints(db, normalizedSiteId);
+      await ensureConstraints(db);
       ensuredSites.add(normalizedSiteId);
       return resolved;
     })

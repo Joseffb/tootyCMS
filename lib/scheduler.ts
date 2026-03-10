@@ -6,6 +6,7 @@ import {
   SCHEDULES_ENABLED_KEY,
   SCHEDULES_PING_SITEMAP_KEY,
   getBooleanSetting,
+  getSiteBooleanSetting,
   getSiteUrlSetting,
   getSiteUrlSettingForSite,
 } from "@/lib/cms-config";
@@ -14,10 +15,12 @@ import { purgeWebcallbackEvents } from "@/lib/webcallbacks";
 import { retryPendingWebhookDeliveries } from "@/lib/webhook-delivery";
 import { setDomainPostPublishedState } from "@/lib/content-lifecycle";
 import { purgeOldMediaRecords } from "@/lib/media-governance";
+import { deleteSiteDomainPostMeta, findDomainPostForMutation } from "@/lib/site-domain-post-store";
 
 export type SchedulerOwnerType = "plugin" | "theme" | "core";
 export type SchedulerStatus = "success" | "error" | "skipped" | "blocked" | "dead_letter";
 export type SchedulerTrigger = "cron" | "manual";
+export type ScheduleScope = "network" | "site";
 
 export type ScheduleEntry = {
   id: string;
@@ -54,6 +57,14 @@ export type SchedulerRunRecord = {
   createdAt: Date;
 };
 
+type ScheduleListFilter = {
+  ownerType?: SchedulerOwnerType;
+  ownerId?: string;
+  includeDisabled?: boolean;
+  scope?: ScheduleScope;
+  siteId?: string | null;
+};
+
 type ScheduleMutationActor = {
   isAdmin: boolean;
   ownerType?: SchedulerOwnerType;
@@ -75,6 +86,25 @@ type CreateScheduleInput = {
 type UpdateScheduleInput = Partial<CreateScheduleInput>;
 
 let ensured = false;
+
+function isRetryableSchedulerDbError(error: unknown) {
+  const candidate = error as { code?: unknown } | null | undefined;
+  return candidate?.code === "40P01" || candidate?.code === "55P03";
+}
+
+async function withSchedulerDbRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isRetryableSchedulerDbError(error) || attempt === attempts) throw error;
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
+  throw lastError;
+}
 
 function getPrefix() {
   const raw = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
@@ -186,7 +216,7 @@ export async function ensureSchedulerTables() {
   const table = quotedTableName();
   const runTable = quotedRunTableName();
 
-  await db.execute(
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`
       CREATE TABLE IF NOT EXISTS ${table} (
         id text PRIMARY KEY,
@@ -211,18 +241,18 @@ export async function ensureSchedulerTables() {
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `),
-  );
+  ));
 
-  await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS max_retries integer NOT NULL DEFAULT 3`));
-  await db.execute(
+  await withSchedulerDbRetry(() => db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS max_retries integer NOT NULL DEFAULT 3`)));
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS backoff_base_seconds integer NOT NULL DEFAULT 60`),
-  );
-  await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0`));
-  await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS dead_lettered boolean NOT NULL DEFAULT false`));
-  await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz NULL`));
-  await db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS next_run_at timestamptz NULL DEFAULT now()`));
+  ));
+  await withSchedulerDbRetry(() => db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0`)));
+  await withSchedulerDbRetry(() => db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS dead_lettered boolean NOT NULL DEFAULT false`)));
+  await withSchedulerDbRetry(() => db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz NULL`)));
+  await withSchedulerDbRetry(() => db.execute(sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS next_run_at timestamptz NULL DEFAULT now()`)));
 
-  await db.execute(
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`
       CREATE TABLE IF NOT EXISTS ${runTable} (
         id text PRIMARY KEY,
@@ -238,17 +268,17 @@ export async function ensureSchedulerTables() {
           FOREIGN KEY (schedule_id) REFERENCES ${table}(id) ON DELETE CASCADE
       )
     `),
-  );
+  ));
 
-  await db.execute(
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`CREATE INDEX IF NOT EXISTS "${tableName()}_due_idx" ON ${table} (enabled, dead_lettered, next_run_at)`),
-  );
-  await db.execute(
+  ));
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`CREATE INDEX IF NOT EXISTS "${tableName()}_owner_idx" ON ${table} (owner_type, owner_id)`),
-  );
-  await db.execute(
+  ));
+  await withSchedulerDbRetry(() => db.execute(
     sql.raw(`CREATE INDEX IF NOT EXISTS "${runTableName()}_schedule_idx" ON ${runTable} (schedule_id, created_at DESC)`),
-  );
+  ));
 
   ensured = true;
 }
@@ -266,7 +296,7 @@ export async function createScheduleEntry(
   if (!actionKey) throw new Error("Schedule action key is required");
 
   const table = sql.raw(quotedTableName());
-  await db.execute(sql`
+  await withSchedulerDbRetry(() => db.execute(sql`
     INSERT INTO ${table}
       (id, owner_type, owner_id, site_id, name, action_key, payload, enabled, run_every_minutes, max_retries, backoff_base_seconds, next_run_at, created_at, updated_at)
     VALUES
@@ -286,7 +316,7 @@ export async function createScheduleEntry(
         now(),
         now()
       )
-  `);
+  `));
 
   const created = await getScheduleEntryById(id);
   if (!created) throw new Error("Failed to create schedule");
@@ -296,26 +326,85 @@ export async function createScheduleEntry(
 export async function getScheduleEntryById(id: string) {
   await ensureSchedulerTables();
   const table = sql.raw(quotedTableName());
-  const res = await db.execute(sql`SELECT * FROM ${table} WHERE id = ${id} LIMIT 1`);
+  const res = await withSchedulerDbRetry(() => db.execute(sql`SELECT * FROM ${table} WHERE id = ${id} LIMIT 1`));
   const row = (res as any)?.rows?.[0];
   return row ? mapRow(row) : null;
 }
 
-export async function listScheduleEntries(filter?: {
-  ownerType?: SchedulerOwnerType;
-  ownerId?: string;
-  includeDisabled?: boolean;
-}) {
+function addScopeFilters(where: any[], filter?: Pick<ScheduleListFilter, "scope" | "siteId">) {
+  if (filter?.scope === "network") {
+    where.push(sql`site_id IS NULL`);
+    return;
+  }
+  if (filter?.scope === "site") {
+    if (filter.siteId) {
+      where.push(sql`site_id = ${filter.siteId}`);
+    } else {
+      where.push(sql`site_id IS NOT NULL`);
+    }
+    return;
+  }
+  if (filter?.siteId !== undefined) {
+    if (filter.siteId) {
+      where.push(sql`site_id = ${filter.siteId}`);
+    } else {
+      where.push(sql`site_id IS NULL`);
+    }
+  }
+}
+
+async function getDueScheduleEntries(filter: { scope?: ScheduleScope; siteId?: string | null; limit: number }) {
+  await ensureSchedulerTables();
+  const table = sql.raw(quotedTableName());
+  const now = new Date();
+  const where: any[] = [
+    sql`enabled = true`,
+    sql`dead_lettered = false`,
+    sql`next_run_at IS NOT NULL`,
+    sql`next_run_at <= ${now}`,
+  ];
+  addScopeFilters(where, filter);
+  const whereClause = sql`WHERE ${sql.join(where, sql` AND `)}`;
+  const dueRes = await withSchedulerDbRetry(() => db.execute(sql`
+    SELECT * FROM ${table}
+    ${whereClause}
+    ORDER BY next_run_at ASC
+    LIMIT ${Math.max(1, Math.min(100, Math.trunc(filter.limit)))}
+  `));
+  return ((dueRes as any)?.rows || []).map(mapRow);
+}
+
+async function processDueScheduleEntries(entries: ScheduleEntry[]) {
+  let ran = 0;
+  let skipped = 0;
+  let blocked = 0;
+  let errors = 0;
+  let deadLettered = 0;
+
+  for (const entry of entries) {
+    const result = await executeScheduleEntry(entry, "cron");
+    ran += 1;
+    if (result.status === "skipped") skipped += 1;
+    if (result.status === "blocked") blocked += 1;
+    if (result.status === "error") errors += 1;
+    if (result.status === "dead_letter") deadLettered += 1;
+  }
+
+  return { ran, skipped, blocked, errors, deadLettered };
+}
+
+export async function listScheduleEntries(filter?: ScheduleListFilter) {
   await ensureSchedulerTables();
   const table = sql.raw(quotedTableName());
   const where: any[] = [];
   if (!filter?.includeDisabled) where.push(sql`enabled = true`);
   if (filter?.ownerType) where.push(sql`owner_type = ${filter.ownerType}`);
   if (filter?.ownerId) where.push(sql`owner_id = ${filter.ownerId}`);
+  addScopeFilters(where, filter);
   const whereClause = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
-  const res = await db.execute(
+  const res = await withSchedulerDbRetry(() => db.execute(
     sql`SELECT * FROM ${table} ${whereClause} ORDER BY dead_lettered DESC, next_run_at ASC NULLS LAST, created_at DESC`,
-  );
+  ));
   return ((res as any)?.rows || []).map(mapRow);
 }
 
@@ -323,9 +412,9 @@ export async function listScheduleRunAudits(scheduleId: string, limit = 20) {
   await ensureSchedulerTables();
   const runTable = sql.raw(quotedRunTableName());
   const maxRows = Math.max(1, Math.min(100, Math.trunc(limit)));
-  const res = await db.execute(
+  const res = await withSchedulerDbRetry(() => db.execute(
     sql`SELECT * FROM ${runTable} WHERE schedule_id = ${scheduleId} ORDER BY created_at DESC LIMIT ${maxRows}`,
-  );
+  ));
   return ((res as any)?.rows || []).map(mapRunRow);
 }
 
@@ -361,7 +450,7 @@ export async function updateScheduleEntry(id: string, input: UpdateScheduleInput
 
   const clearDeadLetter = next.enabled && existing.deadLettered;
   const table = sql.raw(quotedTableName());
-  await db.execute(sql`
+  await withSchedulerDbRetry(() => db.execute(sql`
     UPDATE ${table}
     SET
       site_id = ${next.siteId},
@@ -378,7 +467,7 @@ export async function updateScheduleEntry(id: string, input: UpdateScheduleInput
       next_run_at = ${next.nextRunAt},
       updated_at = now()
     WHERE id = ${id}
-  `);
+  `));
   return getScheduleEntryById(id);
 }
 
@@ -387,21 +476,51 @@ export async function deleteScheduleEntry(id: string, actor: ScheduleMutationAct
   if (!existing) return { ok: true };
   if (!canMutate(existing, actor)) throw new Error("Not authorized");
   const table = sql.raw(quotedTableName());
-  await db.execute(sql`DELETE FROM ${table} WHERE id = ${id}`);
+  await withSchedulerDbRetry(() => db.execute(sql`DELETE FROM ${table} WHERE id = ${id}`));
   return { ok: true };
 }
 
 export async function acquireSchedulerLock() {
-  const res = await db.execute(sql`select pg_try_advisory_lock(hashtext(${lockKeyName()})) as acquired`);
+  const res = await withSchedulerDbRetry(() => db.execute(sql`select pg_try_advisory_lock(hashtext(${lockKeyName()})) as acquired`));
   return Boolean((res as any)?.rows?.[0]?.acquired);
 }
 
 export async function releaseSchedulerLock() {
-  await db.execute(sql`select pg_advisory_unlock(hashtext(${lockKeyName()}))`);
+  await withSchedulerDbRetry(() => db.execute(sql`select pg_advisory_unlock(hashtext(${lockKeyName()}))`));
 }
 
 async function runCoreAction(entry: ScheduleEntry): Promise<{ status: Exclude<SchedulerStatus, "dead_letter">; error?: string }> {
   const action = entry.actionKey;
+  const networkOnlyActions = new Set([
+    "core.ping_sitemap",
+    "ping_sitemap",
+    "core.http_ping",
+    "http_ping",
+    "core.communication.retry",
+    "communication.retry",
+    "core.communication.purge",
+    "communication.purge",
+    "core.webcallbacks.purge",
+    "webcallbacks.purge",
+    "core.webhooks.retry",
+    "webhooks.retry",
+  ]);
+  const siteOnlyActions = new Set([
+    "core.media.cleanup",
+    "media.cleanup",
+    "core.content.publish",
+    "content.publish",
+    "core.content.unpublish",
+    "content.unpublish",
+  ]);
+
+  if (networkOnlyActions.has(action) && entry.siteId) {
+    return { status: "blocked", error: "network-only action cannot run as a site schedule" };
+  }
+
+  if (siteOnlyActions.has(action) && !entry.siteId) {
+    return { status: "blocked", error: "site-owned action requires a site schedule" };
+  }
 
   if (action === "core.ping_sitemap" || action === "ping_sitemap") {
     const pingEnabled = await getBooleanSetting(SCHEDULES_PING_SITEMAP_KEY, false);
@@ -474,6 +593,8 @@ async function runCoreAction(entry: ScheduleEntry): Promise<{ status: Exclude<Sc
   if (action === "core.content.publish" || action === "content.publish") {
     const domainPostId = String(entry.payload?.domainPostId || entry.payload?.contentId || "").trim();
     if (!domainPostId) return { status: "error", error: "payload.domainPostId is required" };
+    const existingPost = await findDomainPostForMutation(domainPostId);
+    if (!existingPost) return { status: "error", error: "domain post not found" };
     const result = await setDomainPostPublishedState({
       postId: domainPostId,
       nextPublished: true,
@@ -483,6 +604,12 @@ async function runCoreAction(entry: ScheduleEntry): Promise<{ status: Exclude<Sc
       if (result.reason === "transition_blocked") return { status: "blocked", error: `transition blocked: ${result.from} -> ${result.to}` };
       return { status: "error", error: "domain post not found" };
     }
+    await deleteSiteDomainPostMeta({
+      siteId: existingPost.siteId,
+      dataDomainKey: existingPost.dataDomainKey,
+      postId: existingPost.id,
+      key: "_publish_at",
+    });
     return { status: "success" };
   }
 
@@ -558,7 +685,7 @@ async function appendRunAudit(
   },
 ) {
   const runTable = sql.raw(quotedRunTableName());
-  await db.execute(sql`
+  await withSchedulerDbRetry(() => db.execute(sql`
     INSERT INTO ${runTable}
       (id, schedule_id, trigger, status, error, duration_ms, retry_attempt, payload, created_at)
     VALUES
@@ -573,7 +700,7 @@ async function appendRunAudit(
         ${JSON.stringify(result.payload || {})}::jsonb,
         now()
       )
-  `);
+  `));
 }
 
 async function executeScheduleEntry(entry: ScheduleEntry, trigger: SchedulerTrigger) {
@@ -583,9 +710,11 @@ async function executeScheduleEntry(entry: ScheduleEntry, trigger: SchedulerTrig
     entry.ownerType === "core" ? await runCoreAction(entry) : await runExtensionAction(entry);
   const durationMs = Date.now() - startedAt;
   const now = new Date();
+  const runOnce = Boolean(entry.payload?.runOnce);
 
   let finalStatus: SchedulerStatus = execution.status;
   let nextRetryCount = entry.retryCount;
+  let nextEnabled = entry.enabled;
   let nextRunAt: Date | null = new Date(now.getTime() + entry.runEveryMinutes * 60 * 1000);
   let deadLettered = false;
   let deadLetteredAt: Date | null = null;
@@ -603,12 +732,17 @@ async function executeScheduleEntry(entry: ScheduleEntry, trigger: SchedulerTrig
     }
   } else {
     nextRetryCount = 0;
+    if (runOnce && execution.status === "success") {
+      nextEnabled = false;
+      nextRunAt = null;
+    }
   }
 
   const table = sql.raw(quotedTableName());
-  await db.execute(sql`
+  await withSchedulerDbRetry(() => db.execute(sql`
     UPDATE ${table}
     SET
+      enabled = ${nextEnabled},
       last_run_at = now(),
       last_status = ${finalStatus},
       last_error = ${execution.error || ""},
@@ -618,7 +752,7 @@ async function executeScheduleEntry(entry: ScheduleEntry, trigger: SchedulerTrig
       next_run_at = ${nextRunAt},
       updated_at = now()
     WHERE id = ${entry.id}
-  `);
+  `));
 
   await appendRunAudit(entry.id, {
     trigger,
@@ -637,42 +771,85 @@ async function executeScheduleEntry(entry: ScheduleEntry, trigger: SchedulerTrig
 }
 
 export async function runDueSchedules(limit = 25) {
+  return runDueNetworkSchedules(limit);
+}
+
+export async function runDueNetworkSchedules(limit = 25) {
   await ensureSchedulerTables();
   const enabled = await getBooleanSetting(SCHEDULES_ENABLED_KEY, false);
   if (!enabled) {
-    return { ran: 0, skipped: 0, blocked: 0, errors: 0, deadLettered: 0, message: "schedules disabled" };
+    return { ran: 0, skipped: 0, blocked: 0, errors: 0, deadLettered: 0, message: "network schedules disabled" };
   }
 
-  const table = sql.raw(quotedTableName());
-  const now = new Date();
-  const dueRes = await db.execute(sql`
-    SELECT * FROM ${table}
-    WHERE enabled = true
-      AND dead_lettered = false
-      AND next_run_at IS NOT NULL
-      AND next_run_at <= ${now}
-    ORDER BY next_run_at ASC
-    LIMIT ${Math.max(1, Math.min(100, Math.trunc(limit)))}
-  `);
-  const due = ((dueRes as any)?.rows || []).map(mapRow);
+  const due = await getDueScheduleEntries({ scope: "network", limit });
+  const result = await processDueScheduleEntries(due);
+  trace("scheduler", "network schedules processed", { due: due.length, ...result });
+  return { ...result, message: "ok" };
+}
+
+export async function runDueSiteSchedules(siteId: string, limit = 25) {
+  await ensureSchedulerTables();
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) {
+    return { ran: 0, skipped: 0, blocked: 0, errors: 0, deadLettered: 0, message: "missing site id" };
+  }
+  const enabled = await getSiteBooleanSetting(normalizedSiteId, SCHEDULES_ENABLED_KEY, true);
+  if (!enabled) {
+    return { ran: 0, skipped: 0, blocked: 0, errors: 0, deadLettered: 0, message: "site schedules disabled" };
+  }
+
+  const due = await getDueScheduleEntries({ scope: "site", siteId: normalizedSiteId, limit });
+  const result = await processDueScheduleEntries(due);
+  trace("scheduler", "site schedules processed", { siteId: normalizedSiteId, due: due.length, ...result });
+  return { ...result, message: "ok" };
+}
+
+export async function runDueSiteSchedulesForAllEnabledSites(limitPerSite = 25) {
+  await ensureSchedulerTables();
+  const siteRows = await db.query.sites.findMany({
+    columns: { id: true },
+    orderBy: (table, { asc }) => [asc(table.id)],
+  });
 
   let ran = 0;
   let skipped = 0;
   let blocked = 0;
   let errors = 0;
   let deadLettered = 0;
+  let enabledSites = 0;
 
-  for (const entry of due) {
-    const result = await executeScheduleEntry(entry, "cron");
-    ran += 1;
-    if (result.status === "skipped") skipped += 1;
-    if (result.status === "blocked") blocked += 1;
-    if (result.status === "error") errors += 1;
-    if (result.status === "dead_letter") deadLettered += 1;
+  for (const site of siteRows) {
+    const siteEnabled = await getSiteBooleanSetting(site.id, SCHEDULES_ENABLED_KEY, true);
+    if (!siteEnabled) continue;
+    enabledSites += 1;
+    const result = await runDueSiteSchedules(site.id, limitPerSite);
+    ran += result.ran;
+    skipped += result.skipped;
+    blocked += result.blocked;
+    errors += result.errors;
+    deadLettered += result.deadLettered;
   }
 
-  trace("scheduler", "due schedules processed", { due: due.length, ran, skipped, blocked, errors, deadLettered });
-  return { ran, skipped, blocked, errors, deadLettered, message: "ok" };
+  trace("scheduler", "enabled site schedules processed", {
+    sitesChecked: siteRows.length,
+    enabledSites,
+    ran,
+    skipped,
+    blocked,
+    errors,
+    deadLettered,
+  });
+
+  return {
+    ran,
+    skipped,
+    blocked,
+    errors,
+    deadLettered,
+    sitesChecked: siteRows.length,
+    enabledSites,
+    message: "ok",
+  };
 }
 
 export async function runScheduleEntryNow(id: string) {

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
 import { getAppOrigin } from "./helpers/env";
 import { addSessionTokenCookie } from "./helpers/auth";
-import { ensureNetworkSite, ensureNetworkUser, networkTableName, quotedIdentifier } from "./helpers/storage";
+import { ensureNetworkSite, ensureNetworkUser, networkTableName, quotedIdentifier, siteFeatureTableName } from "./helpers/storage";
 
 const runId = `e2e-comm-${randomUUID()}`;
 const runCommunicationE2E = process.env.RUN_COMMUNICATION_E2E === "1";
@@ -14,6 +14,7 @@ const appOrigin = getAppOrigin();
 const userId = `${runId}-admin`;
 const siteId = `${runId}-site`;
 const email = `${runId}@example.com`;
+const siteQueueTable = quotedIdentifier(siteFeatureTableName(siteId, "domain_events_queue"));
 
 async function upsertSetting(key: string, value: string) {
   await setSettingByKey(key, value);
@@ -112,11 +113,11 @@ async function ensureSchema() {
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql`
-    DROP TABLE IF EXISTS tooty_domain_events_queue
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS tooty_domain_events_queue (
+  await sql.query(`
+    DROP TABLE IF EXISTS ${siteQueueTable}
+  `);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS ${siteQueueTable} (
       "id" text PRIMARY KEY,
       "event" jsonb NOT NULL DEFAULT '{}'::jsonb,
       "status" text NOT NULL DEFAULT 'queued',
@@ -127,7 +128,7 @@ async function ensureSchema() {
       "created_at" timestamptz NOT NULL DEFAULT now(),
       "updated_at" timestamptz NOT NULL DEFAULT now()
     )
-  `;
+  `);
 }
 
 async function ensureUserAndSite() {
@@ -219,11 +220,11 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   expect(row.rows[0]?.providerId).toBe("native:null-provider");
 
   const queuedEventCount =
-    await sql`SELECT COUNT(*)::int AS count FROM tooty_domain_events_queue WHERE ("event"->>'name') = 'communication.queued' AND ("event"->'payload'->>'messageId') = ${sendJson.messageId}`;
+    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.queued' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(queuedEventCount.rows[0]?.count || 0)).toBe(1);
 
   const sentEventAfterInitialSend =
-    await sql`SELECT COUNT(*)::int AS count FROM tooty_domain_events_queue WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = ${sendJson.messageId}`;
+    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterInitialSend.rows[0]?.count || 0)).toBe(1);
 
   const callbackRes = await page.request.post(`${appOrigin}/api/communications/callback/native-null`, {
@@ -243,7 +244,7 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   expect(updated.rows[0]?.status).toBe("sent");
 
   const sentEventAfterCallback =
-    await sql`SELECT COUNT(*)::int AS count FROM tooty_domain_events_queue WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = ${sendJson.messageId}`;
+    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterCallback.rows[0]?.count || 0)).toBe(2);
 
   const duplicateCallbackRes = await page.request.post(`${appOrigin}/api/communications/callback/native-null`, {
@@ -256,7 +257,7 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   expect(duplicateCallbackRes.status()).toBe(202);
 
   const sentEventAfterDuplicateCallback =
-    await sql`SELECT COUNT(*)::int AS count FROM tooty_domain_events_queue WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = ${sendJson.messageId}`;
+    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterDuplicateCallback.rows[0]?.count || 0)).toBe(2);
 
   const genericCallbackRes = await page.request.post(`${appOrigin}/api/webcallbacks/no-handler`, {

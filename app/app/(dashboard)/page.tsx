@@ -11,6 +11,7 @@ import { getAllDataDomains } from "@/lib/actions";
 import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
 import OverviewStats from "@/components/overview-stats";
 import { getApprovedCommentCountsBySite, getViewCountsByPost } from "@/lib/dashboard-popularity";
+import { getDomainPostAdminItemPath } from "@/lib/domain-post-admin-routes";
 import { listNetworkDomainPosts } from "@/lib/site-domain-post-store";
 
 export const dynamic = "force-dynamic";
@@ -276,7 +277,7 @@ export default async function Overview() {
                   <tr key={row.id} className="border-b border-stone-100 dark:border-stone-800">
                     <td className="px-2 py-2">
                       <Link
-                        href={`/app/site/${encodeURIComponent(row.siteId)}/domain/${encodeURIComponent(row.typeKey)}/post/${encodeURIComponent(row.id)}`}
+                        href={getDomainPostAdminItemPath(row.siteId, row.typeKey, row.id)}
                         className="font-medium text-stone-900 hover:underline dark:text-white"
                       >
                         {row.title}
@@ -322,7 +323,7 @@ export default async function Overview() {
                   <tr key={row.id} className="border-b border-stone-100 dark:border-stone-800">
                     <td className="px-2 py-2">
                       <Link
-                        href={`/app/site/${encodeURIComponent(row.siteId)}/domain/${encodeURIComponent(row.typeKey)}/post/${encodeURIComponent(row.id)}`}
+                        href={getDomainPostAdminItemPath(row.siteId, row.typeKey, row.id)}
                         className="font-medium text-stone-900 hover:underline dark:text-white"
                       >
                         {row.title}

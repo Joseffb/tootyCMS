@@ -22,6 +22,8 @@ export function createSaveQueue<TPayload>(options: SaveQueueOptions<TPayload>) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   let disposed = false;
+  let drainPromise: Promise<void> | null = null;
+  let lastError: unknown = null;
 
   const emit = (status: SaveQueueStatus, error?: unknown) => {
     options.onStatus?.({ status, error });
@@ -35,28 +37,41 @@ export function createSaveQueue<TPayload>(options: SaveQueueOptions<TPayload>) {
   };
 
   const drain = async () => {
-    if (disposed || running || !latestPayload) return;
-
-    running = true;
-
-    while (!disposed && latestPayload) {
-      const payload = latestPayload;
-      latestPayload = null;
-      emit("saving");
-
-      try {
-        await options.save(payload);
-        if (latestPayload) {
-          emit("unsaved");
-        } else {
-          emit("saved");
-        }
-      } catch (error) {
-        emit("error", error);
-      }
+    if (disposed || !latestPayload) return;
+    if (drainPromise) {
+      await drainPromise;
+      return;
     }
 
-    running = false;
+    drainPromise = (async () => {
+      running = true;
+
+      try {
+        while (!disposed && latestPayload) {
+          const payload = latestPayload;
+          latestPayload = null;
+          emit("saving");
+
+          try {
+            await options.save(payload);
+            lastError = null;
+            if (latestPayload) {
+              emit("unsaved");
+            } else {
+              emit("saved");
+            }
+          } catch (error) {
+            lastError = error;
+            emit("error", error);
+          }
+        }
+      } finally {
+        running = false;
+        drainPromise = null;
+      }
+    })();
+
+    await drainPromise;
   };
 
   const enqueue = (payload: TPayload, opts: EnqueueOptions = {}) => {
@@ -80,7 +95,12 @@ export function createSaveQueue<TPayload>(options: SaveQueueOptions<TPayload>) {
   const flush = async () => {
     if (disposed) return;
     clearTimer();
-    await drain();
+    while (!disposed && (latestPayload || drainPromise || running)) {
+      await (drainPromise ?? drain());
+    }
+    if (!disposed && lastError) {
+      throw lastError;
+    }
   };
 
   const dispose = () => {

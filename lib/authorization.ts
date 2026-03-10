@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { getSiteUserRole } from "@/lib/site-user-tables";
 import { SITE_CAPABILITIES, roleHasCapability, type SiteCapability } from "@/lib/rbac";
 import { findDomainPostForMutation } from "@/lib/site-domain-post-store";
+import { isPluginScopedContentMetaCapability, pluginContentMetaCapability } from "@/lib/plugin-permissions";
 
 async function getGlobalRole(userId: string) {
   if (!userId) return null;
@@ -19,6 +20,9 @@ function resolveCapability(action: string): SiteCapability | null {
   const normalized = String(action || "").trim().toLowerCase();
   if (!normalized) return null;
   if ((SITE_CAPABILITIES as readonly string[]).includes(normalized)) {
+    return normalized as SiteCapability;
+  }
+  if (isPluginScopedContentMetaCapability(normalized)) {
     return normalized as SiteCapability;
   }
   return null;
@@ -108,6 +112,15 @@ export async function userCan(
 
 export const user_can = userCan;
 
+export async function canUserManagePluginContentMeta(userId: string, siteId: string, pluginId: string) {
+  const scopedCapability = pluginContentMetaCapability(pluginId);
+  if (!scopedCapability) return false;
+  return canUserAccessSiteAnyCapability(userId, siteId, [
+    "manage_plugin_content_meta",
+    scopedCapability as SiteCapability,
+  ]);
+}
+
 export function isEmailInAllowedAdminList(email: string | null | undefined, allowedEmailsRaw: string) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!normalizedEmail) return false;
@@ -138,9 +151,10 @@ export async function canUserMutateDomainPost(
   userId: string,
   postId: string,
   kind: DomainPostMutationKind,
+  siteIdHint?: string | null,
 ) {
   if (!userId || !postId) return { allowed: false, post: null as any };
-  const post = await findDomainPostForMutation(postId);
+  const post = await findDomainPostForMutation(postId, siteIdHint);
   if (!post) return { allowed: false, post: null as any };
   if (!post.siteId) return { allowed: false, post };
   const globalRole = await getGlobalRole(userId);
@@ -158,6 +172,30 @@ export async function canUserMutateDomainPost(
     return { allowed: true, post };
   }
   return { allowed: false, post };
+}
+
+export function canUserOpenFreshDraftEditorShell(input: {
+  userId: string;
+  canRead: boolean;
+  canEdit: boolean;
+  post: {
+    published?: boolean | null;
+    title?: string | null;
+    description?: string | null;
+    content?: string | null;
+    userId?: string | null;
+  };
+}) {
+  if (input.canEdit || !input.canRead) return false;
+  const normalizedUserId = String(input.userId || "").trim();
+  const ownerId = String(input.post.userId || "").trim();
+  if (!normalizedUserId || !ownerId || normalizedUserId !== ownerId) return false;
+  return (
+    !input.post.published &&
+    !String(input.post.title || "").trim() &&
+    !String(input.post.description || "").trim() &&
+    !String(input.post.content || "").trim()
+  );
 }
 
 export async function canUserCreateDomainContent(userId: string, siteId: string) {

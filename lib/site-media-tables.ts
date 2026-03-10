@@ -174,6 +174,18 @@ async function relationExistsWithExecutor(executor: SqlExecutor, relationName: s
   return Boolean(result.rows[0]?.relation_name);
 }
 
+export async function siteMediaTableReady(siteId: string) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) throw new Error("siteId is required.");
+  const mediaTable = siteMediaTableName(normalizedSiteId);
+  const idSequence = sitePhysicalSequenceName(normalizedPrefix, normalizedSiteId, "media_id_seq");
+  const [hasMediaTable, hasMediaSequence] = await Promise.all([
+    relationExistsWithExecutor(db, mediaTable),
+    relationExistsWithExecutor(db, idSequence),
+  ]);
+  return hasMediaTable && hasMediaSequence;
+}
+
 async function waitForRelationVisible(executor: SqlExecutor, relationName: string, attempts = 10) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (await relationExistsWithExecutor(executor, relationName)) return true;

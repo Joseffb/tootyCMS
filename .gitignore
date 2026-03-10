@@ -13,6 +13,7 @@
 
 # next.js
 /.next/
+/.next-vercel-*/
 /.next-test-*/
 /.next-playwright-harness-*/
 /.tsconfig.next-test-*.json

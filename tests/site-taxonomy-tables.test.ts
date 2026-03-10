@@ -7,6 +7,15 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
 }));
 
+function queryText(statement: unknown) {
+  if (!statement || typeof statement !== "object") return "";
+  const chunks = (statement as { queryChunks?: Array<{ value?: string[] }> }).queryChunks;
+  if (!Array.isArray(chunks)) return "";
+  return chunks
+    .flatMap((chunk) => (Array.isArray(chunk?.value) ? chunk.value : []))
+    .join("");
+}
+
 vi.mock("@/lib/db", () => ({
   default: {
     query: {
@@ -29,7 +38,11 @@ describe("site taxonomy tables", () => {
 
     mocks.siteFindFirst.mockResolvedValue({ id: "site-1" });
     let dbExecuteCalls = 0;
-    mocks.execute.mockImplementation(async () => {
+    mocks.execute.mockImplementation(async (statement: unknown) => {
+      const text = queryText(statement);
+      if (text.includes("SELECT") && text.includes("pg_constraint")) {
+        return { rows: [] };
+      }
       dbExecuteCalls += 1;
       const relationName =
         dbExecuteCalls <= 8 ? "present" : dbExecuteCalls <= 16 ? null : "present";
@@ -138,5 +151,92 @@ describe("site taxonomy tables", () => {
     await expect(withSiteTaxonomyTableRecovery("site-1", run)).resolves.toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
     expect(mocks.transaction.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("drops stale taxonomy foreign keys that still point at old physical tables before recreating canonical constraints", async () => {
+    let dbExecuteCalls = 0;
+    mocks.execute.mockImplementation(async (statement: unknown) => {
+      const text = queryText(statement);
+      if (text.includes("SELECT") && text.includes("pg_constraint")) {
+        return {
+          rows: [
+            {
+              constraint_name: "legacy_term_fk",
+              referenced_table: "tooty_site_site_1_terms_legacy",
+              columns: ["termId"],
+            },
+          ],
+        };
+      }
+      dbExecuteCalls += 1;
+      const relationName =
+        dbExecuteCalls <= 8 ? "present" : dbExecuteCalls <= 16 ? null : "present";
+      return { rows: [{ relation_name: relationName }] };
+    });
+
+    const { ensureSiteTaxonomyTables } = await import("@/lib/site-taxonomy-tables");
+    await ensureSiteTaxonomyTables("site-1");
+
+    const executedSql = [
+      ...mocks.txExecute.mock.calls.map(([statement]) => queryText(statement)),
+      ...mocks.execute.mock.calls.map(([statement]) => queryText(statement)),
+    ];
+
+    expect(
+      executedSql.some((text) =>
+        text.includes('ALTER TABLE "tooty_site_site_1_term_taxonomies" DROP CONSTRAINT IF EXISTS "legacy_term_fk"'),
+      ),
+    ).toBe(true);
+    expect(
+      executedSql.some((text) =>
+        text.includes('ALTER TABLE "tooty_site_site_1_term_taxonomies"') &&
+        text.includes('ADD CONSTRAINT "tooty_site_site_1_term_taxonomies_term_fk"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("repairs stale taxonomy foreign keys even when the site was already cached and relations still exist", async () => {
+    let constraintChecks = 0;
+    let relationChecks = 0;
+    mocks.execute.mockImplementation(async (statement: unknown) => {
+      const text = queryText(statement);
+      if (text.includes("SELECT") && text.includes("pg_constraint")) {
+        constraintChecks += 1;
+        return {
+          rows: [
+            {
+              constraint_name: "legacy_term_fk",
+              referenced_table: "tooty_site_other_site_terms",
+              columns: ["termId"],
+            },
+          ],
+        };
+      }
+      relationChecks += 1;
+      return { rows: [{ relation_name: "present" }] };
+    });
+
+    const { ensureSiteTaxonomyTables } = await import("@/lib/site-taxonomy-tables");
+    await ensureSiteTaxonomyTables("site-1");
+    mocks.transaction.mockClear();
+
+    await ensureSiteTaxonomyTables("site-1");
+
+    const executedSql = mocks.execute.mock.calls.map(([statement]) => queryText(statement));
+
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(constraintChecks).toBeGreaterThanOrEqual(2);
+    expect(relationChecks).toBeGreaterThan(0);
+    expect(
+      executedSql.some((text) =>
+        text.includes('ALTER TABLE "tooty_site_site_1_term_taxonomies" DROP CONSTRAINT IF EXISTS "legacy_term_fk"'),
+      ),
+    ).toBe(true);
+    expect(
+      executedSql.some((text) =>
+        text.includes('ALTER TABLE "tooty_site_site_1_term_taxonomies"') &&
+        text.includes('ADD CONSTRAINT "tooty_site_site_1_term_taxonomies_term_fk"'),
+      ),
+    ).toBe(true);
   });
 });

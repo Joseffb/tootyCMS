@@ -72,11 +72,13 @@ export async function getViewCountsByPost(input: Array<{
       postIds: Array.from(new Set(bucket.postIds)),
       keys: [VIEW_COUNT_META_KEY],
     });
+    const countsByPostId = new Map<string, number>();
     for (const row of rows) {
       const postId = String(row.domainPostId || "").trim();
       if (!postId) continue;
-      counts.set(postId, parseViewCount(row.value));
+      countsByPostId.set(postId, parseViewCount(row.value));
     }
+    for (const [postId, value] of countsByPostId.entries()) counts.set(postId, value);
   }
 
   return counts;

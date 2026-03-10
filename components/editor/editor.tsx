@@ -15,12 +15,13 @@ import {
   handleImageDrop,
   handleImagePaste,
 } from "novel";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type SetStateAction } from "react";
 import { defaultExtensions } from "./extensions/editor-extensions";
 import { createUploadFn } from "@/components/tailwind/image-upload";
 import { getSuggestionItems, setCurrentPost, setPluginSuggestionItems, slashCommand } from "@/components/tailwind/slash-command";
 import {
   createTaxonomyTerm,
+  deleteDomainPost,
   getAllMetaKeys,
   getTaxonomyOverview,
   getTaxonomyTerms,
@@ -40,6 +41,8 @@ import {
   Link2,
   Unlink2,
 } from "lucide-react";
+
+const POST_PASSWORD_KEY = "password" as const;
 import { toast } from "sonner";
 import LoadingDots from "../icons/loading-dots";
 import { getSitePublicUrl } from "@/lib/site-url";
@@ -47,6 +50,21 @@ import { createSaveQueue, type SaveQueueStatus } from "@/lib/editor-save-queue";
 import { uploadSmart } from "@/lib/uploadSmart";
 import { DEFAULT_TOOTY_IMAGE } from "@/lib/tooty-images";
 import { useMediaPicker } from "@/components/media/use-media-picker";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/tailwind/ui/dialog";
+import {
+  filterVisibleEditorMetaEntries,
+  upsertEditorMetaEntry,
+  updateEditorMetaEntryValue,
+} from "@/lib/editor-meta";
+import { normalizeSeoSlug, normalizeSlugDraft } from "@/lib/slug";
+import { useParams, useRouter } from "next/navigation";
 
 type EditorMode = "html-css-first" | "rich-text";
 type SidebarTab = "document" | "block" | "plugins";
@@ -123,6 +141,43 @@ type TaxonomyTerm = {
   name: string;
 };
 
+type EditorSessionCacheEntry = {
+  version: 1;
+  savedAt: number;
+  signature: string;
+  payload: {
+    id: string;
+    title: string;
+    description: string;
+    slug: string;
+    content: string;
+    password: string;
+    usePassword: boolean;
+    layout: string | null;
+    selectedTermsByTaxonomy: Record<string, number[]>;
+    termNameById: Record<number, string>;
+    categoryIds: number[];
+    tagIds: number[];
+    taxonomyIds: number[];
+    metaEntries: PostMetaEntry[];
+  };
+};
+
+const DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS: TaxonomyOverviewRow[] = [
+  { taxonomy: "category", label: "Category", termCount: 0 },
+  { taxonomy: "tag", label: "Tags", termCount: 0 },
+];
+const EDITOR_SESSION_CACHE_VERSION = 1;
+const EDITOR_SESSION_CACHE_TTL_MS = 10 * 60 * 1000;
+const EDITOR_SESSION_CACHE_KEY_PREFIX = "tooty.editor.snapshot.v1:";
+
+function mergeTaxonomyOverviewRows(rows: TaxonomyOverviewRow[]) {
+  const merged = new Map<string, TaxonomyOverviewRow>();
+  for (const row of DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS) merged.set(row.taxonomy, row);
+  for (const row of rows) merged.set(row.taxonomy, row);
+  return Array.from(merged.values()).sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
+}
+
 type SavePostAction = (data: {
   id: string;
   title?: string | null;
@@ -139,6 +194,13 @@ type SavePostAction = (data: {
 }) => Promise<any>;
 
 type UpdatePostMetadataAction = (formData: FormData, postId: string, key: string) => Promise<any>;
+
+type EditorSaveSnapshot = {
+  data?: PostWithSite;
+  selectedTermsByTaxonomy?: Record<string, number[]>;
+  metaEntries?: PostMetaEntry[];
+  content?: string;
+};
 
 function parseInitialContent(raw: string | null | undefined): JSONContent {
   if (!raw) return defaultEditorContent as JSONContent;
@@ -157,6 +219,211 @@ function formatSaveLabel(status: SaveQueueStatus, error: string | null) {
   if (status === "error") return error ? `Error: ${error}` : "Save failed";
   if (status === "saved") return "Saved";
   return "Saved";
+}
+
+function deriveSelectedTermsByTaxonomy(post: PostWithSite) {
+  const selected: Record<string, number[]> = {};
+  const nextTermNameById: Record<number, string> = {};
+  if (Array.isArray(post.taxonomyAssignments) && post.taxonomyAssignments.length > 0) {
+    for (const assignment of post.taxonomyAssignments) {
+      const taxonomy = assignment.taxonomy || "category";
+      const list = selected[taxonomy] ?? [];
+      if (!list.includes(assignment.termTaxonomyId)) list.push(assignment.termTaxonomyId);
+      selected[taxonomy] = list;
+      if (assignment.name) {
+        nextTermNameById[assignment.termTaxonomyId] = assignment.name;
+      }
+    }
+  } else {
+    selected.category = post.categories?.map((c) => c.categoryId) ?? [];
+    selected.tag = post.tags?.map((t) => t.tagId) ?? [];
+  }
+  return { selected, nextTermNameById };
+}
+
+function getAllSelectedTaxonomyIds(selected: Record<string, number[]>) {
+  return Array.from(
+    new Set(
+      Object.values(selected)
+        .flat()
+        .filter((id): id is number => Number.isFinite(id)),
+    ),
+  );
+}
+
+function buildEditorStateSignature(input: {
+  post: PostWithSite;
+  content: JSONContent;
+  selectedTermsByTaxonomy: Record<string, number[]>;
+  metaEntries: PostMetaEntry[];
+}) {
+  const { post, content, selectedTermsByTaxonomy, metaEntries } = input;
+  return JSON.stringify({
+    id: post.id,
+    title: post.title ?? "",
+    description: post.description ?? "",
+    slug: post.slug ?? "",
+    content: JSON.stringify(content),
+    password: post.password ?? "",
+    usePassword: Boolean(post.usePassword),
+    layout: post.layout ?? null,
+    categoryIds: selectedTermsByTaxonomy.category ?? [],
+    tagIds: selectedTermsByTaxonomy.tag ?? [],
+    taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomy),
+    metaEntries,
+  });
+}
+
+function getEditorSessionCacheKey(postId: string) {
+  return `${EDITOR_SESSION_CACHE_KEY_PREFIX}${String(postId || "").trim()}`;
+}
+
+function readEditorSessionCache(postId: string): EditorSessionCacheEntry | null {
+  if (typeof window === "undefined") return null;
+  const cacheKey = getEditorSessionCacheKey(postId);
+  const raw = window.sessionStorage.getItem(cacheKey);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<EditorSessionCacheEntry>;
+    if (parsed.version !== EDITOR_SESSION_CACHE_VERSION) return null;
+    if (!parsed.savedAt || Date.now() - parsed.savedAt > EDITOR_SESSION_CACHE_TTL_MS) {
+      window.sessionStorage.removeItem(cacheKey);
+      return null;
+    }
+    if (!parsed.payload || parsed.payload.id !== postId || !parsed.signature) return null;
+    return parsed as EditorSessionCacheEntry;
+  } catch {
+    window.sessionStorage.removeItem(cacheKey);
+    return null;
+  }
+}
+
+function writeEditorSessionCache(
+  postId: string,
+  payload: EditorSessionCacheEntry["payload"],
+  signature: string,
+) {
+  if (typeof window === "undefined") return;
+  const cacheKey = getEditorSessionCacheKey(postId);
+  const entry: EditorSessionCacheEntry = {
+    version: EDITOR_SESSION_CACHE_VERSION,
+    savedAt: Date.now(),
+    signature,
+    payload,
+  };
+  window.sessionStorage.setItem(cacheKey, JSON.stringify(entry));
+}
+
+function clearEditorSessionCache(postId: string) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(getEditorSessionCacheKey(postId));
+}
+
+function hasMeaningfulEditorContent(raw: string | null | undefined) {
+  const normalized = String(raw || "").trim();
+  if (!normalized) return false;
+  try {
+    return JSON.stringify(JSON.parse(normalized)) !== JSON.stringify(defaultEditorContent);
+  } catch {
+    return true;
+  }
+}
+
+function getEditorPayloadCompletenessScore(input: {
+  title?: string | null;
+  description?: string | null;
+  slug?: string | null;
+  content?: string | null;
+  selectedTermsByTaxonomy?: Record<string, number[]>;
+  metaEntries?: Array<{ key: string; value: string }>;
+}) {
+  let score = 0;
+  if (String(input.title || "").trim()) score += 4;
+  if (String(input.slug || "").trim()) score += 3;
+  if (String(input.description || "").trim()) score += 2;
+  if (hasMeaningfulEditorContent(input.content)) score += 6;
+  score += Object.values(input.selectedTermsByTaxonomy ?? {}).reduce(
+    (total, ids) => total + (Array.isArray(ids) ? ids.length : 0),
+    0,
+  );
+  score += Array.isArray(input.metaEntries) ? input.metaEntries.length : 0;
+  return score;
+}
+
+function getInitialEditorClientState(post: PostWithSite) {
+  const content = parseInitialContent(post.content);
+  const { selected, nextTermNameById } = deriveSelectedTermsByTaxonomy(post);
+  const nextMeta = (post.meta ?? []).map((entry) => ({ key: entry.key, value: entry.value }));
+  const incomingServerSignature = buildEditorStateSignature({
+    post,
+    content,
+    selectedTermsByTaxonomy: selected,
+    metaEntries: nextMeta,
+  });
+  const cachedEditorState = readEditorSessionCache(post.id);
+  const incomingServerUpdatedAt = (() => {
+    const raw = (post as PostWithSite & { updatedAt?: string | Date | null }).updatedAt;
+    if (!raw) return 0;
+    const parsed = raw instanceof Date ? raw : new Date(String(raw));
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+  })();
+  const serverCompletenessScore = getEditorPayloadCompletenessScore({
+    title: post.title,
+    description: post.description,
+    slug: post.slug,
+    content: post.content,
+    selectedTermsByTaxonomy: selected,
+    metaEntries: nextMeta,
+  });
+  const cachedCompletenessScore = cachedEditorState
+    ? getEditorPayloadCompletenessScore({
+        title: cachedEditorState.payload.title,
+        description: cachedEditorState.payload.description,
+        slug: cachedEditorState.payload.slug,
+        content: cachedEditorState.payload.content,
+        selectedTermsByTaxonomy: cachedEditorState.payload.selectedTermsByTaxonomy,
+        metaEntries: cachedEditorState.payload.metaEntries,
+      })
+    : 0;
+  const shouldUseCachedEditorState =
+    Boolean(cachedEditorState) &&
+    cachedEditorState!.signature !== incomingServerSignature &&
+    cachedCompletenessScore >= serverCompletenessScore &&
+    cachedEditorState!.savedAt >= incomingServerUpdatedAt;
+  const effectiveContent = shouldUseCachedEditorState
+    ? parseInitialContent(cachedEditorState!.payload.content)
+    : content;
+  const effectiveSelectedTermsByTaxonomy = shouldUseCachedEditorState
+    ? cachedEditorState!.payload.selectedTermsByTaxonomy
+    : selected;
+  const effectiveTermNameById = shouldUseCachedEditorState ? cachedEditorState!.payload.termNameById : nextTermNameById;
+  const effectiveMetaEntries = shouldUseCachedEditorState ? cachedEditorState!.payload.metaEntries : nextMeta;
+  const effectivePost = shouldUseCachedEditorState
+    ? {
+        ...post,
+        title: cachedEditorState!.payload.title,
+        description: cachedEditorState!.payload.description,
+        slug: cachedEditorState!.payload.slug,
+        content: cachedEditorState!.payload.content,
+        [POST_PASSWORD_KEY]: cachedEditorState!.payload.password,
+        usePassword: cachedEditorState!.payload.usePassword,
+        layout: cachedEditorState!.payload.layout,
+        meta: cachedEditorState!.payload.metaEntries,
+      }
+    : post;
+  const incomingSignature = shouldUseCachedEditorState ? cachedEditorState!.signature : incomingServerSignature;
+
+  return {
+    incomingServerSignature,
+    incomingSignature,
+    shouldUseCachedEditorState,
+    cachedEditorState,
+    post: effectivePost,
+    content: effectiveContent,
+    selectedTermsByTaxonomy: effectiveSelectedTermsByTaxonomy,
+    termNameById: effectiveTermNameById,
+    metaEntries: effectiveMetaEntries,
+  };
 }
 
 function getCurrentBlockMode(editor: EditorInstance): string {
@@ -205,15 +472,6 @@ function fileNameFromUrl(url: string) {
   return decodeURIComponent(last || "file");
 }
 
-function normalizeSlugInput(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function readMetaBoolean(entries: PostMetaEntry[], key: string, fallback = true) {
   const match = entries.find((entry) => String(entry.key || "").trim().toLowerCase() === key.toLowerCase());
   if (!match) return fallback;
@@ -222,6 +480,48 @@ function readMetaBoolean(entries: PostMetaEntry[], key: string, fallback = true)
   if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
   if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
   return fallback;
+}
+
+const HIDDEN_PUBLISH_AT_META_KEY = "_publish_at";
+
+function readHiddenMetaValue(entries: PostMetaEntry[], key: string) {
+  const match = entries.find((entry) => String(entry.key || "").trim().toLowerCase() === key.toLowerCase());
+  const value = String(match?.value || "").trim();
+  return value || null;
+}
+
+function toDateTimeLocalInputValue(value: string | null) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const minutes = String(parsed.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function toScheduledPublishIso(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString();
+}
+
+function formatScheduledPublishLabel(value: string | null) {
+  if (!value) return "Publish: immediately";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Publish: immediately";
+  return `Publish: ${new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsed)}`;
+}
+
+async function pause(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default function Editor({
@@ -245,18 +545,24 @@ export default function Editor({
   canEdit?: boolean;
   canPublish?: boolean;
 }) {
-  const [initialContent, setInitialContent] = useState<JSONContent | null>(null);
+  const initialClientState = useMemo(() => getInitialEditorClientState(post), [post]);
+  const [initialContent, setInitialContent] = useState<JSONContent | null>(() => initialClientState.content);
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showPostPassword, setShowPostPassword] = useState(false);
   const [charsCount, setCharsCount] = useState<number>();
-  const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>([]);
+  const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>(
+    DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS,
+  );
   const [taxonomyTermsByKey, setTaxonomyTermsByKey] = useState<Record<string, TaxonomyTerm[]>>({});
   const [taxonomyExpanded, setTaxonomyExpanded] = useState<Record<string, boolean>>({});
   const [taxonomyLoadingMore, setTaxonomyLoadingMore] = useState<Record<string, boolean>>({});
-  const [selectedTermsByTaxonomy, setSelectedTermsByTaxonomy] = useState<Record<string, number[]>>({});
-  const [termNameById, setTermNameById] = useState<Record<number, string>>({});
-  const [metaEntries, setMetaEntries] = useState<PostMetaEntry[]>([]);
+  const [pendingTaxonomyWrites, setPendingTaxonomyWrites] = useState<Record<string, number>>({});
+  const [selectedTermsByTaxonomy, setSelectedTermsByTaxonomy] = useState<Record<string, number[]>>(
+    () => initialClientState.selectedTermsByTaxonomy,
+  );
+  const [termNameById, setTermNameById] = useState<Record<number, string>>(() => initialClientState.termNameById);
+  const [metaEntries, setMetaEntries] = useState<PostMetaEntry[]>(() => initialClientState.metaEntries);
   const [metaKeySuggestions, setMetaKeySuggestions] = useState<string[]>([]);
   const [taxonomyInputByKey, setTaxonomyInputByKey] = useState<Record<string, string>>({});
   const [metaKeyInput, setMetaKeyInput] = useState("");
@@ -269,62 +575,103 @@ export default function Editor({
   const [editorPlugins, setEditorPlugins] = useState<EditorPlugin[]>([]);
   const [editorFooterPanels, setEditorFooterPanels] = useState<EditorFooterPanel[]>([]);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-  const [postImageUrls, setPostImageUrls] = useState<string[]>([]);
+  const [postImageUrls, setPostImageUrls] = useState<string[]>(() =>
+    Array.from(new Set(collectImageUrlsFromNode(initialClientState.content))),
+  );
   const [mediaLoading, setMediaLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [, setToolbarTick] = useState(0);
   const { openMediaPicker, mediaPickerElement } = useMediaPicker();
+  const router = useRouter();
+  const params = useParams<{ id?: string; domainKey?: string; postId?: string }>();
 
   const editorRef = useRef<EditorInstance | null>(null);
   const htmlDirtyRef = useRef(false);
   const htmlDraftRef = useRef("");
-  const selectedTermsByTaxonomyRef = useRef<Record<string, number[]>>({});
-  const metaEntriesRef = useRef<PostMetaEntry[]>([]);
-  const dataRef = useRef<PostWithSite>(post);
-  const lastQueuedSignatureRef = useRef<string>("");
-  const lastSavedSignatureRef = useRef<string>("");
-  const lastImageCountRef = useRef<number>(0);
+  const pendingTaxonomyTasksRef = useRef(new Set<Promise<void>>());
+  const selectedTermsByTaxonomyRef = useRef<Record<string, number[]>>(initialClientState.selectedTermsByTaxonomy);
+  const termNameByIdRef = useRef<Record<number, string>>(initialClientState.termNameById);
+  const taxonomyInputByKeyRef = useRef<Record<string, string>>({});
+  const metaEntriesRef = useRef<PostMetaEntry[]>(initialClientState.metaEntries);
+  const [data, setData] = useState<PostWithSite>(initialClientState.post);
+  const dataRef = useRef<PostWithSite>(initialClientState.post);
+  const lastQueuedSignatureRef = useRef<string>(initialClientState.shouldUseCachedEditorState ? initialClientState.incomingSignature : "");
+  const lastSavedSignatureRef = useRef<string>(initialClientState.shouldUseCachedEditorState ? initialClientState.incomingSignature : "");
+  const lastImageCountRef = useRef<number>(countImageNodes(initialClientState.content));
+  const lastRecoveredCacheAtRef = useRef<number>(initialClientState.cachedEditorState?.savedAt ?? 0);
+  const lastLocalMutationAtRef = useRef<number>(0);
 
   useEffect(() => {
-    dataRef.current = post;
-    setCurrentPost(post);
-    const content = parseInitialContent(post.content);
-    setInitialContent(content);
-    setPostImageUrls(Array.from(new Set(collectImageUrlsFromNode(content))));
+    const {
+      post: effectivePost,
+      content: effectiveContent,
+      selectedTermsByTaxonomy: effectiveSelectedTermsByTaxonomy,
+      termNameById: effectiveTermNameById,
+      metaEntries: effectiveMetaEntries,
+      incomingSignature,
+      shouldUseCachedEditorState,
+      cachedEditorState,
+    } = getInitialEditorClientState(post);
+    const preserveLocalDraft =
+      dataRef.current?.id === post.id &&
+      lastQueuedSignatureRef.current.length > 0 &&
+      lastQueuedSignatureRef.current !== lastSavedSignatureRef.current;
+    const lastKnownEditorMutationAt = Math.max(
+      lastLocalMutationAtRef.current,
+      lastRecoveredCacheAtRef.current,
+    );
+    const preserveStaleIncomingPost =
+      dataRef.current?.id === post.id &&
+      lastSavedSignatureRef.current.length > 0 &&
+      Date.now() - lastKnownEditorMutationAt < 30_000 &&
+      incomingSignature !== lastSavedSignatureRef.current;
 
-    const selected: Record<string, number[]> = {};
-    const nextTermNameById: Record<number, string> = {};
-    if (Array.isArray(post.taxonomyAssignments) && post.taxonomyAssignments.length > 0) {
-      for (const assignment of post.taxonomyAssignments) {
-        const taxonomy = assignment.taxonomy || "category";
-        const list = selected[taxonomy] ?? [];
-        if (!list.includes(assignment.termTaxonomyId)) list.push(assignment.termTaxonomyId);
-        selected[taxonomy] = list;
-        if (assignment.name) {
-          nextTermNameById[assignment.termTaxonomyId] = assignment.name;
-        }
-      }
-    } else {
-      selected.category = post.categories?.map((c) => c.categoryId) ?? [];
-      selected.tag = post.tags?.map((t) => t.tagId) ?? [];
+    setCurrentPost(effectivePost);
+    if (preserveLocalDraft || (preserveStaleIncomingPost && !shouldUseCachedEditorState)) {
+      return;
     }
-    setSelectedTermsByTaxonomy(selected);
-    selectedTermsByTaxonomyRef.current = selected;
-    setTermNameById((prev) => ({ ...prev, ...nextTermNameById }));
-    const nextMeta = (post.meta ?? []).map((entry) => ({ key: entry.key, value: entry.value }));
-    setMetaEntries(nextMeta);
-    metaEntriesRef.current = nextMeta;
-    lastImageCountRef.current = countImageNodes(content);
+
+    dataRef.current = effectivePost;
+    setData(effectivePost);
+    setInitialContent(effectiveContent);
+    setPostImageUrls(Array.from(new Set(collectImageUrlsFromNode(effectiveContent))));
+    setSelectedTermsByTaxonomy(effectiveSelectedTermsByTaxonomy);
+    selectedTermsByTaxonomyRef.current = effectiveSelectedTermsByTaxonomy;
+    setTermNameById((prev) => ({ ...prev, ...effectiveTermNameById }));
+    termNameByIdRef.current = { ...termNameByIdRef.current, ...effectiveTermNameById };
+    setMetaEntries(effectiveMetaEntries);
+    metaEntriesRef.current = effectiveMetaEntries;
+    lastImageCountRef.current = countImageNodes(effectiveContent);
+    if (shouldUseCachedEditorState) {
+      lastSavedSignatureRef.current = cachedEditorState!.signature;
+      lastQueuedSignatureRef.current = cachedEditorState!.signature;
+      lastRecoveredCacheAtRef.current = cachedEditorState!.savedAt;
+    }
     setShowPostPassword(false);
   }, [post]);
-
-  const [data, setData] = useState<PostWithSite>(post);
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
 
+  const applyDataUpdate = (updater: SetStateAction<PostWithSite>) => {
+    setData((prev) => {
+      const next = typeof updater === "function" ? (updater as (value: PostWithSite) => PostWithSite)(prev) : updater;
+      dataRef.current = next;
+      lastLocalMutationAtRef.current = Date.now();
+      return next;
+    });
+  };
+
   useEffect(() => {
     selectedTermsByTaxonomyRef.current = selectedTermsByTaxonomy;
   }, [selectedTermsByTaxonomy]);
+  useEffect(() => {
+    termNameByIdRef.current = termNameById;
+  }, [termNameById]);
+  useEffect(() => {
+    taxonomyInputByKeyRef.current = taxonomyInputByKey;
+  }, [taxonomyInputByKey]);
   useEffect(() => {
     metaEntriesRef.current = metaEntries;
   }, [metaEntries]);
@@ -333,29 +680,38 @@ export default function Editor({
     htmlDraftRef.current = htmlDraft;
   }, [htmlDraft]);
 
-  const getAllSelectedTaxonomyIds = (selected: Record<string, number[]>) =>
-    Array.from(
-      new Set(
-        Object.values(selected)
-          .flat()
-          .filter((id): id is number => Number.isFinite(id)),
-      ),
-    );
+  const shouldEagerLoadTaxonomyTerms = (taxonomy: string) => taxonomy === "category" || taxonomy === "tag";
+
+  const loadTaxonomyTermsWithRetry = async (taxonomy: string) => {
+    const attempts = shouldEagerLoadTaxonomyTerms(taxonomy) ? 18 : 4;
+    let lastRows: TaxonomyTerm[] = [];
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const rows = await (shouldEagerLoadTaxonomyTerms(taxonomy)
+        ? getTaxonomyTerms(post.siteId || "", taxonomy)
+        : getTaxonomyTermsPreview(post.siteId || "", taxonomy, 20));
+      lastRows = rows.map((term) => ({ id: term.id, name: term.name }));
+      if (lastRows.length > 0 || attempt === attempts) {
+        return lastRows;
+      }
+      await pause(Math.min(250 * attempt, 1_500));
+    }
+    return lastRows;
+  };
 
   useEffect(() => {
     let mounted = true;
     getTaxonomyOverview(post.siteId || "")
       .then(async (rows) => {
         if (!mounted) return;
-        const sorted = [...rows].sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
+        const sorted = mergeTaxonomyOverviewRows(rows);
         setTaxonomyOverviewRows(sorted);
         await Promise.all(
           sorted.map(async (row) => {
-            const preview = await getTaxonomyTermsPreview(post.siteId || "", row.taxonomy, 20);
+            const preview = await loadTaxonomyTermsWithRetry(row.taxonomy);
             if (!mounted) return;
             setTaxonomyTermsByKey((prev) => ({
               ...prev,
-              [row.taxonomy]: preview.map((term) => ({ id: term.id, name: term.name })),
+              [row.taxonomy]: preview,
             }));
             setTermNameById((prev) => {
               const next = { ...prev };
@@ -364,12 +720,15 @@ export default function Editor({
               }
               return next;
             });
+            if (shouldEagerLoadTaxonomyTerms(row.taxonomy)) {
+              setTaxonomyExpanded((prev) => ({ ...prev, [row.taxonomy]: true }));
+            }
           }),
         );
       })
       .catch(() => {
         if (!mounted) return;
-        setTaxonomyOverviewRows([]);
+        setTaxonomyOverviewRows(DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS);
       });
     getAllMetaKeys().then((keys) => setMetaKeySuggestions(keys));
     return () => {
@@ -431,8 +790,16 @@ export default function Editor({
   }, [post.siteId]);
 
   const uploadFn = createUploadFn(post.siteId || "default", "post");
-  const [isPendingPublishing, startTransitionPublishing] = useTransition();
+  const [isPendingPublishAction, startTransitionPublishAction] = useTransition();
+  const [isPendingPublishSchedule, startTransitionPublishSchedule] = useTransition();
   const [isPendingThumbnail, startTransitionThumbnail] = useTransition();
+  const [isPendingDelete, startTransitionDelete] = useTransition();
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const descriptionInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const slugInputRef = useRef<HTMLInputElement | null>(null);
+  const taxonomyInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [publishScheduleDialogOpen, setPublishScheduleDialogOpen] = useState(false);
+  const [publishScheduleDraft, setPublishScheduleDraft] = useState("");
 
   const sidebarMediaItems = useMemo<SidebarMediaItem[]>(() => {
     const byUrl = new Map<string, MediaItem>();
@@ -485,6 +852,7 @@ export default function Editor({
         password: string;
         usePassword: boolean;
         layout: string | null;
+        selectedTermsByTaxonomy: Record<string, number[]>;
         categoryIds: number[];
         tagIds: number[];
         taxonomyIds: number[];
@@ -498,6 +866,26 @@ export default function Editor({
             throw new Error(String((result as any).error));
           }
           lastSavedSignatureRef.current = payload.signature;
+          writeEditorSessionCache(
+            payload.id,
+            {
+              id: payload.id,
+              title: payload.title,
+              description: payload.description,
+              slug: payload.slug,
+              content: payload.content,
+              [POST_PASSWORD_KEY]: payload.password,
+              usePassword: payload.usePassword,
+              layout: payload.layout,
+              selectedTermsByTaxonomy: payload.selectedTermsByTaxonomy,
+              termNameById: termNameByIdRef.current,
+              categoryIds: payload.categoryIds,
+              tagIds: payload.tagIds,
+              taxonomyIds: payload.taxonomyIds,
+              metaEntries: payload.metaEntries,
+            },
+            payload.signature,
+          );
         },
         onStatus: ({ status, error }) => {
           setSaveStatus(status);
@@ -544,96 +932,124 @@ export default function Editor({
     return editor.getJSON();
   };
 
-  const enqueueSave = (immediate = false) => {
+  const buildSaveSnapshot = (snapshot?: EditorSaveSnapshot) => {
     if (!canEdit) return;
-    const json = getContentJSON();
-    const latest = dataRef.current;
-    const content = JSON.stringify(json);
+    const latest = snapshot?.data ?? dataRef.current ?? data;
+    const selectedTerms = snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current;
+    const nextMetaEntries = snapshot?.metaEntries ?? metaEntriesRef.current;
+    const nextTitle = titleInputRef.current?.value ?? latest.title ?? "";
+    const nextDescription = descriptionInputRef.current?.value ?? latest.description ?? "";
+    const nextSlug = normalizeSeoSlug(slugInputRef.current?.value ?? latest.slug ?? "");
+    const content =
+      snapshot?.content ??
+      (() => {
+        const json = getContentJSON();
+        return JSON.stringify(json);
+      })();
     const signature = JSON.stringify({
       id: latest.id,
-      title: latest.title ?? "",
-      description: latest.description ?? "",
-      slug: latest.slug ?? "",
+      title: nextTitle,
+      description: nextDescription,
+      slug: nextSlug,
       content,
       password: latest.password ?? "",
       usePassword: Boolean(latest.usePassword),
       layout: latest.layout ?? null,
-      categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
-      tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
-      taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
-      metaEntries: metaEntriesRef.current,
+      selectedTermsByTaxonomy: selectedTerms,
+      categoryIds: selectedTerms.category ?? [],
+      tagIds: selectedTerms.tag ?? [],
+      taxonomyIds: getAllSelectedTaxonomyIds(selectedTerms),
+      metaEntries: nextMetaEntries,
     });
+
+    return {
+      payload: {
+        id: latest.id,
+        title: nextTitle,
+        description: nextDescription,
+        slug: nextSlug,
+        content,
+        password: latest.password ?? "",
+        usePassword: Boolean(latest.usePassword),
+        layout: latest.layout ?? null,
+        selectedTermsByTaxonomy: selectedTerms,
+        categoryIds: selectedTerms.category ?? [],
+        tagIds: selectedTerms.tag ?? [],
+        taxonomyIds: getAllSelectedTaxonomyIds(selectedTerms),
+        metaEntries: nextMetaEntries,
+        signature,
+      },
+      signature,
+    };
+  };
+
+  const enqueueSave = (immediate = false, snapshot?: EditorSaveSnapshot) => {
+    if (!canEdit) return;
+    const built = buildSaveSnapshot(snapshot);
+    if (!built) return;
+    const { payload, signature } = built;
 
     if (!immediate && signature === lastQueuedSignatureRef.current) return;
     if (!immediate && signature === lastSavedSignatureRef.current) return;
     lastQueuedSignatureRef.current = signature;
+    lastLocalMutationAtRef.current = Date.now();
 
-    saveQueue.enqueue(
-      {
-        id: latest.id,
-        title: latest.title ?? "",
-        description: latest.description ?? "",
-        slug: latest.slug ?? "",
-        content,
-        password: latest.password ?? "",
-        usePassword: Boolean(latest.usePassword),
-        layout: latest.layout ?? null,
-        categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
-        tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
-        taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
-        metaEntries: metaEntriesRef.current,
-        signature,
-      },
-      { immediate },
-    );
+    saveQueue.enqueue(payload, { immediate });
+  };
+
+  const waitForPendingTaxonomyWrites = async () => {
+    while (pendingTaxonomyTasksRef.current.size > 0) {
+      await Promise.allSettled(Array.from(pendingTaxonomyTasksRef.current));
+    }
   };
 
   const saveNow = async () => {
-    if (!canEdit) return;
-    const json = getContentJSON();
-    const latest = dataRef.current;
-    const content = JSON.stringify(json);
-    const signature = JSON.stringify({
-      id: latest.id,
-      title: latest.title ?? "",
-      description: latest.description ?? "",
-      slug: latest.slug ?? "",
-      content,
-      password: latest.password ?? "",
-      usePassword: Boolean(latest.usePassword),
-      layout: latest.layout ?? null,
-      categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
-      tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
-      taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
-      metaEntries: metaEntriesRef.current,
-    });
+    if (!canEdit) return false;
+    await waitForPendingTaxonomyWrites();
+    const built = buildSaveSnapshot();
+    if (!built) return false;
+    const { payload, signature } = built;
+    const previousCachedEditorState = readEditorSessionCache(payload.id);
 
+    lastQueuedSignatureRef.current = signature;
+    lastLocalMutationAtRef.current = Date.now();
     setSaveStatus("saving");
     setSaveError(null);
+    writeEditorSessionCache(
+      payload.id,
+      {
+        id: payload.id,
+        title: payload.title,
+        description: payload.description,
+        slug: payload.slug,
+        content: payload.content,
+        [POST_PASSWORD_KEY]: payload.password,
+        usePassword: payload.usePassword,
+        layout: payload.layout,
+        selectedTermsByTaxonomy: payload.selectedTermsByTaxonomy,
+        termNameById: termNameByIdRef.current,
+        categoryIds: payload.categoryIds,
+        tagIds: payload.tagIds,
+        taxonomyIds: payload.taxonomyIds,
+        metaEntries: payload.metaEntries,
+      },
+      signature,
+    );
+    saveQueue.enqueue(payload, { immediate: true });
     try {
-      const result = await onSave({
-        id: latest.id,
-        title: latest.title ?? "",
-        description: latest.description ?? "",
-        slug: latest.slug ?? "",
-        content,
-        password: latest.password ?? "",
-        usePassword: Boolean(latest.usePassword),
-        layout: latest.layout ?? null,
-        categoryIds: selectedTermsByTaxonomyRef.current.category ?? [],
-        tagIds: selectedTermsByTaxonomyRef.current.tag ?? [],
-        taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomyRef.current),
-        metaEntries: metaEntriesRef.current,
-      });
-      if ((result as any)?.error) {
-        throw new Error(String((result as any).error));
+      await saveQueue.flush();
+      return true;
+    } catch {
+      if (previousCachedEditorState) {
+        writeEditorSessionCache(
+          payload.id,
+          previousCachedEditorState.payload,
+          previousCachedEditorState.signature,
+        );
+      } else {
+        clearEditorSessionCache(payload.id);
       }
-      lastQueuedSignatureRef.current = signature;
-      lastSavedSignatureRef.current = signature;
-      setSaveStatus("saved");
-    } catch (error) {
-      setSaveStatus("error");
-      setSaveError(error instanceof Error ? error.message : String(error));
+      return false;
     }
   };
 
@@ -651,6 +1067,12 @@ export default function Editor({
   };
 
   const getTermsForTaxonomy = (taxonomy: string) => taxonomyTermsByKey[taxonomy] ?? [];
+  const setTaxonomyInputValue = (taxonomy: string, value: string) => {
+    taxonomyInputByKeyRef.current = { ...taxonomyInputByKeyRef.current, [taxonomy]: value };
+    setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: value }));
+  };
+  const readTaxonomyInputValue = (taxonomy: string) =>
+    taxonomyInputRefs.current[taxonomy]?.value ?? taxonomyInputByKeyRef.current[taxonomy] ?? "";
 
   const updateSelectedTermsByTaxonomy = (
     updater:
@@ -661,21 +1083,24 @@ export default function Editor({
     const prev = selectedTermsByTaxonomyRef.current;
     const next = typeof updater === "function" ? updater(prev) : updater;
     selectedTermsByTaxonomyRef.current = next;
+    lastLocalMutationAtRef.current = Date.now();
     setSelectedTermsByTaxonomy(next);
     if (saveImmediately) {
-      enqueueSave(true);
+      enqueueSave(true, { selectedTermsByTaxonomy: next });
     }
+    return next;
   };
 
   const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {
     if (!canEdit) return;
-    updateSelectedTermsByTaxonomy((prev) => {
+    const next = updateSelectedTermsByTaxonomy((prev) => {
       const current = prev[taxonomy] ?? [];
       const next = current.includes(termId)
         ? current.filter((id) => id !== termId)
         : [...current, termId];
       return { ...prev, [taxonomy]: next };
-    }, true);
+    });
+    enqueueSave(false, { selectedTermsByTaxonomy: next });
   };
 
   const loadAllTermsForTaxonomy = async (taxonomy: string) => {
@@ -696,85 +1121,144 @@ export default function Editor({
     }
   };
 
+  const mergeResolvedTaxonomyTerms = (taxonomy: string, resolvedTerms: TaxonomyTerm[]) => {
+    const normalizedResolvedTerms = resolvedTerms.map((term) => ({ id: term.id, name: term.name }));
+    if (normalizedResolvedTerms.length > 0) {
+      setTaxonomyTermsByKey((prev) => {
+        const current = prev[taxonomy] ?? [];
+        const merged = new Map<number, { id: number; name: string }>();
+        for (const term of current) merged.set(term.id, term);
+        for (const term of normalizedResolvedTerms) merged.set(term.id, term);
+        return {
+          ...prev,
+          [taxonomy]: Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name)),
+        };
+      });
+    }
+    return normalizedResolvedTerms;
+  };
+
   const addOrSelectTaxonomyTerm = async (taxonomy: string, rawName: string) => {
     if (!canEdit) return;
     if (!post.siteId) return;
+    const siteId = post.siteId;
     const trimmed = rawName.trim();
     if (!trimmed) return;
-    const existing = getTermsForTaxonomy(taxonomy).find(
-      (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
-    );
-    let termId: number | null = existing?.id ?? null;
-    if (termId === null) {
-      const created = await createTaxonomyTerm({ siteId: post.siteId, taxonomy, label: trimmed });
-      if ((created as any)?.error) {
-        toast.error(String((created as any)?.error));
-        return;
-      }
-      const createdTermId = Number((created as any)?.id);
-      const termName = String((created as any)?.name ?? trimmed);
-      if (Number.isFinite(createdTermId)) {
-        const resolvedTermId = createdTermId;
-        termId = resolvedTermId;
-        setTaxonomyTermsByKey((prev) => {
+    const task = (async () => {
+      setPendingTaxonomyWrites((prev) => ({ ...prev, [taxonomy]: (prev[taxonomy] ?? 0) + 1 }));
+      try {
+        const existing = getTermsForTaxonomy(taxonomy).find(
+          (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
+        );
+        let termId: number | null = existing?.id ?? null;
+        if (termId === null) {
+          const resolvedTerms = await getTaxonomyTerms(siteId, taxonomy);
+          const normalizedResolvedTerms = mergeResolvedTaxonomyTerms(taxonomy, resolvedTerms);
+          const resolvedExisting = normalizedResolvedTerms.find(
+            (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
+          );
+          if (resolvedExisting) {
+            termId = resolvedExisting.id;
+            setTermNameById((prev) => ({ ...prev, [resolvedExisting.id]: resolvedExisting.name }));
+          } else {
+            const created = await createTaxonomyTerm({ siteId, taxonomy, label: trimmed });
+            if ((created as any)?.error) {
+              toast.error(String((created as any)?.error));
+              return;
+            }
+            const createdTermId = Number((created as any)?.id);
+            const termName = String((created as any)?.name ?? trimmed);
+            if (Number.isFinite(createdTermId)) {
+              const resolvedTermId = createdTermId;
+              termId = resolvedTermId;
+              setTaxonomyTermsByKey((prev) => {
+                const current = prev[taxonomy] ?? [];
+                if (current.some((term) => term.id === resolvedTermId)) return prev;
+                const next = [...current, { id: resolvedTermId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
+                return { ...prev, [taxonomy]: next };
+              });
+              setTermNameById((prev) => ({ ...prev, [resolvedTermId]: termName }));
+            }
+          }
+        }
+        if (termId === null) return;
+        const selectedTermId = termId;
+        const nextSelectedTermsByTaxonomy = updateSelectedTermsByTaxonomy((prev) => {
           const current = prev[taxonomy] ?? [];
-          if (current.some((term) => term.id === resolvedTermId)) return prev;
-          const next = [...current, { id: resolvedTermId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
-          return { ...prev, [taxonomy]: next };
+          if (current.includes(selectedTermId)) return prev;
+          return { ...prev, [taxonomy]: [...current, selectedTermId] };
         });
-        setTermNameById((prev) => ({ ...prev, [resolvedTermId]: termName }));
+        setTaxonomyInputValue(taxonomy, "");
+        enqueueSave(false, { selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy });
+      } finally {
+        setPendingTaxonomyWrites((prev) => {
+          const nextCount = Math.max(0, (prev[taxonomy] ?? 0) - 1);
+          return nextCount > 0 ? { ...prev, [taxonomy]: nextCount } : Object.fromEntries(Object.entries(prev).filter(([key]) => key !== taxonomy));
+        });
       }
-    }
-    if (termId === null) return;
-    const selectedTermId = termId;
-    updateSelectedTermsByTaxonomy((prev) => {
-      const current = prev[taxonomy] ?? [];
-      if (current.includes(selectedTermId)) return prev;
-      return { ...prev, [taxonomy]: [...current, selectedTermId] };
-    }, true);
-    setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: "" }));
+    })();
+    pendingTaxonomyTasksRef.current.add(task);
+    void task.finally(() => {
+      pendingTaxonomyTasksRef.current.delete(task);
+    });
   };
 
   const addMetaEntry = (key: string, value: string) => {
     if (!canEdit) return;
     const nextKey = key.trim();
     if (!nextKey) return;
-    const nextValue = value.trim();
-    setMetaEntries((prev) => {
-      const existingIndex = prev.findIndex((entry) => entry.key.toLowerCase() === nextKey.toLowerCase());
-      if (existingIndex >= 0) {
-        const copy = [...prev];
-        copy[existingIndex] = { key: nextKey, value: nextValue };
-        return copy;
-      }
-      return [...prev, { key: nextKey, value: nextValue }];
-    });
+    const nextMetaEntries = upsertEditorMetaEntry(metaEntriesRef.current, nextKey, value);
+    metaEntriesRef.current = nextMetaEntries;
+    setMetaEntries(nextMetaEntries);
     setMetaKeySuggestions((prev) => (prev.includes(nextKey) ? prev : [...prev, nextKey].sort((a, b) => a.localeCompare(b))));
     setMetaKeyInput("");
     setMetaValueInput("");
-    enqueueSave(true);
+    enqueueSave(true, { metaEntries: nextMetaEntries });
   };
 
+  const visibleMetaEntries = useMemo(() => filterVisibleEditorMetaEntries(metaEntries), [metaEntries]);
+  const scheduledPublishAt = useMemo(
+    () => readHiddenMetaValue(metaEntries, HIDDEN_PUBLISH_AT_META_KEY),
+    [metaEntries],
+  );
+  const deleteConfirmationTarget = useMemo(() => {
+    const title = String(data.title || "").trim();
+    return title || "delete";
+  }, [data.title]);
+  const deleteConfirmationMatches = useMemo(() => {
+    const typed = deleteConfirmation.trim();
+    if (deleteConfirmationTarget === "delete") {
+      return typed.toLowerCase() === "delete";
+    }
+    return typed === deleteConfirmationTarget;
+  }, [deleteConfirmation, deleteConfirmationTarget]);
+
   const useComments = readMetaBoolean(metaEntries, "use_comments", defaultEnableComments);
+  const publishButtonLabel = data.published ? "Unpublish" : "Publish";
+  const scheduleButtonLabel = formatScheduledPublishLabel(scheduledPublishAt);
+  const scheduleButtonAriaLabel = scheduleButtonLabel.replace(/^Publish:/, "Schedule publish:");
 
   const setUseComments = (enabled: boolean) => {
     if (!canEdit) return;
     const nextValue = enabled ? "true" : "false";
-    setMetaEntries((prev) => {
-      const next = [...prev];
+    const nextMetaEntries = (() => {
+      const next = [...metaEntriesRef.current];
       const index = next.findIndex((entry) => entry.key.toLowerCase() === "use_comments");
       if (index >= 0) {
         next[index] = { key: "use_comments", value: nextValue };
         return next;
       }
       return [...next, { key: "use_comments", value: nextValue }];
-    });
-    enqueueSave(true);
+    })();
+    metaEntriesRef.current = nextMetaEntries;
+    setMetaEntries(nextMetaEntries);
+    enqueueSave(true, { metaEntries: nextMetaEntries });
   };
 
   useEffect(() => {
     if (!canEdit) return;
     if (!data?.id) return;
+    if (lastLocalMutationAtRef.current <= 0) return;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.title, data.description, data.slug, data.password, data.usePassword, data.layout, selectedTermsByTaxonomy, metaEntries]);
@@ -802,6 +1286,45 @@ export default function Editor({
     isPrimary: data.site?.subdomain === "main",
   }).replace(/\/$/, "")}/${data.slug}`;
 
+  const saveScheduledPublishAt = (nextValue: string) => {
+    if (!canEdit) return;
+    const normalized = toScheduledPublishIso(nextValue);
+    if (nextValue.trim() && !normalized) {
+      toast.error("Enter a valid scheduled publish date and time.");
+      return;
+    }
+    const previousMetaEntries = metaEntriesRef.current;
+    const nextMetaEntries = normalized
+      ? [
+          ...previousMetaEntries.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY),
+          { key: HIDDEN_PUBLISH_AT_META_KEY, value: normalized },
+        ]
+      : previousMetaEntries.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY);
+    metaEntriesRef.current = nextMetaEntries;
+    setMetaEntries(nextMetaEntries);
+    setPublishScheduleDialogOpen(false);
+    startTransitionPublishSchedule(async () => {
+      try {
+        const persisted = await saveNow();
+        if (!persisted) {
+          throw new Error("Save your entry successfully before updating the publish schedule.");
+        }
+        const formData = new FormData();
+        formData.append("publishAt", normalized);
+        const response = await onUpdateMetadata(formData, post.id, HIDDEN_PUBLISH_AT_META_KEY);
+        if ((response as any)?.error) {
+          throw new Error(String((response as any).error));
+        }
+        toast.success(normalized ? "Scheduled publish time updated." : "Scheduled publish cleared.");
+      } catch (error) {
+        metaEntriesRef.current = previousMetaEntries;
+        setMetaEntries(previousMetaEntries);
+        setPublishScheduleDialogOpen(true);
+        toast.error(error instanceof Error ? error.message : "Failed to update scheduled publish.");
+      }
+    });
+  };
+
   const handleThumbnailUpload = (file: File | null) => {
     if (!canEdit) return;
     if (!file) return;
@@ -828,7 +1351,7 @@ export default function Editor({
         if ((response as any)?.error) {
           throw new Error(String((response as any).error));
         }
-        setData((prev) => ({ ...prev, image: uploaded.url }));
+        applyDataUpdate((prev) => ({ ...prev, image: uploaded.url }));
         toast.success("Thumbnail updated.");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to update thumbnail.");
@@ -847,7 +1370,7 @@ export default function Editor({
         if ((response as any)?.error) {
           throw new Error(String((response as any).error));
         }
-        setData((prev) => ({ ...prev, image: item.url }));
+        applyDataUpdate((prev) => ({ ...prev, image: item.url }));
         toast.success("Thumbnail updated from media manager.");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to set thumbnail.");
@@ -916,20 +1439,58 @@ export default function Editor({
             >
               HTML
             </button>
+            {!data.published ? (
+              <button
+                type="button"
+                className="rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700 hover:bg-stone-100"
+                aria-label={scheduleButtonAriaLabel}
+                onClick={() => {
+                  setPublishScheduleDraft(toDateTimeLocalInputValue(scheduledPublishAt));
+                  setPublishScheduleDialogOpen(true);
+                }}
+              >
+                {scheduleButtonLabel}
+              </button>
+            ) : null}
 
-            <button
+              <button
+              type="button"
               onClick={() => {
                 if (!canPublish) return;
-                const formData = new FormData();
-                formData.append("published", String(!data.published));
-                startTransitionPublishing(async () => {
+                startTransitionPublishAction(async () => {
                   try {
+                    const persisted = await saveNow();
+                    if (!persisted) {
+                      throw new Error("Save your entry successfully before changing publish status.");
+                    }
+                    const formData = new FormData();
+                    formData.append("published", String(!data.published));
                     const response = await onUpdateMetadata(formData, post.id, "published");
                     if ((response as any)?.error) {
                       throw new Error(String((response as any).error));
                     }
-                    toast.success(`Successfully ${data.published ? "unpublished" : "published"} your post.`);
-                    setData((prev) => ({ ...prev, published: !prev.published }));
+                    const nextPublished =
+                      typeof (response as any)?.published === "boolean"
+                        ? Boolean((response as any).published)
+                        : !data.published;
+                    const nextPublishAt =
+                      typeof (response as any)?.publishAt === "string" && String((response as any).publishAt).trim()
+                        ? String((response as any).publishAt).trim()
+                        : null;
+                      applyDataUpdate((prev) => ({ ...prev, published: nextPublished }));
+                    const nextMetaEntries = (() => {
+                      const filtered = metaEntriesRef.current.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY);
+                      return nextPublishAt
+                        ? [...filtered, { key: HIDDEN_PUBLISH_AT_META_KEY, value: nextPublishAt }]
+                        : filtered;
+                    })();
+                    metaEntriesRef.current = nextMetaEntries;
+                    setMetaEntries(nextMetaEntries);
+                    if ((response as any)?.scheduled) {
+                      toast.success(`Scheduled for ${formatScheduledPublishLabel(nextPublishAt).replace(/^Publish: /, "")}.`);
+                    } else {
+                      toast.success(`Successfully ${data.published ? "unpublished" : "published"} your post.`);
+                    }
                   } catch (error) {
                     toast.error(error instanceof Error ? error.message : "Failed to update publish status.");
                   }
@@ -937,13 +1498,21 @@ export default function Editor({
               }}
               className={cn(
                 "flex h-7 w-24 items-center justify-center space-x-2 rounded-lg border text-sm transition-all focus:outline-none",
-                isPendingPublishing || !canPublish
+                isPendingPublishAction || !canPublish
                   ? "cursor-not-allowed border-muted bg-muted text-muted-foreground"
                   : "border border-black bg-white text-black hover:bg-gray-800 hover:text-white active:bg-muted dark:border-stone-700",
               )}
-              disabled={isPendingPublishing || !canPublish}
+              disabled={isPendingPublishAction || !canPublish}
+              aria-label={publishButtonLabel}
             >
-              {isPendingPublishing ? <LoadingDots /> : <p>{data.published ? "Unpublish" : "Publish"}</p>}
+              {isPendingPublishAction ? (
+                <>
+                  <LoadingDots />
+                  <span className="sr-only">{publishButtonLabel}</span>
+                </>
+              ) : (
+                <p>{publishButtonLabel}</p>
+              )}
             </button>
           </div>
         </div>
@@ -954,14 +1523,16 @@ export default function Editor({
             placeholder="Title"
             value={data.title ?? ""}
             autoFocus
-            onChange={(e) => setData({ ...data, title: e.target.value })}
+            ref={titleInputRef}
+            onChange={(e) => applyDataUpdate((prev) => ({ ...prev, title: e.target.value }))}
             readOnly={!canEdit}
             className="border-none bg-background px-0 font-cal text-3xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
           <TextareaAutosize
             placeholder="Description"
             value={data.description ?? ""}
-            onChange={(e) => setData({ ...data, description: e.target.value })}
+            ref={descriptionInputRef}
+            onChange={(e) => applyDataUpdate((prev) => ({ ...prev, description: e.target.value }))}
             readOnly={!canEdit}
             className="w-full resize-none border-none bg-background px-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
@@ -975,7 +1546,9 @@ export default function Editor({
                 id="post-slug"
                 type="text"
                 value={data.slug ?? ""}
-                onChange={(e) => setData({ ...data, slug: normalizeSlugInput(e.target.value) })}
+                ref={slugInputRef}
+                onChange={(e) => applyDataUpdate((prev) => ({ ...prev, slug: normalizeSlugDraft(e.target.value) }))}
+                onBlur={(e) => applyDataUpdate((current) => ({ ...current, slug: normalizeSeoSlug(e.target.value) }))}
                 placeholder="post-slug"
                 readOnly={!canEdit}
                 className="w-full border-none bg-transparent px-2 py-1.5 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
@@ -1149,7 +1722,7 @@ export default function Editor({
         )}
       </div>
 
-      <aside className={cn("h-fit rounded-xl border border-stone-200 bg-white p-4 shadow-sm", !canEdit && "opacity-75")}>
+      <aside className={cn("h-fit w-full min-w-0 max-w-full overflow-x-hidden rounded-xl border border-stone-200 bg-white p-4 shadow-sm", !canEdit && "opacity-75")}>
         {!canEdit && <p className="mb-3 text-xs text-stone-500">Read-only: you can view content but cannot modify this post.</p>}
         <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Text</div>
         <select
@@ -1201,7 +1774,7 @@ export default function Editor({
         </div>
 
         {sidebarTab === "document" && (
-          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 min-w-0 space-y-3">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Font</div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className={cn("rounded border px-2 py-1 text-xs", isActive("bold") ? "bg-stone-900 text-white" : "hover:bg-stone-100")} onClick={() => exec((e) => e.chain().toggleBold().run())}><strong>B</strong></button>
@@ -1267,11 +1840,11 @@ export default function Editor({
         )}
 
         {sidebarTab === "block" && (
-          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 min-w-0 max-w-full space-y-3 overflow-x-hidden">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Post Settings</div>
             <select
               value={data.layout ?? "post"}
-              onChange={(e) => setData({ ...data, layout: e.target.value })}
+              onChange={(e) => applyDataUpdate((prev) => ({ ...prev, layout: e.target.value }))}
               className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-900"
             >
               <option value="post">Post Layout (default)</option>
@@ -1283,7 +1856,7 @@ export default function Editor({
                 type="checkbox"
                 checked={Boolean(data.usePassword)}
                 onChange={(e) => {
-                  setData((prev) => ({ ...prev, usePassword: e.target.checked }));
+                  applyDataUpdate((prev) => ({ ...prev, usePassword: e.target.checked }));
                   if (!e.target.checked) {
                     setShowPostPassword(false);
                   }
@@ -1301,7 +1874,7 @@ export default function Editor({
                   <input
                     type={showPostPassword ? "text" : "password"}
                     value={data.password ?? ""}
-                    onChange={(e) => setData({ ...data, password: e.target.value })}
+                    onChange={(e) => applyDataUpdate((prev) => ({ ...prev, password: e.target.value }))}
                     placeholder="Enter password"
                     className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-900"
                   />
@@ -1337,40 +1910,47 @@ export default function Editor({
         )}
 
         {sidebarTab === "plugins" && (
-          <fieldset disabled={!canEdit} className="mt-4 space-y-3">
+          <fieldset disabled={!canEdit} className="mt-4 min-w-0 max-w-full space-y-3 overflow-x-hidden">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Organize</div>
             {taxonomyOverviewRows.map((taxonomyRow) => {
               const taxonomy = taxonomyRow.taxonomy;
               const sectionTerms = getTermsForTaxonomy(taxonomy);
               const selectedTermIds = selectedTermsByTaxonomy[taxonomy] ?? [];
+              const selectedTermIdSet = new Set(selectedTermIds);
+              const availableTerms = sectionTerms.filter((term) => !selectedTermIdSet.has(term.id));
               const hiddenCount = Math.max(0, taxonomyRow.termCount - sectionTerms.length);
               const inputValue = taxonomyInputByKey[taxonomy] ?? "";
               const listId = `editor-taxonomy-${taxonomy}-suggestions`;
               return (
-                <div key={`taxonomy-${taxonomy}`} className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
+                <div key={`taxonomy-${taxonomy}`} className="w-full min-w-0 max-w-full space-y-2 overflow-hidden rounded-md border border-stone-200 bg-stone-50 p-2">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">
                     {taxonomyRow.label}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-1">
                     <input
                       list={listId}
+                      ref={(node) => {
+                        taxonomyInputRefs.current[taxonomy] = node;
+                      }}
                       value={inputValue}
-                      onChange={(e) => setTaxonomyInputByKey((prev) => ({ ...prev, [taxonomy]: e.target.value }))}
+                      onChange={(e) => setTaxonomyInputValue(taxonomy, e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          void addOrSelectTaxonomyTerm(taxonomy, inputValue);
+                          void addOrSelectTaxonomyTerm(taxonomy, readTaxonomyInputValue(taxonomy));
                         }
                       }}
                       placeholder="Type to search or add"
-                      className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                      className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                      disabled={Boolean(pendingTaxonomyWrites[taxonomy])}
                     />
                     <button
                       type="button"
-                      className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
-                      onClick={() => void addOrSelectTaxonomyTerm(taxonomy, inputValue)}
+                      className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={() => void addOrSelectTaxonomyTerm(taxonomy, readTaxonomyInputValue(taxonomy))}
+                      disabled={Boolean(pendingTaxonomyWrites[taxonomy])}
                     >
-                      Select
+                      {pendingTaxonomyWrites[taxonomy] ? "Saving..." : "Select"}
                     </button>
                   </div>
                   <datalist id={listId}>
@@ -1378,34 +1958,6 @@ export default function Editor({
                       <option key={`term-opt-${taxonomy}-${term.id}`} value={term.name} />
                     ))}
                   </datalist>
-                  <div className="flex flex-wrap gap-1">
-                    {sectionTerms.map((term) => {
-                      const isSelected = selectedTermIds.includes(term.id);
-                      return (
-                        <button
-                          key={`term-${taxonomy}-${term.id}`}
-                          type="button"
-                          onClick={() => toggleTaxonomyTerm(taxonomy, term.id)}
-                          className={cn(
-                            "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-                            isSelected ? "border-black bg-black text-white" : "border-stone-300 bg-white hover:bg-stone-100",
-                          )}
-                        >
-                          {term.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!taxonomyExpanded[taxonomy] && hiddenCount > 0 && (
-                    <button
-                      type="button"
-                      className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
-                      onClick={() => void loadAllTermsForTaxonomy(taxonomy)}
-                      disabled={Boolean(taxonomyLoadingMore[taxonomy])}
-                    >
-                      {taxonomyLoadingMore[taxonomy] ? "Loading..." : `More (${hiddenCount})`}
-                    </button>
-                  )}
                   <div className="flex flex-wrap gap-1">
                     {selectedTermIds.map((id) => {
                       const label = termNameById[id];
@@ -1423,19 +1975,43 @@ export default function Editor({
                       );
                     })}
                   </div>
+                  <div className="flex flex-wrap gap-1">
+                    {availableTerms.map((term) => {
+                      return (
+                        <button
+                          key={`term-${taxonomy}-${term.id}`}
+                          type="button"
+                          onClick={() => toggleTaxonomyTerm(taxonomy, term.id)}
+                          className="rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] transition-colors hover:bg-stone-100"
+                        >
+                          {term.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!taxonomyExpanded[taxonomy] && hiddenCount > 0 && (
+                    <button
+                      type="button"
+                      className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[11px] hover:bg-stone-100"
+                      onClick={() => void loadAllTermsForTaxonomy(taxonomy)}
+                      disabled={Boolean(taxonomyLoadingMore[taxonomy])}
+                    >
+                      {taxonomyLoadingMore[taxonomy] ? "Loading..." : `More (${hiddenCount})`}
+                    </button>
+                  )}
                 </div>
               );
             })}
 
-            <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
+            <div className="w-full min-w-0 max-w-full space-y-2 overflow-hidden rounded-md border border-stone-200 bg-stone-50 p-2">
               <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Meta Fields</div>
-              <div className="flex gap-1">
+              <div className="grid w-full min-w-0 max-w-full grid-cols-2 gap-1">
                 <input
                   list="editor-meta-key-suggestions"
                   value={metaKeyInput}
                   onChange={(e) => setMetaKeyInput(e.target.value)}
                   placeholder="Meta key"
-                  className="w-1/2 rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                  className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
                 />
                 <input
                   value={metaValueInput}
@@ -1447,12 +2023,12 @@ export default function Editor({
                     }
                   }}
                   placeholder="Meta value"
-                  className="w-1/2 rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                  className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
                 />
               </div>
               <button
                 type="button"
-                className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
+                className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
                 onClick={() => addMetaEntry(metaKeyInput, metaValueInput)}
               >
                 Add / Update Meta
@@ -1462,20 +2038,34 @@ export default function Editor({
                   <option key={`meta-opt-${keyName}`} value={keyName} />
                 ))}
               </datalist>
-              <div className="space-y-1">
-                {metaEntries.map((entry) => (
-                  <div key={`meta-${entry.key}`} className="flex items-center justify-between rounded border border-stone-200 bg-white px-2 py-1 text-[11px]">
-                    <div className="truncate">
-                      <span className="font-semibold">{entry.key}</span>
-                      <span className="text-stone-500"> = {entry.value}</span>
+              <div className="min-w-0 max-w-full space-y-1">
+                {visibleMetaEntries.map((entry) => (
+                  <div key={`meta-${entry.key}`} className="w-full min-w-0 max-w-full overflow-hidden rounded border border-stone-200 bg-white px-2 py-1 text-[11px]">
+                    <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-center gap-2">
+                      <span className="min-w-0 truncate font-semibold">{entry.key}</span>
+                      <input
+                        type="text"
+                        value={entry.value}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          const nextMetaEntries = updateEditorMetaEntryValue(metaEntriesRef.current, entry.key, nextValue);
+                          metaEntriesRef.current = nextMetaEntries;
+                          setMetaEntries(nextMetaEntries);
+                        }}
+                        className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-[11px] text-stone-700"
+                      />
+                      <button
+                        type="button"
+                        className="rounded border border-stone-300 px-1.5 py-0.5 text-[10px] hover:bg-stone-100"
+                        onClick={() => {
+                          const nextMetaEntries = metaEntriesRef.current.filter((item) => item.key !== entry.key);
+                          metaEntriesRef.current = nextMetaEntries;
+                          setMetaEntries(nextMetaEntries);
+                        }}
+                      >
+                        Remove
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="rounded border border-stone-300 px-1.5 py-0.5 text-[10px] hover:bg-stone-100"
-                      onClick={() => setMetaEntries((prev) => prev.filter((item) => item.key !== entry.key))}
-                    >
-                      Remove
-                    </button>
                   </div>
                 ))}
               </div>
@@ -1644,7 +2234,7 @@ export default function Editor({
                             if ((response as any)?.error) {
                               throw new Error(String((response as any).error));
                             }
-                            setData((prev) => ({ ...prev, image: next.url || "" }));
+                            applyDataUpdate((prev) => ({ ...prev, image: next.url || "" }));
                             toast.success("Thumbnail updated from media manager.");
                           } catch (error) {
                             toast.error(error instanceof Error ? error.message : "Failed to set thumbnail.");
@@ -1657,11 +2247,140 @@ export default function Editor({
                   Choose from Media Manager
                 </button>
               </div>
-            </div>
+              </div>
             )}
+
+            <div className="pt-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Danger Zone</div>
+              <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 p-2">
+                <button
+                  type="button"
+                  className="w-full rounded-md border border-rose-600 bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!canEdit}
+                  onClick={() => {
+                    setDeleteConfirmation("");
+                    setDeleteDialogOpen(true);
+                  }}
+                >
+                  Delete Entry
+                </button>
+              </div>
+            </div>
           </fieldset>
         )}
       </aside>
+
+      <Dialog open={publishScheduleDialogOpen} onOpenChange={setPublishScheduleDialogOpen}>
+        <DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl dark:border-stone-700 dark:bg-stone-950 dark:text-white">
+          <DialogHeader>
+            <DialogTitle>Schedule publish</DialogTitle>
+            <DialogDescription>
+              Choose a future publish date and time. This does not publish the entry by itself. You still need to click Publish.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block space-y-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Publish at</span>
+              <input
+                type="datetime-local"
+                value={publishScheduleDraft}
+                onChange={(event) => setPublishScheduleDraft(event.target.value)}
+                className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+              />
+            </label>
+            <p className="text-xs text-stone-500">
+              Leave this empty to publish immediately when you click Publish.
+            </p>
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              className="rounded-md border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800"
+              onClick={() => setPublishScheduleDialogOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100"
+              onClick={() => setPublishScheduleDraft("")}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              disabled={isPendingPublishSchedule}
+              className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => saveScheduledPublishAt(publishScheduleDraft)}
+            >
+              {isPendingPublishSchedule ? "Saving..." : "Save Schedule"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl dark:border-stone-700 dark:bg-stone-950 dark:text-white">
+          <DialogHeader>
+            <DialogTitle>Delete entry</DialogTitle>
+            <DialogDescription>
+              {deleteConfirmationTarget === "delete"
+                ? 'Type "delete" to permanently remove this untitled entry.'
+                : `Type "${deleteConfirmationTarget}" to permanently remove this entry.`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={deleteConfirmation}
+              onChange={(event) => setDeleteConfirmation(event.target.value)}
+              placeholder={deleteConfirmationTarget}
+              className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
+            />
+            <p className="text-xs text-stone-500">
+              This deletes the post, its taxonomy relationships, and its post meta. This cannot be undone.
+            </p>
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              className="rounded-md border border-stone-300 px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800"
+              onClick={() => setDeleteDialogOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!deleteConfirmationMatches || isPendingDelete}
+              className="rounded-md border border-rose-300 bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => {
+                startTransitionDelete(async () => {
+                  try {
+                    const formData = new FormData();
+                    formData.append("confirm", deleteConfirmation.trim());
+                    const response = await deleteDomainPost(formData, post.id);
+                    if ((response as any)?.error) {
+                      throw new Error(String((response as any).error));
+                    }
+                    const siteId = String(params?.id || post.siteId || "").trim();
+                    const domainKey = String(params?.domainKey || "").trim();
+                    setDeleteDialogOpen(false);
+                    router.refresh();
+                    if (siteId && domainKey) {
+                      router.push(`/app/site/${siteId}/domain/${domainKey}`);
+                    }
+                    toast.success("Entry deleted.");
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Failed to delete entry.");
+                  }
+                });
+              }}
+            >
+              {isPendingDelete ? "Deleting..." : "Delete Entry"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {mediaPickerElement}
     </div>

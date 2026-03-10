@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
   getBooleanSetting: vi.fn(),
+  getSiteBooleanSetting: vi.fn(),
   getSiteUrlSetting: vi.fn(),
   getSiteUrlSettingForSite: vi.fn(),
   retryPendingCommunications: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/cms-config", () => ({
   SCHEDULES_ENABLED_KEY: "schedules_enabled",
   SCHEDULES_PING_SITEMAP_KEY: "schedules_ping_sitemap",
   getBooleanSetting: mocks.getBooleanSetting,
+  getSiteBooleanSetting: mocks.getSiteBooleanSetting,
   getSiteUrlSetting: mocks.getSiteUrlSetting,
   getSiteUrlSettingForSite: mocks.getSiteUrlSettingForSite,
 }));
@@ -76,6 +78,7 @@ describe("scheduler reliability model", () => {
     vi.resetModules();
     mocks.execute.mockReset();
     mocks.getBooleanSetting.mockReset();
+    mocks.getSiteBooleanSetting.mockReset();
     mocks.getSiteUrlSetting.mockReset();
     mocks.getSiteUrlSettingForSite.mockReset();
     mocks.retryPendingCommunications.mockReset();
@@ -84,6 +87,7 @@ describe("scheduler reliability model", () => {
     mocks.purgeOldMediaRecords.mockReset();
 
     mocks.getBooleanSetting.mockResolvedValue(true);
+    mocks.getSiteBooleanSetting.mockResolvedValue(true);
     mocks.getSiteUrlSetting.mockResolvedValue({ value: "http://localhost:3000" });
     mocks.getSiteUrlSettingForSite.mockResolvedValue({ value: "http://localhost:3000" });
     mocks.purgeOldMediaRecords.mockResolvedValue({ deleted: 1, olderThanDays: 30, limit: 100, siteId: null });
@@ -150,13 +154,14 @@ describe("scheduler reliability model", () => {
     expect(auditParams).toContain("dead_letter");
   });
 
-  it("runs core media cleanup action successfully", async () => {
-    const { runDueSchedules } = await import("@/lib/scheduler");
+  it("runs core media cleanup action successfully for a site-owned schedule", async () => {
+    const { runDueSiteSchedules } = await import("@/lib/scheduler");
     for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
     mocks.execute
       .mockResolvedValueOnce({
         rows: [
           makeDueRow({
+            site_id: "site-1",
             action_key: "core.media.cleanup",
             payload: JSON.stringify({ olderThanDays: 45, limit: 25 }),
             max_retries: 1,
@@ -166,13 +171,13 @@ describe("scheduler reliability model", () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await runDueSchedules(10);
+    const result = await runDueSiteSchedules("site-1", 10);
 
     expect(result.ran).toBe(1);
     expect(result.errors).toBe(0);
     expect(result.deadLettered).toBe(0);
     expect(mocks.purgeOldMediaRecords).toHaveBeenCalledWith({
-      siteId: null,
+      siteId: "site-1",
       olderThanDays: 45,
       limit: 25,
     });

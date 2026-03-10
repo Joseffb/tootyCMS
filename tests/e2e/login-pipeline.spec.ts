@@ -64,6 +64,31 @@ async function getSessionJsonWithRetry(
   throw new Error(`Session endpoint did not return 200 within ${timeoutMs}ms. Last status: ${lastStatus}`);
 }
 
+async function gotoWithConnectionRetry(
+  page: import("@playwright/test").Page,
+  url: string,
+  timeoutMs = 30_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await page.goto(url, { waitUntil: "commit" });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !message.includes("Could not connect to the server") &&
+        !message.includes("net::ERR_CONNECTION_REFUSED") &&
+        !message.includes("NS_ERROR_CONNECTION_REFUSED")
+      ) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out navigating to ${url}.`);
+}
+
 test.skip(
   !(process.env.POSTGRES_URL || process.env.POSTGRES_TEST_URL),
   "POSTGRES_URL or POSTGRES_TEST_URL is required for login pipeline e2e.",
@@ -102,6 +127,7 @@ test.beforeAll(async ({}, testInfo) => {
 });
 
 test("native login persists a valid session and grants /app access", async ({ page }) => {
+  test.slow();
   const secret = String(process.env.NEXTAUTH_SECRET || "").trim();
   if (!secret) throw new Error("NEXTAUTH_SECRET is required for login pipeline e2e.");
   const token = await encode({
@@ -130,15 +156,15 @@ test("native login persists a valid session and grants /app access", async ({ pa
 
   // Edge can stall waiting for full DOM readiness on the heavy admin shell under load.
   // Commit + URL assertions still prove the auth gate granted access to the app host.
-  await page.goto(`${appOrigin}/app/cp`, { waitUntil: "commit" });
+  await gotoWithConnectionRetry(page, `${appOrigin}/app/cp`, 60_000);
   await expect(page).not.toHaveURL(/\/login(?:[/?#]|$)/);
   await expect
     .poll(async () => page.url(), {
-      timeout: 30_000,
+      timeout: 60_000,
       message: "expected authenticated session to resolve to an app route instead of login",
     })
     .not.toMatch(/\/login(?:[/?#]|$)/);
 
-  const sessionJson = await getSessionJsonWithRetry(page, `${appOrigin}/api/auth/session`);
+  const sessionJson = await getSessionJsonWithRetry(page, `${appOrigin}/api/auth/session`, 60_000);
   expect(String(sessionJson?.user?.email || "").toLowerCase()).toBe(email);
 });

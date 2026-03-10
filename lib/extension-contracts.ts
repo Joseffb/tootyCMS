@@ -1,6 +1,7 @@
 import type { ThemeTokens } from "@/lib/theme-system";
 import { normalizeExtensionTags } from "@/lib/extension-tags";
 import { SITE_CAPABILITIES, type SiteCapability } from "@/lib/rbac";
+import { normalizePluginSuggestedRoles } from "@/lib/plugin-permissions";
 
 export type ExtensionKind = "plugin" | "theme";
 
@@ -82,6 +83,12 @@ export type PluginContract = {
   contentModel?: PluginCollectionContentModel;
   editor?: {
     snippets?: PluginEditorSnippet[];
+  };
+  permissions?: {
+    contentMeta?: {
+      requested?: boolean;
+      suggestedRoles?: string[];
+    };
   };
 };
 
@@ -213,6 +220,20 @@ function cleanCollectionContentModel(input: unknown): PluginCollectionContentMod
   };
 }
 
+function cleanPluginPermissions(input: unknown) {
+  const candidate = asRecord(input);
+  const contentMeta = asRecord(candidate.contentMeta);
+  const requested = Boolean(contentMeta.requested);
+  const suggestedRoles = normalizePluginSuggestedRoles(contentMeta.suggestedRoles);
+  if (!requested && suggestedRoles.length === 0) return undefined;
+  return {
+    contentMeta: {
+      requested,
+      suggestedRoles,
+    },
+  };
+}
+
 export function validatePluginContract(input: unknown, fallbackId: string): PluginContract | null {
   const candidate = asRecord(input);
   const id = normalizeExtensionId(String(candidate.id ?? fallbackId));
@@ -308,6 +329,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
           }),
         }
       : undefined,
+    permissions: cleanPluginPermissions(candidate.permissions),
   };
 }
 
@@ -358,7 +380,7 @@ export function validateThemeContract(input: unknown, fallbackId: string): Theme
         const route = String(entry.route ?? "").trim().toLowerCase();
         const params = entry.params && typeof entry.params === "object" ? (entry.params as Record<string, unknown>) : {};
         const requiresCapabilityRaw = String(entry.requiresCapability ?? "").trim();
-        const requiresCapability = SITE_CAPABILITIES.includes(requiresCapabilityRaw as SiteCapability)
+        const requiresCapability = (SITE_CAPABILITIES as readonly string[]).includes(requiresCapabilityRaw)
           ? (requiresCapabilityRaw as SiteCapability)
           : undefined;
         return [

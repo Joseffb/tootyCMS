@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { sql } from "@vercel/postgres";
+import { encode } from "next-auth/jwt";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
@@ -7,7 +8,6 @@ import { getAppOrigin } from "./helpers/env";
 import { addSessionTokenCookie } from "./helpers/auth";
 import {
   ensureCustomSiteDomain,
-  ensureNetworkSession,
   ensureNetworkSite,
   ensureNetworkUser,
   ensureSitePost,
@@ -20,6 +20,7 @@ import {
 const runId = `e2e-carousel-${randomUUID()}`;
 const password = "password123";
 const appOrigin = getAppOrigin();
+const secret = String(process.env.NEXTAUTH_SECRET || "").trim();
 const runPluginPermsE2E = process.env.RUN_PLUGIN_PERMS_E2E === "1";
 
 const adminEmail = `${runId}-admin@example.com`;
@@ -28,9 +29,18 @@ const siteId = `${runId}-site`;
 const carouselSetId = `${runId}-carousel-set`;
 const slideOneId = `${runId}-slide-one`;
 const slideTwoId = `${runId}-slide-two`;
+const createdSlideTitle = `${runId}-slide-created`;
 
 async function upsertSetting(key: string, value: string) {
   await setSettingByKey(key, value);
+}
+
+async function safeQuery(text: string, params: unknown[] = []) {
+  try {
+    await sql.query(text, params);
+  } catch {
+    // Test cleanup should not fail the suite when setup never completed.
+  }
 }
 
 async function ensureUser(params: {
@@ -57,13 +67,28 @@ async function ensureSite(params: {
 }
 
 async function authenticateAs(page: Page, userId: string) {
-  const sessionToken = `e2e-${randomUUID()}`;
-  const expires = new Date(Date.now() + 1000 * 60 * 60 * 24);
-  await ensureNetworkSession(sessionToken, userId, expires);
+  if (!secret) throw new Error("NEXTAUTH_SECRET is required for carousel plugin e2e.");
+  const token = await encode({
+    secret,
+    token: {
+      sub: userId,
+      email: adminEmail,
+      name: "Carousel Admin",
+      role: "network admin",
+      user: {
+        id: userId,
+        email: adminEmail,
+        name: "Carousel Admin",
+        role: "network admin",
+      },
+    },
+    maxAge: 60 * 60 * 24,
+  });
+  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
   await addSessionTokenCookie(page.context(), {
-    value: sessionToken,
+    value: token,
     origin: appOrigin,
-    expires: Math.floor(expires.getTime() / 1000),
+    expires,
   });
 }
 
@@ -181,13 +206,12 @@ test.beforeAll(async () => {
   const passwordHash = await hashPassword(password);
   await upsertSetting("setup_completed", "true");
   await upsertSetting("plugin_tooty-carousels_enabled", "true");
-  await upsertSetting(`site_${siteId}_plugin_tooty-carousels_enabled`, "true");
 
   await ensureUser({
     id: adminUserId,
     email: adminEmail,
     name: "Carousel Admin",
-    role: "administrator",
+    role: "network admin",
     passwordHash,
   });
 
@@ -198,53 +222,80 @@ test.beforeAll(async () => {
     subdomain: `${runId}-site`,
     isPrimary: false,
   });
+  await upsertSetting(`site_${siteId}_plugin_tooty-carousels_enabled`, "true");
 
   await ensureCarouselDomain();
 });
 
-test("carousel plugin drag-and-drop reorders slides and persists sort_order", async ({ page }) => {
+test("carousel plugin reorder controls persist sort_order", async ({ page }) => {
   await authenticateAs(page, adminUserId);
   await page.goto(`${appOrigin}/app/plugins/tooty-carousels?tab=carousels&siteId=${siteId}&set=${carouselSetId}`);
 
   await expect(page.getByRole("heading", { name: "Slide Order" })).toBeVisible();
 
-  const firstRow = page.locator('[draggable="true"]').filter({ hasText: "Slide One" }).first();
-  const secondRow = page.locator('[draggable="true"]').filter({ hasText: "Slide Two" }).first();
+  const orderedRows = page.locator('a[href*="editSlide="]').filter({ hasText: /Slide (One|Two)/ });
 
-  await expect(page.locator('[draggable="true"]').nth(0)).toContainText("Slide One");
-  await firstRow.dragTo(secondRow);
-  await expect(page.locator('[draggable="true"]').nth(0)).toContainText("Slide Two");
-
-  await page.getByRole("button", { name: "Save Order" }).click();
+  await expect(orderedRows.nth(0)).toContainText("Slide One");
+  await page.getByRole("button", { name: "Move Slide One down" }).click();
 
   await expect.poll(async () => await readSortOrder(slideTwoId)).toBe("0");
   await expect.poll(async () => await readSortOrder(slideOneId)).toBe("1");
 
   await page.reload();
-  await expect(page.locator('[draggable="true"]').nth(0)).toContainText("Slide Two");
+  await expect(orderedRows.nth(0)).toContainText("Slide Two");
+});
+
+test("carousel plugin create slide shows the new slide without a manual refresh", async ({ page }) => {
+  await authenticateAs(page, adminUserId);
+  await page.goto(`${appOrigin}/app/plugins/tooty-carousels?tab=carousels&siteId=${siteId}&set=${carouselSetId}`);
+
+  await page.getByRole("link", { name: "Add Carousel Slide" }).click();
+  await expect(page.getByPlaceholder("New Carousel Slide")).toBeVisible();
+
+  await page.getByPlaceholder("New Carousel Slide").fill(createdSlideTitle);
+  await page.locator('textarea[name="description"]').fill("Created through the carousel workspace.");
+  await page.getByRole("button", { name: "Save Carousel Slide" }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/app/(?:cp/)?plugins/tooty-carousels\\?tab=carousels&view=slides&siteId=${siteId}&set=${carouselSetId}(&|$)`));
+  await expect(page.locator('a[href*="editSlide="]').filter({ hasText: createdSlideTitle }).first()).toBeVisible();
+  await expect(page.getByPlaceholder("New Carousel Slide")).toHaveCount(0);
 });
 
 test.afterAll(async () => {
-  await sql.query(
+  await safeQuery(
+    `DELETE FROM ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel-slide"))}
+     WHERE "domainPostId" IN (
+       SELECT "id"
+       FROM ${quotedIdentifier(siteDomainContentTable(siteId, "carousel-slide"))}
+       WHERE "title" = $1
+     )`,
+    [createdSlideTitle],
+  );
+  await safeQuery(
+    `DELETE FROM ${quotedIdentifier(siteDomainContentTable(siteId, "carousel-slide"))}
+     WHERE "title" = $1`,
+    [createdSlideTitle],
+  );
+  await safeQuery(
     `DELETE FROM ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel-slide"))}
      WHERE "domainPostId" IN ($1, $2)`,
     [slideOneId, slideTwoId],
   );
-  await sql.query(
+  await safeQuery(
     `DELETE FROM ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel"))}
      WHERE "domainPostId" = $1`,
     [carouselSetId],
   );
-  await sql.query(
+  await safeQuery(
     `DELETE FROM ${quotedIdentifier(siteDomainContentTable(siteId, "carousel-slide"))}
      WHERE "id" IN ($1, $2)`,
     [slideOneId, slideTwoId],
   );
-  await sql.query(
+  await safeQuery(
     `DELETE FROM ${quotedIdentifier(siteDomainContentTable(siteId, "carousel"))}
      WHERE "id" = $1`,
     [carouselSetId],
   );
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("sites"))} WHERE "id" = $1`, [siteId]);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("users"))} WHERE "id" = $1`, [adminUserId]);
+  await safeQuery(`DELETE FROM ${quotedIdentifier(networkTableName("sites"))} WHERE "id" = $1`, [siteId]);
+  await safeQuery(`DELETE FROM ${quotedIdentifier(networkTableName("users"))} WHERE "id" = $1`, [adminUserId]);
 });

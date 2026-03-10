@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SiteMenuSettingsPage from "@/app/app/(dashboard)/site/[id]/settings/menus/page";
-import { listSiteMenus } from "@/lib/menu-system";
+import { getSiteMenuDefinition, listSiteMenus } from "@/lib/menu-system";
 
 vi.mock("@/lib/auth", () => ({
   getSession: vi.fn(async () => ({ user: { id: "user-1" } })),
@@ -57,10 +57,12 @@ vi.mock("@/lib/menu-system", () => ({
 
 vi.mock("@/lib/site-menu-tables", () => ({
   ensureSiteMenuTables: vi.fn(async () => undefined),
+  siteMenuTablesReady: vi.fn(async () => true),
 }));
 
 vi.mock("@/lib/site-media-tables", () => ({
   ensureSiteMediaTable: vi.fn(async () => undefined),
+  siteMediaTableReady: vi.fn(async () => true),
 }));
 
 vi.mock("@/components/media/media-picker-field", () => ({
@@ -74,6 +76,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
+  unstable_noStore: vi.fn(),
 }));
 
 describe("SiteMenuSettingsPage", () => {
@@ -124,8 +127,8 @@ describe("SiteMenuSettingsPage", () => {
     render(ui);
 
     expect(screen.getByRole("heading", { name: "Edit Menu" })).toBeTruthy();
-    expect(screen.getByText("Assigned Key")).toBeTruthy();
-    expect(screen.queryByLabelText("Assigned Key")).toBeNull();
+    expect(screen.getByText("Key")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: /key/i })).toHaveValue("primary");
     expect(screen.queryByRole("heading", { name: "Menus" })).toBeNull();
   });
 
@@ -187,5 +190,29 @@ describe("SiteMenuSettingsPage", () => {
     expect(screen.getByRole("heading", { name: "Site Menus" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Add Menu" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Native Menus Need a Database Update" })).toBeNull();
+  });
+
+  it("injects the selected menu into the list when pooled reads omit it from the initial menu listing", async () => {
+    vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
+    vi.mocked(getSiteMenuDefinition).mockResolvedValueOnce({
+      id: "menu-stale",
+      siteId: "site-1",
+      key: "footer-stale",
+      title: "Footer Menu Stale Read",
+      description: "Recovered from direct menu read",
+      location: "footer",
+      sortOrder: 10,
+      items: [],
+    } as any);
+
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({ menu: "menu-stale" }),
+    });
+
+    render(ui);
+
+    expect(screen.getByText("Footer Menu Stale Read")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Edit Menu" })).toBeTruthy();
   });
 });

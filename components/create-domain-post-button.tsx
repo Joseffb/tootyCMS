@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import LoadingDots from "@/components/icons/loading-dots";
+import { getDomainPostAdminCreatePath } from "@/lib/domain-post-admin-routes";
 
 export default function CreateDomainPostButton({
   siteId,
@@ -21,7 +22,7 @@ export default function CreateDomainPostButton({
     <button
       onClick={() =>
         startTransition(async () => {
-          router.push(`/site/${siteId}/domain/${domainKey}/create`);
+          router.push(getDomainPostAdminCreatePath(siteId, domainKey));
         })
       }
       className={cn(

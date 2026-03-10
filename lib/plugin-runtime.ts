@@ -188,6 +188,7 @@ async function maybeRegisterPluginHooks(
         siteId: options?.siteId,
         networkRequired: Boolean(options?.networkRequired),
         capabilities,
+        permissions: plugin.permissions,
         coreRegistry: {
           registerContentType(registration) {
             kernel.registerPluginContentType(pluginId, registration);

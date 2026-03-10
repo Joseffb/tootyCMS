@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
   getTextSetting: vi.fn(),
   setTextSetting: vi.fn(),
+  listSiteDomainDefinitions: vi.fn(async () => []),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -39,6 +40,10 @@ vi.mock("@/lib/default-data-domains", () => ({
 
 vi.mock("@/lib/site-domain-type-tables", () => ({
   ensureSiteDomainTypeTables: vi.fn(async () => ({ contentTable: "ignored", metaTable: "ignored" })),
+}));
+
+vi.mock("@/lib/site-domain-post-store", () => ({
+  listSiteDomainDefinitions: mocks.listSiteDomainDefinitions,
 }));
 
 const mediaTableMocks = vi.hoisted(() => ({
@@ -161,7 +166,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.03.05.2-version")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.08.0-version")).toBe(true);
   });
 
   it("requires migration when required network tables are missing", async () => {
@@ -179,7 +184,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.03.05.2-network-tables")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.08.0-network-tables")).toBe(true);
     expect(report.missingTables).toContain(`${PREFIX}network_sites`);
   });
 
@@ -198,7 +203,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.03.05.2-drop-shared-feature-tables")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.08.0-drop-shared-feature-tables")).toBe(true);
     expect(report.disallowedFound).toEqual([`${PREFIX}site_media`]);
   });
 
@@ -217,7 +222,7 @@ describe("db health version tracking", () => {
 
     expect(report.ok).toBe(false);
     expect(report.migrationRequired).toBe(true);
-    expect(report.pending.some((entry) => entry.id === "2026.03.05.2-drop-obsolete-registries")).toBe(true);
+    expect(report.pending.some((entry) => entry.id === "2026.03.08.0-drop-obsolete-registries")).toBe(true);
     expect(report.obsoleteRegistryFound).toEqual([`${PREFIX}site_user_table_registry`]);
   });
 
@@ -246,6 +251,30 @@ describe("db health version tracking", () => {
     expect(mediaTableMocks.ensureSiteMediaTable).toHaveBeenCalledWith("site-under-load");
     expect(menuTableMocks.ensureSiteMenuTables).toHaveBeenCalledWith("site-under-load");
     expect(taxonomyTableMocks.ensureSiteTaxonomyTables).toHaveBeenCalledWith("site-under-load");
+  });
+
+  it("renames legacy view_count rows to _view_count during compatibility fixes", async () => {
+    mocks.listSiteDomainDefinitions.mockResolvedValueOnce([
+      { key: "post", metaTable: "tooty_site_site-under-load_domain_post_meta" },
+    ]);
+    const statements: string[] = [];
+    mocks.execute.mockImplementation(async (statement: unknown) => {
+      const text = Array.isArray((statement as { queryChunks?: Array<{ value?: string[] }> } | null)?.queryChunks)
+        ? (statement as { queryChunks: Array<{ value?: string[] }> }).queryChunks
+            .flatMap((chunk) => chunk.value || [])
+            .join("")
+        : String(statement ?? "");
+      statements.push(text);
+      if (text.includes('SELECT "id" FROM')) {
+        return { rows: [{ id: "site-under-load" }] };
+      }
+      return { rows: [] };
+    });
+
+    await applyPendingDatabaseMigrations();
+
+    expect(statements.some((text) => text.includes('DELETE FROM "tooty_site_site-under-load_domain_post_meta" legacy'))).toBe(true);
+    expect(statements.some((text) => text.includes('SET "key" = \'_view_count\''))).toBe(true);
   });
 
   it("is idempotent across two migration runs with no duplicate state or version drift", async () => {

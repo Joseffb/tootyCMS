@@ -62,6 +62,8 @@ const {
     transaction: vi.fn(async (cb: any) =>
       cb({
         execute: vi.fn(async () => undefined),
+        select: dbMock.select,
+        insert: dbMock.insert,
         delete: vi.fn(() => ({
           where: vi.fn(async () => undefined),
         })),
@@ -74,7 +76,7 @@ const {
     getSessionMock: vi.fn(async () => ({ user: { id: "user-1" } })),
     canUserMutateDomainPostMock: vi.fn(async () => ({
       allowed: true,
-      post: { id: "post-1", userId: "user-1", siteId: "site-1", slug: "post-1" },
+      post: { id: "post-1", userId: "user-1", siteId: "site-1", slug: "post-1", title: "About This Site" },
     })),
     userCanMock: vi.fn(async () => true),
     siteDomainStore: {
@@ -236,6 +238,39 @@ describe("taxonomy actions", () => {
     expect(dbMock.insert).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses the existing tag taxonomy when creation races under shared load", async () => {
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushInsertResult([]);
+    dbMock.__pushSelectResult([{ id: 42, name: "Tooty", slug: "tooty" }]);
+    dbMock.__pushInsertResult([]);
+    dbMock.__pushSelectResult([{ id: 99, name: "Tooty" }]);
+
+    const created = await createTagByName("site-1", "Tooty");
+
+    expect(created).toEqual({ id: 99, name: "Tooty" });
+    expect(dbMock.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries tag creation once after a transient term taxonomy foreign key violation", async () => {
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushInsertResult([{ id: 42, name: "Tooty", slug: "tooty" }]);
+    dbMock.__pushInsertResult(Object.assign(new Error("fk drift"), {
+      code: "23503",
+      table: "tooty_test_site_term_taxonomies",
+      detail: 'Key (termId)=(42) is not present in table "tooty_test_site_terms".',
+    }));
+
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushInsertResult([{ id: 42, name: "Tooty", slug: "tooty" }]);
+    dbMock.__pushInsertResult([{ id: 99, termId: 42, taxonomy: "tag" }]);
+
+    const created = await createTagByName("site-1", "Tooty");
+
+    expect(created).toEqual({ id: 99, name: "Tooty" });
+    expect(dbMock.transaction.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("uses existing category without creating duplicates", async () => {
     dbMock.__pushSelectResult([{ id: 7, name: "Docs" }]);
 
@@ -243,6 +278,20 @@ describe("taxonomy actions", () => {
 
     expect(existing).toEqual({ id: 7, name: "Docs" });
     expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("reuses the existing category taxonomy when creation races under shared load", async () => {
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushSelectResult([]);
+    dbMock.__pushInsertResult([]);
+    dbMock.__pushSelectResult([{ id: 42, name: "Docs", slug: "docs" }]);
+    dbMock.__pushInsertResult([]);
+    dbMock.__pushSelectResult([{ id: 7, name: "Docs" }]);
+
+    const created = await createCategoryByName("site-1", "Docs");
+
+    expect(created).toEqual({ id: 7, name: "Docs" });
+    expect(dbMock.insert).toHaveBeenCalledTimes(2);
   });
 
   it("returns tag taxonomy list", async () => {
@@ -276,7 +325,10 @@ describe("taxonomy actions", () => {
 
     const rows = await getTaxonomyOverview("site-1");
 
-    expect(rows).toEqual([{ taxonomy: "category", termCount: 0, usageCount: 0, label: "Category" }]);
+    expect(rows).toEqual([
+      { taxonomy: "category", termCount: 0, usageCount: 0, label: "Category" },
+      { taxonomy: "tag", termCount: 0, usageCount: 0, label: "Tags" },
+    ]);
     expect(dbMock.insert).toHaveBeenCalledTimes(2);
   });
 
@@ -314,13 +366,13 @@ describe("taxonomy actions", () => {
 
     const result = await deleteDomainPost(formData, "post-1");
 
-    expect(result).toEqual({ error: "Type delete to confirm post deletion." });
+    expect(result).toEqual({ error: 'Type "About This Site" to confirm post deletion.' });
     expect(dbMock.delete).not.toHaveBeenCalled();
   });
 
-  it("deletes post when confirmation keyword is valid", async () => {
+  it("deletes post when confirmation title is valid", async () => {
     const formData = new FormData();
-    formData.set("confirm", "Delete");
+    formData.set("confirm", "About This Site");
 
     const result = await deleteDomainPost(formData, "post-1");
 
@@ -328,7 +380,11 @@ describe("taxonomy actions", () => {
     expect(dbMock.transaction).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts lowercase delete keyword", async () => {
+  it("falls back to delete when post title is empty", async () => {
+    canUserMutateDomainPostMock.mockResolvedValueOnce({
+      allowed: true,
+      post: { id: "post-1", userId: "user-1", siteId: "site-1", slug: "post-1", title: "" },
+    });
     const formData = new FormData();
     formData.set("confirm", "delete");
 

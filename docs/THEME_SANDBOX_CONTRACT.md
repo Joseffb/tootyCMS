@@ -17,8 +17,9 @@ Themes are presentation modules only.
 - Themes should consume generic DTOs, slots, and query results instead of plugin-specific permission flags.
 - Themes may render media URLs and metadata already resolved by Core, but may not infer storage provider details or interact with media storage directly.
 - Themes may read viewer profile presentation state only through Core DTO surfaces such as `core.profile.*`.
+- Themes may read content meta only through `core.content.meta.read(...)`.
 - Feature behavior belongs in plugins.
-- Core contains only spines and contracts for extension behavior.
+- Core may own governed Spine Services and first-party default providers, but themes must consume only the stable DTO/slot/query contracts exposed by Core.
 
 ## CMS Responsibilities (MUST)
 

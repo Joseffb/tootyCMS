@@ -16,6 +16,29 @@ describe("extension contracts", () => {
     expect(plugin?.minCoreVersion).toBe("0.1.x");
   });
 
+  it("normalizes plugin content meta permission requests and suggested roles", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "content-meta-plugin",
+        name: "Content Meta Plugin",
+        permissions: {
+          contentMeta: {
+            requested: true,
+            suggestedRoles: [" Administrator ", "editor", "EDITOR"],
+          },
+        },
+      },
+      "content-meta-plugin",
+    );
+
+    expect(plugin?.permissions).toEqual({
+      contentMeta: {
+        requested: true,
+        suggestedRoles: ["administrator", "editor"],
+      },
+    });
+  });
+
   it("normalizes commentProviders capability flag", () => {
     const plugin = validatePluginContract(
       {

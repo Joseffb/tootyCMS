@@ -9,9 +9,11 @@ import { ensureSiteCommentTables } from "@/lib/site-comment-tables";
 import { ensureSiteDataDomainTable } from "@/lib/site-data-domain-registry";
 import { ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
 import { ensureSiteDomainTypeTables } from "@/lib/site-domain-type-tables";
+import { listSiteDomainDefinitions } from "@/lib/site-domain-post-store";
 import { ensureSiteMediaTable } from "@/lib/site-media-tables";
 import { ensureSiteMenuTables } from "@/lib/site-menu-tables";
 import { ensureSiteTaxonomyTables } from "@/lib/site-taxonomy-tables";
+import { migrateLegacySharedDomainQueueToSiteQueues } from "@/lib/domain-queue";
 
 export type MissingDbColumn = {
   table: string;
@@ -21,7 +23,9 @@ export type MissingDbColumn = {
 export const DB_SCHEMA_VERSION_KEY = "db_schema_version";
 export const DB_SCHEMA_TARGET_VERSION_KEY = "db_schema_target_version";
 export const DB_SCHEMA_UPDATED_AT_KEY = "db_schema_updated_at";
-export const TARGET_DB_SCHEMA_VERSION = "2026.03.05.2";
+export const TARGET_DB_SCHEMA_VERSION = "2026.03.08.0";
+const LEGACY_VIEW_COUNT_META_KEY = "view_count";
+const HIDDEN_VIEW_COUNT_META_KEY = "_view_count";
 
 const REQUIRED_NETWORK_TABLE_SUFFIXES = [
   "network_accounts",
@@ -175,6 +179,26 @@ async function ensureSiteScopedFeatureTables(siteId: string) {
   await ensureSiteDomainTypeTables(siteId, "page");
 }
 
+async function migrateLegacyViewCountMeta(siteId: string) {
+  const definitions = await listSiteDomainDefinitions(siteId, { includeInactive: true });
+  for (const definition of definitions) {
+    const metaTable = String(definition.metaTable || "").trim();
+    if (!metaTable) continue;
+    await db.execute(sql.raw(`
+      DELETE FROM ${quoteIdentifier(metaTable)} legacy
+      USING ${quoteIdentifier(metaTable)} hidden
+      WHERE legacy."key" = '${LEGACY_VIEW_COUNT_META_KEY}'
+        AND hidden."key" = '${HIDDEN_VIEW_COUNT_META_KEY}'
+        AND legacy."domainPostId" = hidden."domainPostId"
+    `));
+    await db.execute(sql.raw(`
+      UPDATE ${quoteIdentifier(metaTable)}
+      SET "key" = '${HIDDEN_VIEW_COUNT_META_KEY}'
+      WHERE "key" = '${LEGACY_VIEW_COUNT_META_KEY}'
+    `));
+  }
+}
+
 export async function getDatabaseHealthReport() {
   const prefix = getPrefix();
   const requiredTables = REQUIRED_NETWORK_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`);
@@ -205,28 +229,28 @@ export async function getDatabaseHealthReport() {
   const pending = [
     ...(missingTables.length
       ? [{
-          id: "2026.03.05.2-network-tables",
+          id: "2026.03.08.0-network-tables",
           title: "Create required network tables",
           reason: "Minimal network tables are missing for the current release contract.",
         }]
       : []),
     ...(disallowedFound.length
       ? [{
-          id: "2026.03.05.2-drop-shared-feature-tables",
+          id: "2026.03.08.0-drop-shared-feature-tables",
           title: "Drop shared feature tables",
           reason: "Shared or legacy feature tables still exist and violate the site-physical storage contract.",
         }]
       : []),
     ...(obsoleteRegistryFound.length
       ? [{
-          id: "2026.03.05.2-drop-obsolete-registries",
+          id: "2026.03.08.0-drop-obsolete-registries",
           title: "Drop obsolete registry tables",
           reason: "Legacy registry tables are obsolete under deterministic site table naming.",
         }]
       : []),
     ...(versionBehind
       ? [{
-          id: "2026.03.05.2-version",
+          id: "2026.03.08.0-version",
           title: "Record schema version",
           reason: "Installed schema version is behind the current target.",
         }]
@@ -468,7 +492,10 @@ export async function applyDatabaseCompatibilityFixes() {
   const siteIds = await listKnownSiteIds().catch(() => []);
   for (const siteId of siteIds) {
     await ensureSiteScopedFeatureTables(siteId);
+    await migrateLegacyViewCountMeta(siteId);
   }
+
+  await migrateLegacySharedDomainQueueToSiteQueues();
 
   const dropTables = [
     ...DISALLOWED_SHARED_OR_LEGACY_TABLE_SUFFIXES.map((suffix) => `${prefix}${suffix}`),

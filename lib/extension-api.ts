@@ -5,6 +5,7 @@ import { runThemeQueries, type ThemeQueryRequest } from "@/lib/theme-query";
 import { pluginConfigKey, sitePluginConfigKey } from "@/lib/plugins";
 import { getSettingByKey, getSettingsByKeys, setSettingByKey } from "@/lib/settings-store";
 import { setSiteTextSetting } from "@/lib/cms-config";
+import type { PluginContract } from "@/lib/extension-contracts";
 import type {
   PluginCommentProviderRegistration,
   ContentStateRegistration,
@@ -51,10 +52,18 @@ import {
 } from "@/lib/core-menu-contract";
 import type { UpsertMenuInput, UpsertMenuItemInput } from "@/lib/menu-system";
 import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
-import { getSiteDomainPostById } from "@/lib/site-domain-post-store";
+import {
+  deleteSiteDomainPostMeta,
+  getSiteDomainPostById,
+  listSiteDomainPostMeta,
+  upsertSiteDomainPostMeta,
+} from "@/lib/site-domain-post-store";
 import { ensureSiteTaxonomyTables, getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
 import { createCoreProfile, readCoreProfile, updateCoreProfile } from "@/lib/core-profile";
 import { getSession } from "@/lib/auth";
+import { getPluginOwnerForDataDomain } from "@/lib/plugin-content-types";
+import { canUserManagePluginContentMeta } from "@/lib/authorization";
+import { pluginRequestsContentMetaPermission } from "@/lib/plugin-permissions";
 
 type BaseExtensionApi = {
   pluginId?: string;
@@ -98,12 +107,20 @@ type PluginExtensionApiOptions = {
   coreRegistry?: PluginCoreRegistry;
   siteId?: string;
   networkRequired?: boolean;
+  permissions?: PluginContract["permissions"];
 };
 
 type CoreApiInvokeInput = string | Record<string, unknown> | undefined;
 
 type BoundSiteCoreApi = {
   invoke: (path: string, input?: CoreApiInvokeInput) => Promise<unknown>;
+  content: {
+    meta: {
+      read: (dataDomainKey: string, postId: string, key?: string) => Promise<Array<{ key: string; value: string }>>;
+      set: (dataDomainKey: string, postId: string, key: string, value: string) => Promise<{ ok: true }>;
+      delete: (dataDomainKey: string, postId: string, key: string) => Promise<{ ok: true }>;
+    };
+  };
   menus: {
     list: () => Promise<any[]>;
     get: (menuKey: string) => Promise<any>;
@@ -165,6 +182,18 @@ type CoreServiceApi = {
   };
   dataDomain: {
     list: (siteId?: string) => Promise<any[]>;
+  };
+  content: {
+    meta: {
+      read: (
+        siteId: string,
+        dataDomainKey: string,
+        postId: string,
+        key?: string,
+      ) => Promise<Array<{ key: string; value: string }>>;
+      set: (siteId: string, dataDomainKey: string, postId: string, key: string, value: string) => Promise<{ ok: true }>;
+      delete: (siteId: string, dataDomainKey: string, postId: string, key: string) => Promise<{ ok: true }>;
+    };
   };
   menus: {
     list: (siteId?: string) => Promise<any[]>;
@@ -259,6 +288,20 @@ type CoreServiceApi = {
   };
 };
 
+type CoreContentMetaReadApi = {
+  read: (
+    siteId: string,
+    dataDomainKey: string,
+    postId: string,
+    key?: string,
+  ) => Promise<Array<{ key: string; value: string }>>;
+};
+
+type CoreContentMetaMutationApi = CoreContentMetaReadApi & {
+  set: (siteId: string, dataDomainKey: string, postId: string, key: string, value: string) => Promise<{ ok: true }>;
+  delete: (siteId: string, dataDomainKey: string, postId: string, key: string) => Promise<{ ok: true }>;
+};
+
 export type PluginExtensionApi = BaseExtensionApi & {
   core: CoreServiceApi;
   setSetting: (key: string, value: string) => Promise<void>;
@@ -297,7 +340,11 @@ export type PluginExtensionApi = BaseExtensionApi & {
 };
 
 export type ThemeExtensionApi = BaseExtensionApi & {
-  core: Pick<CoreServiceApi, "site" | "profile" | "settings" | "dataDomain" | "taxonomy" | "menus">;
+  core: Pick<CoreServiceApi, "site" | "profile" | "settings" | "dataDomain" | "taxonomy" | "menus"> & {
+    content: {
+      meta: CoreContentMetaReadApi;
+    };
+  };
   setSetting: (key: string, value: string) => Promise<never>;
   setPluginSetting: (key: string, value: string) => Promise<never>;
   createSchedule: (input: {
@@ -456,6 +503,15 @@ function parseProfileInput(input?: CoreApiInvokeInput) {
   };
 }
 
+function normalizeContentMetaEntries(
+  entries: Array<{ key: string; value: string }>,
+  key?: string,
+) {
+  const normalizedKey = key === undefined ? "" : normalizeMetaKey(key);
+  if (!normalizedKey) return entries;
+  return entries.filter((entry) => entry.key === normalizedKey);
+}
+
 function createReadBaseApi(pluginId?: string, options?: PluginExtensionApiOptions): BaseExtensionApi {
   const boundSiteId = options?.siteId;
   const useGlobalOnly = Boolean(options?.networkRequired);
@@ -544,6 +600,10 @@ export function createPluginExtensionApi(
     ...DEFAULT_PLUGIN_CAPABILITIES,
     ...(options?.capabilities || {}),
   };
+  const requestedContentMetaPermission = pluginRequestsContentMetaPermission({
+    id: pluginId,
+    permissions: options?.permissions,
+  });
   const pluginName = pluginId || "unknown-plugin";
   const requireCapability = (cap: keyof PluginCapabilities, featureName: string) => {
     if (!capabilities[cap]) {
@@ -692,6 +752,94 @@ export function createPluginExtensionApi(
       throw new Error(`[plugin-guard] Plugin "${pluginName}" taxonomy API requires a bound site or explicit siteId.`);
     }
     return resolved;
+  };
+
+  const resolveContentMetaSiteId = (siteId?: string) => {
+    const resolved = String(siteId || options?.siteId || "").trim();
+    if (!resolved) {
+      throw new Error(`[plugin-guard] Plugin "${pluginName}" content meta API requires a bound site or explicit siteId.`);
+    }
+    return resolved;
+  };
+
+  const resolvePluginOwnedContentMetaContext = async (siteId: string, dataDomainKey: string, postId: string) => {
+    if (!pluginId) {
+      throw new Error("[plugin-guard] Plugin content meta API requires a plugin id.");
+    }
+    if (!requestedContentMetaPermission) {
+      throw new Error(
+        `[plugin-guard] Plugin "${pluginName}" attempted core.content.meta without declaring permissions.contentMeta.requested = true`,
+      );
+    }
+    const resolvedSiteId = resolveContentMetaSiteId(siteId);
+    const normalizedDomainKey = normalizeTaxonomyKey(dataDomainKey);
+    const normalizedPostId = String(postId || "").trim();
+    if (!normalizedDomainKey || !normalizedPostId) {
+      throw new Error("siteId, dataDomainKey, and postId are required");
+    }
+    const ownerPluginId = await getPluginOwnerForDataDomain(resolvedSiteId, normalizedDomainKey);
+    if (!ownerPluginId || ownerPluginId !== String(pluginId).trim().toLowerCase()) {
+      throw new Error(
+        `[plugin-guard] Plugin "${pluginName}" may only manage content meta for its own plugin-owned content.`,
+      );
+    }
+    const post = await getSiteDomainPostById({
+      siteId: resolvedSiteId,
+      dataDomainKey: normalizedDomainKey,
+      postId: normalizedPostId,
+    });
+    if (!post) throw new Error("Domain post not found.");
+    return {
+      siteId: resolvedSiteId,
+      dataDomainKey: normalizedDomainKey,
+      postId: normalizedPostId,
+    };
+  };
+
+  const requirePluginContentMetaMutationAccess = async (siteId: string) => {
+    if (!pluginId) {
+      throw new Error("[plugin-guard] Plugin content meta mutation requires a plugin id.");
+    }
+    const session = await getSession();
+    const userId = String(session?.user?.id || "").trim();
+    if (!userId) throw new Error("Not authenticated");
+    const allowed = await canUserManagePluginContentMeta(userId, siteId, pluginId);
+    if (!allowed) {
+      throw new Error(
+        `[plugin-guard] Plugin "${pluginName}" content meta mutation requires manage_plugin_content_meta or manage_plugin_${pluginId}_content_meta.`,
+      );
+    }
+  };
+
+  const pluginContentMetaApi: CoreContentMetaMutationApi = {
+    read: async (siteId, dataDomainKey, postId, key) => {
+      const context = await resolvePluginOwnedContentMetaContext(siteId, dataDomainKey, postId);
+      const entries = await listSiteDomainPostMeta(context);
+      return normalizeContentMetaEntries(entries, key);
+    },
+    set: async (siteId, dataDomainKey, postId, key, value) => {
+      const context = await resolvePluginOwnedContentMetaContext(siteId, dataDomainKey, postId);
+      await requirePluginContentMetaMutationAccess(context.siteId);
+      const metaKey = normalizeMetaKey(key);
+      if (!metaKey) throw new Error("meta key is required");
+      await upsertSiteDomainPostMeta({
+        ...context,
+        key: metaKey,
+        value: String(value ?? ""),
+      });
+      return { ok: true };
+    },
+    delete: async (siteId, dataDomainKey, postId, key) => {
+      const context = await resolvePluginOwnedContentMetaContext(siteId, dataDomainKey, postId);
+      await requirePluginContentMetaMutationAccess(context.siteId);
+      const metaKey = normalizeMetaKey(key);
+      if (!metaKey) throw new Error("meta key is required");
+      await deleteSiteDomainPostMeta({
+        ...context,
+        key: metaKey,
+      });
+      return { ok: true };
+    },
   };
 
   const listTaxonomies = async (siteId?: string) => {
@@ -978,6 +1126,32 @@ export function createPluginExtensionApi(
           return listPostTaxonomyAssignments(boundSiteId, domainKey, postId);
         }
       }
+      if (service === "content") {
+        const area = (segments.shift() || "").toLowerCase();
+        if (area === "meta") {
+          const dataDomainKey = segments.shift() || "";
+          const postId = segments.shift() || "";
+          const action = (segments.shift() || "read").toLowerCase();
+          if (action === "read" || action === "get" || action === "list") {
+            const command = parseCommandInput(input);
+            return pluginContentMetaApi.read(boundSiteId, dataDomainKey, postId, command.key || "");
+          }
+          if (action === "set" || action === "update") {
+            const command = parseCommandInput(input);
+            return pluginContentMetaApi.set(
+              boundSiteId,
+              dataDomainKey,
+              postId,
+              command.key || "",
+              command.value || "",
+            );
+          }
+          if (action === "delete" || action === "remove") {
+            const command = parseCommandInput(input);
+            return pluginContentMetaApi.delete(boundSiteId, dataDomainKey, postId, command.key || "");
+          }
+        }
+      }
       if (service === "menu" || service === "menus") {
         const firstSegment = segments.shift() || "";
         const firstAction = firstSegment.toLowerCase();
@@ -1020,6 +1194,16 @@ export function createPluginExtensionApi(
       const bound = String(siteId || "").trim();
       return {
         invoke: (path: string, input?: CoreApiInvokeInput) => core.invoke(`siteId.${bound}.${path}`, input),
+        content: {
+          meta: {
+            read: (dataDomainKey: string, postId: string, key?: string) =>
+              pluginContentMetaApi.read(bound, dataDomainKey, postId, key),
+            set: (dataDomainKey: string, postId: string, key: string, value: string) =>
+              pluginContentMetaApi.set(bound, dataDomainKey, postId, key, value),
+            delete: (dataDomainKey: string, postId: string, key: string) =>
+              pluginContentMetaApi.delete(bound, dataDomainKey, postId, key),
+          },
+        },
         menus: {
           list: () => menuApi.list(bound),
           get: (menuKey: string) => menuApi.get(bound, menuKey),
@@ -1089,6 +1273,9 @@ export function createPluginExtensionApi(
     },
     dataDomain: {
       list: (siteId?: string) => base.listDataDomains(siteId),
+    },
+    content: {
+      meta: pluginContentMetaApi,
     },
     menus: menuApi,
     taxonomy: {
@@ -1201,6 +1388,28 @@ export function createThemeExtensionApi(themeId?: string): ThemeExtensionApi {
       },
       dataDomain: {
         list: (siteId?: string) => base.listDataDomains(siteId),
+      },
+      content: {
+        meta: {
+          read: async (siteId: string, dataDomainKey: string, postId: string, key?: string) => {
+            const normalizedSiteId = String(siteId || "").trim();
+            const normalizedDomainKey = normalizeTaxonomyKey(dataDomainKey);
+            const normalizedPostId = String(postId || "").trim();
+            if (!normalizedSiteId || !normalizedDomainKey || !normalizedPostId) return [];
+            const post = await getSiteDomainPostById({
+              siteId: normalizedSiteId,
+              dataDomainKey: normalizedDomainKey,
+              postId: normalizedPostId,
+            });
+            if (!post) return [];
+            const entries = await listSiteDomainPostMeta({
+              siteId: normalizedSiteId,
+              dataDomainKey: normalizedDomainKey,
+              postId: normalizedPostId,
+            });
+            return normalizeContentMetaEntries(entries, key);
+          },
+        },
       },
       menus: {
         list: (siteId?: string) => {

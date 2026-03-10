@@ -7,6 +7,7 @@ import { getSitePublicHost, getSitePublicUrl } from "@/lib/site-url";
 import { getSiteUrlSetting } from "@/lib/cms-config";
 import { hasGraphAnalyticsProvider } from "@/lib/analytics-availability";
 import { getApprovedCommentCountsBySite, getViewCountsByPost } from "@/lib/dashboard-popularity";
+import { getDomainPostAdminItemPath } from "@/lib/domain-post-admin-routes";
 import { listSiteDomainPosts } from "@/lib/site-domain-post-store";
 import { resolveAuthorizedSiteForAnyCapability } from "@/lib/admin-site-selection";
 
@@ -331,7 +332,7 @@ export default async function SiteDomainDashboard({ params, searchParams }: Prop
                   {analyticsGraphCapable ? <td className="px-2 py-2 text-stone-500 dark:text-stone-400">Hidden</td> : null}
                   <td className="px-2 py-2">
                     <Link
-                      href={`/app/site/${encodeURIComponent(effectiveSiteId)}/domain/${encodeURIComponent(row.typeKey)}/post/${encodeURIComponent(row.id)}`}
+                      href={getDomainPostAdminItemPath(effectiveSiteId, row.typeKey, row.id)}
                       className="rounded-md border border-stone-300 px-2 py-1 text-xs font-semibold text-stone-700 dark:border-stone-700 dark:text-stone-200"
                     >
                       Edit
@@ -368,7 +369,7 @@ export default async function SiteDomainDashboard({ params, searchParams }: Prop
                   <tr key={row.id} className="border-b border-stone-100 dark:border-stone-800">
                     <td className="px-2 py-2">
                       <Link
-                        href={`/app/site/${encodeURIComponent(effectiveSiteId)}/domain/${encodeURIComponent(row.typeKey)}/post/${encodeURIComponent(row.id)}`}
+                        href={getDomainPostAdminItemPath(effectiveSiteId, row.typeKey, row.id)}
                         className="font-medium text-stone-900 hover:underline dark:text-white"
                       >
                         {row.title}
@@ -412,7 +413,7 @@ export default async function SiteDomainDashboard({ params, searchParams }: Prop
                   <tr key={row.id} className="border-b border-stone-100 dark:border-stone-800">
                     <td className="px-2 py-2">
                       <Link
-                        href={`/app/site/${encodeURIComponent(effectiveSiteId)}/domain/${encodeURIComponent(row.typeKey)}/post/${encodeURIComponent(row.id)}`}
+                        href={getDomainPostAdminItemPath(effectiveSiteId, row.typeKey, row.id)}
                         className="font-medium text-stone-900 hover:underline dark:text-white"
                       >
                         {row.title}

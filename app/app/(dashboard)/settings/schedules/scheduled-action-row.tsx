@@ -38,21 +38,31 @@ type Entry = {
 };
 
 type Props = {
+  scope: "network" | "site";
   entry: Entry;
-  sites: SiteOption[];
+  sites?: SiteOption[];
+  fixedSite?: SiteOption | null;
   actionOptions: Array<{ key: string; label: string; description?: string }>;
   onUpdate: (formData: FormData) => Promise<void>;
   onDelete: (formData: FormData) => Promise<void>;
   onRunNow: (formData: FormData) => Promise<void>;
 };
 
-export default function ScheduledActionRow({ entry, sites, actionOptions, onUpdate, onDelete, onRunNow }: Props) {
+export default function ScheduledActionRow({
+  scope,
+  entry,
+  sites = [],
+  fixedSite = null,
+  actionOptions,
+  onUpdate,
+  onDelete,
+  onRunNow,
+}: Props) {
   const [editing, setEditing] = useState(false);
 
   return (
     <tr className="border-t border-stone-200 dark:border-stone-800">
       <td className="px-3 py-3 align-top text-xs">{entry.name}</td>
-      <td className="px-3 py-3 align-top text-xs">{entry.site?.name || entry.site?.subdomain || "Global"}</td>
       <td className="px-3 py-3 align-top text-xs">
         {entry.ownerType}:{entry.ownerId}
       </td>
@@ -70,6 +80,7 @@ export default function ScheduledActionRow({ entry, sites, actionOptions, onUpda
         <div className="flex flex-wrap gap-2">
           <form action={onRunNow}>
             <input type="hidden" name="id" value={entry.id} />
+            {scope === "site" && fixedSite ? <input type="hidden" name="siteId" value={fixedSite.id} /> : null}
             <button className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 dark:border-emerald-700 dark:text-emerald-300">
               Run now
             </button>
@@ -83,6 +94,7 @@ export default function ScheduledActionRow({ entry, sites, actionOptions, onUpda
           </button>
           <form action={onDelete}>
             <input type="hidden" name="id" value={entry.id} />
+            {scope === "site" && fixedSite ? <input type="hidden" name="siteId" value={fixedSite.id} /> : null}
             <button className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 dark:border-red-700 dark:text-red-300">
               Delete
             </button>
@@ -95,6 +107,7 @@ export default function ScheduledActionRow({ entry, sites, actionOptions, onUpda
               <h3 className="font-cal text-lg dark:text-white">Edit Scheduled Action</h3>
               <form action={onUpdate} className="mt-4 grid gap-3 md:grid-cols-2">
                 <input type="hidden" name="id" value={entry.id} />
+                {scope === "site" && fixedSite ? <input type="hidden" name="siteId" value={fixedSite.id} /> : null}
                 <label className="text-xs text-stone-600 dark:text-stone-300">
                   Name
                   <input
@@ -103,21 +116,16 @@ export default function ScheduledActionRow({ entry, sites, actionOptions, onUpda
                     className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-xs dark:border-stone-600 dark:bg-stone-900 dark:text-white"
                   />
                 </label>
-                <label className="text-xs text-stone-600 dark:text-stone-300">
-                  Site
-                  <select
-                    name="siteId"
-                    defaultValue={entry.siteId || ""}
-                    className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-xs dark:border-stone-600 dark:bg-stone-900 dark:text-white"
-                  >
-                    <option value="">(global)</option>
-                    {sites.map((site) => (
-                      <option key={site.id} value={site.id}>
-                        {site.name || site.id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {scope === "site" && fixedSite ? (
+                  <label className="text-xs text-stone-600 dark:text-stone-300">
+                    Site
+                    <input
+                      value={fixedSite.name || fixedSite.id}
+                      disabled
+                      className="mt-1 w-full rounded border border-stone-300 bg-stone-100 px-2 py-1 text-xs dark:border-stone-600 dark:bg-stone-900 dark:text-white"
+                    />
+                  </label>
+                ) : null}
                 <label className="text-xs text-stone-600 dark:text-stone-300">
                   Action Key
                   <input

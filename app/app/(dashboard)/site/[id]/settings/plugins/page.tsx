@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import CatalogTabs from "@/components/catalog-tabs";
+import InstallConsentDialog from "@/components/install-consent-dialog";
 import {
   getAvailablePlugins,
   listPluginsWithSiteState,
@@ -14,6 +15,7 @@ import { revalidatePath } from "next/cache";
 import {
   installFromRepo,
   listLocalInstalledIds,
+  readRepoCatalogEntry,
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
@@ -22,10 +24,11 @@ import ConfirmSubmitButton from "@/components/confirm-submit-button";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { getAdminPathAlias } from "@/lib/admin-path";
 import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
+import { applyPluginInstallPermissionGrants, buildPluginInstallPermissionPreview } from "@/lib/plugin-install-permissions";
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string; install?: string }>;
 };
 
 export default async function SitePluginSettingsPage({ params, searchParams }: Props) {
@@ -38,6 +41,7 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
   const query = String(paramsQuery.q || "");
   const errorCode = String(paramsQuery.error || "");
   const view = paramsQuery.view === "installed" || paramsQuery.view === "uninstalled" ? paramsQuery.view : "all";
+  const installDirectory = String(paramsQuery.install || "").trim();
 
   const id = decodeURIComponent((await params).id);
   const { site } = await resolveAuthorizedSiteForUser(session.user.id, id, "site.settings.write");
@@ -69,7 +73,16 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
       discoverError = error instanceof Error ? error.message : "Failed loading plugin catalog.";
     }
   }
+  const installPreviewEntry =
+    activeTab === "discover" && installDirectory
+      ? await readRepoCatalogEntry("plugin", installDirectory).catch(() => null)
+      : null;
+  const installPermissionPreview =
+    installPreviewEntry
+      ? await buildPluginInstallPermissionPreview(installPreviewEntry)
+      : null;
   const friendlyError = toRepoCatalogFriendlyError(discoverError, errorCode);
+  const cancelInstallHref = `${sitePluginsPath}?tab=discover${query ? `&q=${encodeURIComponent(query)}` : ""}`;
 
   async function toggleForSite(formData: FormData) {
     "use server";
@@ -140,8 +153,19 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
     "use server";
     const directory = String(formData.get("directory") || "").trim();
     if (!directory) return;
+    const previewEntry = await readRepoCatalogEntry("plugin", directory).catch(() => null);
+    const preview = previewEntry ? await buildPluginInstallPermissionPreview(previewEntry) : null;
+    const requiresConsent = Boolean(
+      preview && (preview.requestedCapabilities.length || preview.existingRoleGrants.length || preview.ignoredSuggestedRoles.length),
+    );
+    if (requiresConsent && formData.get("confirmInstall") !== "true") {
+      redirect(`${sitePluginsPath}?tab=discover&install=${encodeURIComponent(directory)}`);
+    }
     try {
       await installFromRepo("plugin", directory);
+      if (previewEntry) {
+        await applyPluginInstallPermissionGrants(previewEntry);
+      }
     } catch {
       redirect(`${sitePluginsPath}?tab=discover&error=rate_limit`);
     }
@@ -229,6 +253,13 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
                   </div>
                   {alreadyInstalled ? (
                     <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Installed</span>
+                  ) : entry.permissions?.contentMeta?.requested ? (
+                    <a
+                      href={`${sitePluginsPath}?tab=discover&install=${encodeURIComponent(entry.directory)}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
+                      className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white no-underline"
+                    >
+                      Review Access
+                    </a>
                   ) : (
                     <form action={installPlugin}>
                       <input type="hidden" name="directory" value={entry.directory} />
@@ -243,6 +274,18 @@ export default async function SitePluginSettingsPage({ params, searchParams }: P
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {installPreviewEntry && installPermissionPreview ? (
+        <InstallConsentDialog
+          action={installPlugin}
+          cancelHref={cancelInstallHref}
+          directory={installPreviewEntry.directory}
+          existingRoleGrants={installPermissionPreview.existingRoleGrants}
+          ignoredSuggestedRoles={installPermissionPreview.ignoredSuggestedRoles}
+          name={installPreviewEntry.name}
+          requestedCapabilities={installPermissionPreview.requestedCapabilities}
+        />
       ) : null}
 
       {activeTab === "installed" ? (

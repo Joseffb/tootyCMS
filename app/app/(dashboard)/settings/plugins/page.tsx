@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import CatalogTabs from "@/components/catalog-tabs";
+import InstallConsentDialog from "@/components/install-consent-dialog";
 import {
   getPluginById,
   getAvailablePlugins,
@@ -15,6 +16,7 @@ import db from "@/lib/db";
 import {
   installFromRepo,
   listLocalInstalledIds,
+  readRepoCatalogEntry,
   listRepoCatalog,
   toRepoCatalogFriendlyError,
 } from "@/lib/repo-catalog";
@@ -22,9 +24,10 @@ import { userCan } from "@/lib/authorization";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { inArray } from "drizzle-orm";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { applyPluginInstallPermissionGrants, buildPluginInstallPermissionPreview } from "@/lib/plugin-install-permissions";
 
 type Props = {
-  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string }>;
+  searchParams?: Promise<{ tab?: string; q?: string; error?: string; view?: string; install?: string }>;
 };
 
 export default async function PluginSettingsPage({ searchParams }: Props) {
@@ -39,6 +42,7 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
   const query = String(params.q || "");
   const errorCode = String(params.error || "");
   const view = params.view === "installed" || params.view === "uninstalled" ? params.view : "all";
+  const installDirectory = String(params.install || "").trim();
 
   const canManageNetworkSites = await userCan("network.site.manage", session.user.id);
   const accessibleSiteIds = canManageNetworkSites ? [] : await listSiteIdsForUser(session.user.id);
@@ -72,7 +76,16 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
       discoverError = error instanceof Error ? error.message : "Failed loading plugin catalog.";
     }
   }
+  const installPreviewEntry =
+    activeTab === "discover" && installDirectory
+      ? await readRepoCatalogEntry("plugin", installDirectory).catch(() => null)
+      : null;
+  const installPermissionPreview =
+    installPreviewEntry
+      ? await buildPluginInstallPermissionPreview(installPreviewEntry)
+      : null;
   const friendlyError = toRepoCatalogFriendlyError(discoverError, errorCode);
+  const cancelInstallHref = `${settingsPluginsPath}?tab=discover${query ? `&q=${encodeURIComponent(query)}` : ""}`;
 
   async function togglePlugin(formData: FormData) {
     "use server";
@@ -132,8 +145,19 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
     if (!allowed) return;
     const directory = String(formData.get("directory") || "").trim();
     if (!directory) return;
+    const previewEntry = await readRepoCatalogEntry("plugin", directory).catch(() => null);
+    const preview = previewEntry ? await buildPluginInstallPermissionPreview(previewEntry) : null;
+    const requiresConsent = Boolean(
+      preview && (preview.requestedCapabilities.length || preview.existingRoleGrants.length || preview.ignoredSuggestedRoles.length),
+    );
+    if (requiresConsent && formData.get("confirmInstall") !== "true") {
+      redirect(`${settingsPluginsPath}?tab=discover&install=${encodeURIComponent(directory)}`);
+    }
     try {
       await installFromRepo("plugin", directory);
+      if (previewEntry) {
+        await applyPluginInstallPermissionGrants(previewEntry);
+      }
     } catch {
       redirect(`${settingsPluginsPath}?tab=discover&error=rate_limit`);
     }
@@ -213,6 +237,13 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
                   </div>
                   {alreadyInstalled ? (
                     <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Installed</span>
+                  ) : entry.permissions?.contentMeta?.requested ? (
+                    <a
+                      href={`${settingsPluginsPath}?tab=discover&install=${encodeURIComponent(entry.directory)}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
+                      className="rounded-md border border-black bg-black px-3 py-1 text-xs text-white no-underline"
+                    >
+                      Review Access
+                    </a>
                   ) : (
                     <form action={installPlugin}>
                       <input type="hidden" name="directory" value={entry.directory} />
@@ -227,6 +258,18 @@ export default async function PluginSettingsPage({ searchParams }: Props) {
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {installPreviewEntry && installPermissionPreview ? (
+        <InstallConsentDialog
+          action={installPlugin}
+          cancelHref={cancelInstallHref}
+          directory={installPreviewEntry.directory}
+          existingRoleGrants={installPermissionPreview.existingRoleGrants}
+          ignoredSuggestedRoles={installPermissionPreview.ignoredSuggestedRoles}
+          name={installPreviewEntry.name}
+          requestedCapabilities={installPermissionPreview.requestedCapabilities}
+        />
       ) : null}
 
       {activeTab === "installed" ? (

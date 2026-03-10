@@ -7,6 +7,7 @@ export default defineConfig([
     ".next/**",
     ".next-test-*/**",
     ".next-playwright-harness-*/**",
+    ".next-vercel-dev*/**",
     "out/**",
     "build/**",
     "coverage/**",

@@ -18,8 +18,12 @@ import { revalidatePath } from "next/cache";
 import MediaPickerField from "@/components/media/media-picker-field";
 import Link from "next/link";
 import { resolveAuthorizedSiteForUser } from "@/lib/admin-site-selection";
-import { ensureSiteMenuTables } from "@/lib/site-menu-tables";
-import { ensureSiteMediaTable } from "@/lib/site-media-tables";
+import { ensureSiteMenuTables, siteMenuTablesReady } from "@/lib/site-menu-tables";
+import { ensureSiteMediaTable, siteMediaTableReady } from "@/lib/site-media-tables";
+import { unstable_noStore as noStore } from "next/cache";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -47,13 +51,24 @@ function toMenuKeyFragment(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-async function assignMenuKey(siteId: string, title: string, currentMenu?: SiteMenuDefinition | null) {
+async function assignMenuKey(
+  siteId: string,
+  requestedKey: string,
+  title: string,
+  currentMenu?: SiteMenuDefinition | null,
+) {
   const existingMenus = await listSiteMenus(siteId);
-  const currentKey = currentMenu?.key?.trim();
-  if (currentKey) return currentKey;
+  const currentKey = currentMenu?.key?.trim() || "";
+  const requested = toMenuKeyFragment(requestedKey);
+  const base = requested || toMenuKeyFragment(title) || "menu";
+  const used = new Set(
+    existingMenus
+      .map((menu) => ({ id: menu.id, key: menu.key.trim() }))
+      .filter((menu) => menu.key && menu.id !== currentMenu?.id)
+      .map((menu) => menu.key),
+  );
+  if (base === currentKey || !used.has(base)) return base;
 
-  const base = toMenuKeyFragment(title) || "menu";
-  const used = new Set(existingMenus.map((menu) => menu.key.trim()).filter(Boolean));
   let candidate = base;
   let suffix = 2;
 
@@ -99,9 +114,10 @@ function buildMenuSettingsHref(
   return `${url.pathname}${url.search}`;
 }
 
-function revalidateMenuPaths(siteId: string) {
+function revalidateMenuPaths(siteId: string, adminBasePath: string) {
   revalidatePath(`/site/${siteId}/settings/menus`);
   revalidatePath(`/app/site/${siteId}/settings/menus`);
+  revalidatePath(`${adminBasePath}/site/${siteId}/settings/menus`);
   revalidatePath("/", "layout");
   revalidatePath("/[domain]", "layout");
   revalidatePath("/[domain]/posts", "page");
@@ -111,7 +127,28 @@ function revalidateMenuPaths(siteId: string) {
   revalidatePath("/[domain]/t/[slug]", "page");
 }
 
+async function waitForMenuReadConsistency(
+  siteId: string,
+  menuId: string,
+  matches: (menu: SiteMenuDefinition | null) => boolean,
+  timeoutMs = 12_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const menu = await getSiteMenuDefinition(siteId, menuId);
+    if (matches(menu)) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+function upsertMenuIntoList(menus: SiteMenuDefinition[], menu: SiteMenuDefinition) {
+  const next = menus.filter((entry) => entry.id !== menu.id);
+  next.push(menu);
+  return next.sort((a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title));
+}
+
 export default async function SiteMenuSettingsPage({ params, searchParams }: Props) {
+  noStore();
   const adminBasePath = `/app/${getAdminPathAlias()}`;
   const session = await getSession();
   if (!session) redirect("/login");
@@ -121,18 +158,39 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
   if (!site) notFound();
   const siteData = site;
 
-  await ensureSiteMenuTables(siteData.id);
-  await ensureSiteMediaTable(siteData.id);
+  const [menusReady, mediaReady] = await Promise.all([
+    siteMenuTablesReady(siteData.id),
+    siteMediaTableReady(siteData.id),
+  ]);
+  if (!menusReady) {
+    await ensureSiteMenuTables(siteData.id);
+  }
+  if (!mediaReady) {
+    await ensureSiteMediaTable(siteData.id);
+  }
   const query = searchParams ? await searchParams : {};
-  const menus = await listSiteMenus(siteData.id);
+  let menus = await listSiteMenus(siteData.id);
   const createMenuRequested = stringParam(query.createMenu) === "1";
   const editMenuId = stringParam(query.editMenu);
   const selectedMenuId = stringParam(query.menu) || editMenuId;
   const createItemRequested = stringParam(query.createItem) === "1";
   const editItemId = stringParam(query.editItem);
-  const selectedMenu = selectedMenuId
+  let selectedMenu = selectedMenuId
     ? menus.find((menu) => menu.id === selectedMenuId) || (await getSiteMenuDefinition(siteData.id, selectedMenuId))
     : null;
+  if (selectedMenuId && !selectedMenu) {
+    await waitForMenuReadConsistency(siteData.id, selectedMenuId, (menu) => Boolean(menu), 12_000);
+    menus = await listSiteMenus(siteData.id);
+    selectedMenu =
+      menus.find((menu) => menu.id === selectedMenuId) || (await getSiteMenuDefinition(siteData.id, selectedMenuId));
+  }
+  if (selectedMenuId) {
+    const freshSelectedMenu = await getSiteMenuDefinition(siteData.id, selectedMenuId);
+    if (freshSelectedMenu) {
+      selectedMenu = freshSelectedMenu;
+      menus = upsertMenuIntoList(menus, freshSelectedMenu);
+    }
+  }
   const selectedItemId = stringParam(query.item) || editItemId;
   const selectedItem = selectedMenu?.items.find((item) => item.id === selectedItemId) || null;
   const editingMenu = editMenuId
@@ -154,8 +212,16 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
 
   async function ensureCurrentSiteMenuWorkspaceAvailable() {
     "use server";
-    await ensureSiteMenuTables(siteData.id);
-    await ensureSiteMediaTable(siteData.id);
+    const [menusReady, mediaReady] = await Promise.all([
+      siteMenuTablesReady(siteData.id),
+      siteMediaTableReady(siteData.id),
+    ]);
+    if (!menusReady) {
+      await ensureSiteMenuTables(siteData.id);
+    }
+    if (!mediaReady) {
+      await ensureSiteMediaTable(siteData.id);
+    }
   }
 
   async function saveMenuAction(formData: FormData) {
@@ -166,7 +232,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     const editingRecord = menuId ? await getSiteMenuDefinition(siteData.id, menuId) : null;
     const title = String(formData.get("title") || "").trim();
     const payload = {
-      key: await assignMenuKey(siteData.id, title, editingRecord),
+      key: await assignMenuKey(siteData.id, String(formData.get("key") || ""), title, editingRecord),
       title,
       description: String(formData.get("description") || "").trim(),
       location: String(formData.get("location") || "unassigned").trim() as
@@ -181,7 +247,17 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
       ? await updateSiteMenu(siteData.id, menuId, payload)
       : await createSiteMenu(siteData.id, payload);
 
-    revalidateMenuPaths(siteData.id);
+    await waitForMenuReadConsistency(
+      siteData.id,
+      record.id,
+      (menu) =>
+        Boolean(menu) &&
+        menu?.key === payload.key &&
+        menu?.title === payload.title &&
+        menu?.location === payload.location,
+    );
+
+    revalidateMenuPaths(siteData.id, adminBasePath);
     redirect(menuSettingsHref(adminBasePath, siteData.id, record.id));
   }
 
@@ -195,7 +271,8 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     if (!menuId) redirect(menuSettingsHref(adminBasePath, siteData.id));
     if (!expected || received !== expected) throw new Error("Delete confirmation did not match.");
     await deleteSiteMenu(siteData.id, menuId);
-    revalidateMenuPaths(siteData.id);
+    await waitForMenuReadConsistency(siteData.id, menuId, (menu) => !menu);
+    revalidateMenuPaths(siteData.id, adminBasePath);
     redirect(menuSettingsHref(adminBasePath, siteData.id));
   }
 
@@ -224,7 +301,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
       ? await updateSiteMenuItem(siteData.id, menuId, itemId, payload)
       : await createSiteMenuItem(siteData.id, menuId, payload);
 
-    revalidateMenuPaths(siteData.id);
+    revalidateMenuPaths(siteData.id, adminBasePath);
     redirect(menuSettingsHref(adminBasePath, siteData.id, menuId, record.id));
   }
 
@@ -239,7 +316,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     if (!menuId || !itemId) redirect(menuSettingsHref(adminBasePath, siteData.id, menuId));
     if (!expected || received !== expected) throw new Error("Delete confirmation did not match.");
     await deleteSiteMenuItem(siteData.id, menuId, itemId);
-    revalidateMenuPaths(siteData.id);
+    revalidateMenuPaths(siteData.id, adminBasePath);
     redirect(menuSettingsHref(adminBasePath, siteData.id, menuId));
   }
 
@@ -276,19 +353,18 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
             required
           />
         </label>
-        {editingMenu?.key ? (
-          <div className="grid gap-1 text-sm text-black dark:text-white">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500 dark:text-stone-400">
-              Assigned Key
-            </span>
-            <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs text-stone-700 dark:border-stone-700 dark:bg-stone-900/40 dark:text-stone-200">
-              {editingMenu.key}
-            </div>
-            <span className="text-[11px] text-stone-500 dark:text-stone-400">
-              Stable handle used for menu assignment and theme lookup.
-            </span>
-          </div>
-        ) : null}
+        <label className="grid gap-2 text-sm text-black dark:text-white">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500 dark:text-stone-400">Key</span>
+          <input
+            name="key"
+            defaultValue={editingMenu?.key || ""}
+            className="rounded-md border border-stone-300 px-3 py-2 font-mono text-xs dark:border-stone-700 dark:bg-black"
+            placeholder="footer"
+          />
+          <span className="text-[11px] text-stone-500 dark:text-stone-400">
+            Stable handle used for menu assignment and theme lookup. If blank, one is generated from the title.
+          </span>
+        </label>
         <label className="grid gap-2 text-sm text-black dark:text-white">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500 dark:text-stone-400">Description</span>
           <textarea
@@ -545,7 +621,7 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                             <Link href={itemHref} className="block rounded-sm focus:outline-none focus:ring-2 focus:ring-black/30">
                               <div className="font-medium text-stone-900 dark:text-white">{item.title}</div>
                               {item.description ? (
-                                <div className="truncate text-xs text-stone-500 dark:text-stone-400">{item.description}</div>
+                                <div className="text-xs leading-5 whitespace-normal break-words text-stone-500 dark:text-stone-400">{item.description}</div>
                               ) : null}
                             </Link>
                           </td>

@@ -24,6 +24,7 @@ import {
   type AdminSidebarIcon,
 } from "@/lib/admin-nav";
 import { getSitePublicUrl } from "@/lib/site-url";
+import { getDomainPostAdminItemPath, getDomainPostAdminListPath } from "@/lib/domain-post-admin-routes";
 
 const externalLinks: any[] = [];
 type NavTab = {
@@ -397,16 +398,16 @@ export default function Nav({ children }: { children: ReactNode }) {
 
   const tabs = useMemo<NavTab[]>(() => {
     const domainPostMatch = pathname?.match(
-      /^\/(?:app\/)?site\/([^/]+)\/domain\/([^/]+)\/post\/([^/]+)(?:\/settings)?$/,
+      /^\/(?:app\/)?site\/([^/]+)\/domain\/([^/]+)\/(?:item|post)\/([^/]+)(?:\/settings)?$/,
     );
     if (segments[0] === "site" && id && domainPostMatch) {
       const domainKey = domainPostMatch[2];
       const postId = domainPostMatch[3];
-      const baseHref = `/app/site/${id}/domain/${domainKey}/post/${postId}`;
+      const baseHref = getDomainPostAdminItemPath(id, domainKey, postId);
       return [
         {
           name: "Back to Entries",
-          href: `/app/site/${id}/domain/${domainKey}`,
+          href: getDomainPostAdminListPath(id, domainKey),
           icon: "back",
         },
         {

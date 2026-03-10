@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { acquireSchedulerLock, releaseSchedulerLock, runDueSchedules } from "@/lib/scheduler";
+import {
+  acquireSchedulerLock,
+  releaseSchedulerLock,
+  runDueNetworkSchedules,
+  runDueSiteSchedulesForAllEnabledSites,
+} from "@/lib/scheduler";
+import { processAllSiteDomainQueues } from "@/lib/domain-dispatch";
 import { trace } from "@/lib/debug";
 
 function isAuthorized(req: Request) {
@@ -24,7 +30,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await runDueSchedules(50);
+    const networkSchedules = await runDueNetworkSchedules(50);
+    const siteSchedules = await runDueSiteSchedulesForAllEnabledSites(25);
+    const domainQueue = await processAllSiteDomainQueues(25);
+    const result = {
+      networkSchedules,
+      siteSchedules,
+      ran: networkSchedules.ran + siteSchedules.ran,
+      skipped: networkSchedules.skipped + siteSchedules.skipped,
+      blocked: networkSchedules.blocked + siteSchedules.blocked,
+      errors: networkSchedules.errors + siteSchedules.errors,
+      deadLettered: networkSchedules.deadLettered + siteSchedules.deadLettered,
+      domainQueueProcessed: domainQueue.processed,
+      domainQueueSitesChecked: domainQueue.sitesChecked,
+    };
     trace("scheduler", "cron run completed", { traceId, ...result });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

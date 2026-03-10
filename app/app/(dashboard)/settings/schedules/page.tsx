@@ -21,11 +21,11 @@ export default async function SchedulesSettingsPage() {
     <div className="rounded-lg border border-stone-200 bg-white p-5 sm:p-8 dark:border-stone-700 dark:bg-black">
       <h2 className="font-cal text-xl dark:text-white">Schedules</h2>
       <p className="mt-2 text-sm text-stone-500 dark:text-stone-400">
-        Cron-like controls for deploy-time automation. Use Vercel Cron for execution.
+        Network-owned schedules only. The central cron endpoint runs these jobs, then cascades into enabled site schedules.
       </p>
 
       <CreateScheduledActionPanel
-        sites={settings.sites}
+        scope="network"
         actionOptions={settings.actionOptions || []}
         action={createScheduledActionAdmin}
       />
@@ -35,7 +35,6 @@ export default async function SchedulesSettingsPage() {
           <thead className="bg-stone-50 text-stone-700 dark:bg-stone-900 dark:text-stone-300">
             <tr>
               <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Site</th>
               <th className="px-3 py-2">Owner</th>
               <th className="px-3 py-2">Action</th>
               <th className="px-3 py-2">Every</th>
@@ -47,7 +46,7 @@ export default async function SchedulesSettingsPage() {
           <tbody>
             {settings.schedules.length === 0 ? (
               <tr>
-                <td className="px-3 py-3 text-stone-500 dark:text-stone-400" colSpan={8}>
+                <td className="px-3 py-3 text-stone-500 dark:text-stone-400" colSpan={7}>
                   No scheduled actions yet.
                 </td>
               </tr>
@@ -55,8 +54,8 @@ export default async function SchedulesSettingsPage() {
               settings.schedules.map((entry: any) => (
                 <ScheduledActionRow
                   key={entry.id}
+                  scope="network"
                   entry={entry}
-                  sites={settings.sites}
                   actionOptions={settings.actionOptions || []}
                   onUpdate={updateScheduledActionAdmin}
                   onDelete={deleteScheduledActionAdmin}
@@ -71,7 +70,7 @@ export default async function SchedulesSettingsPage() {
       <form action={updateScheduleSettings} className="mt-8 space-y-3 rounded-lg border border-stone-200 p-4 dark:border-stone-700">
         <label className="flex items-center gap-3 text-sm dark:text-white">
           <input type="checkbox" name="schedules_enabled" defaultChecked={settings.enabled} className="h-4 w-4" />
-          <span>Enable schedules</span>
+          <span>Enable network schedules</span>
         </label>
 
         <label className="flex items-center gap-3 text-sm dark:text-white">

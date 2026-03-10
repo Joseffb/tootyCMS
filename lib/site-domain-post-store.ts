@@ -265,27 +265,33 @@ export async function listSiteDomainPosts(input: ListSiteDomainPostsInput) {
     if (input.postId) where.push(sql`"id" = ${String(input.postId).trim()}`);
     if (input.slug) where.push(sql`"slug" = ${String(input.slug).trim()}`);
 
-    const result = await withDbRetry(() => db.execute(sql`
-      SELECT
-        "id",
-        "title",
-        "description",
-        "content",
-        "password",
-        "usePassword",
-        "layout",
-        "slug",
-        "image",
-        "imageBlurhash",
-        "published",
-        "userId",
-        "createdAt",
-        "updatedAt"
-      FROM ${sql.raw(quoted(definition.contentTable))}
-      ${where.length > 0 ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``}
-      ORDER BY "updatedAt" DESC
-      ${input.limit ? sql`LIMIT ${Math.max(1, Math.trunc(input.limit))}` : sql``}
-    `));
+    let result: unknown;
+    try {
+      result = await withDbRetry(() => db.execute(sql`
+        SELECT
+          "id",
+          "title",
+          "description",
+          "content",
+          "password",
+          "usePassword",
+          "layout",
+          "slug",
+          "image",
+          "imageBlurhash",
+          "published",
+          "userId",
+          "createdAt",
+          "updatedAt"
+        FROM ${sql.raw(quoted(definition.contentTable))}
+        ${where.length > 0 ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``}
+        ORDER BY "updatedAt" DESC
+        ${input.limit ? sql`LIMIT ${Math.max(1, Math.trunc(input.limit))}` : sql``}
+      `));
+    } catch (error) {
+      if (isMissingRelationError(error)) continue;
+      throw error;
+    }
     const rows = normalizeRows<Record<string, unknown>>(result);
     for (const row of rows) {
       const normalized = toDomainPostRecord(row, definition, siteId);
@@ -480,12 +486,18 @@ export async function listSiteDomainPostMeta(input: {
     includeInactive: true,
   });
   if (!definition || !(await siteTableExists(definition.metaTable))) return [];
-  const result = await withDbRetry(() => db.execute(sql`
-    SELECT "key", "value"
-    FROM ${sql.raw(quoted(definition.metaTable))}
-    WHERE "domainPostId" = ${String(input.postId || "").trim()}
-    ORDER BY "key" ASC
-  `));
+  let result: unknown;
+  try {
+    result = await withDbRetry(() => db.execute(sql`
+      SELECT "key", "value"
+      FROM ${sql.raw(quoted(definition.metaTable))}
+      WHERE "domainPostId" = ${String(input.postId || "").trim()}
+      ORDER BY "key" ASC
+    `));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
   return normalizeRows<{ key: string; value: string }>(result).map((row) => ({
     key: String(row.key || ""),
     value: String(row.value || ""),
@@ -510,11 +522,17 @@ export async function listSiteDomainPostMetaMany(input: {
   if (keys.length) {
     where.push(sql`"key" IN (${sql.join(keys.map((value) => sql`${value}`), sql`, `)})`);
   }
-  const result = await withDbRetry(() => db.execute(sql`
-    SELECT "domainPostId", "key", "value"
-    FROM ${sql.raw(quoted(definition.metaTable))}
-    WHERE ${sql.join(where, sql` AND `)}
-  `));
+  let result: unknown;
+  try {
+    result = await withDbRetry(() => db.execute(sql`
+      SELECT "domainPostId", "key", "value"
+      FROM ${sql.raw(quoted(definition.metaTable))}
+      WHERE ${sql.join(where, sql` AND `)}
+    `));
+  } catch (error) {
+    if (isMissingRelationError(error)) return [];
+    throw error;
+  }
   return normalizeRows<{ domainPostId: string; key: string; value: string }>(result).map((row) => ({
     domainPostId: String(row.domainPostId || ""),
     key: String(row.key || ""),
@@ -573,6 +591,27 @@ export async function upsertSiteDomainPostMeta(input: {
   `));
 }
 
+export async function deleteSiteDomainPostMeta(input: {
+  siteId: string;
+  dataDomainKey: string;
+  postId: string;
+  key: string;
+}) {
+  const definition = await resolveSiteDomainDefinition(input.siteId, {
+    dataDomainKey: input.dataDomainKey,
+    includeInactive: true,
+  });
+  if (!definition) return;
+  const postId = String(input.postId || "").trim();
+  const key = String(input.key || "").trim();
+  if (!postId || !key) return;
+  await withDbRetry(() => db.execute(sql`
+    DELETE FROM ${sql.raw(quoted(definition.metaTable))}
+    WHERE "domainPostId" = ${postId}
+      AND "key" = ${key}
+  `));
+}
+
 export async function findDomainPostForMutation(postId: string, siteIdHint?: string | null) {
   const normalizedPostId = String(postId || "").trim();
   if (!normalizedPostId) return null;
@@ -606,9 +645,18 @@ export async function countSiteDomainPostUsageByDomain(siteId?: string | null) {
         out.set(definition.id, out.get(definition.id) || 0);
         continue;
       }
-      const result = await withDbRetry(() => db.execute(
-        sql`SELECT COUNT(*)::int AS count FROM ${sql.raw(quoted(definition.contentTable))}`,
-      ));
+      let result: unknown;
+      try {
+        result = await withDbRetry(() =>
+          db.execute(sql`SELECT COUNT(*)::int AS count FROM ${sql.raw(quoted(definition.contentTable))}`),
+        );
+      } catch (error) {
+        if (isMissingRelationError(error)) {
+          out.set(definition.id, out.get(definition.id) || 0);
+          continue;
+        }
+        throw error;
+      }
       const count = Number(normalizeRows<{ count: number }>(result)[0]?.count || 0);
       out.set(definition.id, (out.get(definition.id) || 0) + count);
     }

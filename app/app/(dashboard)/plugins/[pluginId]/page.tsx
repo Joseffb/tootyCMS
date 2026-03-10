@@ -10,8 +10,7 @@ import MigrationKitConsole from "@/components/migration-kit-console";
 import CollectionOrderManager from "@/components/plugins/collection-order-manager";
 import CollectionSetInlineEditor from "@/components/plugins/collection-set-inline-editor";
 import CollectionChildEditModal from "@/components/plugins/collection-child-edit-modal";
-import CarouselCtaUrlField from "@/components/plugins/carousel-cta-url-field";
-import MediaPickerField from "@/components/media/media-picker-field";
+import CollectionChildCreateModal from "@/components/plugins/collection-child-create-modal";
 import PluginSettingsInlineForm from "@/components/plugins/plugin-settings-inline-form";
 import PluginSiteSelect from "@/components/plugins/plugin-site-select";
 import db from "@/lib/db";
@@ -32,6 +31,7 @@ import {
   updateSiteDomainPostById,
 } from "@/lib/site-domain-post-store";
 import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
+import { getPluginWorkspaceRevalidationPaths } from "@/lib/plugin-admin-cache";
 
 type Props = {
   params: Promise<{ pluginId: string }>;
@@ -67,6 +67,12 @@ function toSlug(value: string, fallback: string) {
 
 function buildRefreshToken() {
   return Date.now().toString(36);
+}
+
+function revalidatePluginWorkspace(pluginId: string, siteId?: string) {
+  for (const path of getPluginWorkspaceRevalidationPaths(pluginId, siteId)) {
+    revalidatePath(path);
+  }
 }
 
 async function listMediaItemsForSite(siteId: string) {
@@ -430,8 +436,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         }
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
-      revalidatePath(`/app/site/${siteId}/settings/plugins`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
       redirect(
         `/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(targetId)}&savedSet=1`,
       );
@@ -457,8 +462,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       }
       await deleteSiteDomainPostById({ siteId, postId: setId, dataDomainKey: model.parentTypeKey });
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
-      revalidatePath(`/app/site/${siteId}/settings/plugins`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
       redirect(`/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}&deletedSet=1`);
     }
 
@@ -518,7 +522,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         }
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&view=carousels&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
     }
 
     async function saveCollectionChild(formData: FormData) {
@@ -528,23 +532,23 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       const siteId = String(formData.get("siteId") || "").trim();
       const setId = String(formData.get("setId") || "").trim();
-      if (!siteId || !setId) return;
+      if (!siteId || !setId) return null;
       const allowed = await userCan("site.settings.write", current.user.id, { siteId });
-      if (!allowed) return;
+      if (!allowed) return null;
 
       await createKernelForRequest(siteId);
       const [parentDomainRow, childDomainRow] = await Promise.all([
         findSiteDataDomainByKey(siteId, model.parentTypeKey),
         findSiteDataDomainByKey(siteId, model.childTypeKey),
       ]);
-      if (!parentDomainRow || !childDomainRow) return;
+      if (!parentDomainRow || !childDomainRow) return null;
 
       const setRecord = await getSiteDomainPostById({
         siteId,
         postId: setId,
         dataDomainKey: model.parentTypeKey,
       });
-      if (!setRecord) return;
+      if (!setRecord) return null;
       const setHandle =
         (await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey)) ||
         String(setRecord.slug || "").trim();
@@ -565,7 +569,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         : "draft";
       const orderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
       const sortOrder = Number.isFinite(orderRaw) ? Math.max(0, Math.trunc(orderRaw)) : 0;
-      if (!title) return;
+      if (!title) return null;
 
       const targetId = slideId || createId();
       const published = workflowState === "published";
@@ -611,11 +615,8 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         await upsertCollectionMeta(siteId, model.childTypeKey, targetId, entry.key, entry.value);
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}`);
-      revalidatePath(`/app/site/${siteId}/settings/plugins`);
-      redirect(
-        `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&savedSlide=1&refresh=${encodeURIComponent(buildRefreshToken())}`,
-      );
+      revalidatePluginWorkspace(pluginData.id, siteId);
+      return `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&savedSlide=1&refresh=${encodeURIComponent(buildRefreshToken())}`;
     }
 
     async function deleteCollectionChild(formData: FormData) {
@@ -633,8 +634,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
       await deleteSiteDomainPostById({ siteId, postId: slideId, dataDomainKey: model.childTypeKey });
 
-      revalidatePath(`/app/plugins/${pluginData.id}`);
-      revalidatePath(`/app/site/${siteId}/settings/plugins`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
       redirect(
         `/app/plugins/${pluginData.id}?tab=carousels&view=slides&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&deletedSlide=1&refresh=${encodeURIComponent(buildRefreshToken())}`,
       );
@@ -710,7 +710,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         await upsertCollectionMeta(siteId, model.childTypeKey, slideId, entry.key, entry.value);
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
     }
 
     async function reorderCollectionChildren(formData: FormData) {
@@ -751,7 +751,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         );
       }
 
-      revalidatePath(`/app/plugins/${pluginData.id}`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
       revalidatePath(`/`);
       revalidatePath("/[domain]", "layout");
       revalidatePath("/[domain]", "page");
@@ -785,7 +785,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         nextEnabled ? "published" : "draft",
       );
 
-      revalidatePath(`/app/plugins/${pluginData.id}?tab=carousels&siteId=${encodeURIComponent(siteId)}`);
+      revalidatePluginWorkspace(pluginData.id, siteId);
     }
 
     async function saveInlineSettings(formData: FormData) {
@@ -801,7 +801,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         }
       }
       await savePluginConfig(pluginData.id, nextConfig);
-      revalidatePath(`/app/plugins/${pluginData.id}`);
+      revalidatePluginWorkspace(pluginData.id, effectiveSiteId);
     }
 
     return (
@@ -1145,103 +1145,16 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
                 />
 
                 {showCreateSlide ? (
-                  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
-                    <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-stone-300 bg-white p-6 shadow-2xl">
-                      <form id="create-carousel-slide" action={saveCollectionChild}>
-                        <input type="hidden" name="siteId" value={effectiveSiteId} />
-                        <input type="hidden" name="setId" value={selectedSet.id} />
-
-                      <div className="mb-5 flex items-start justify-between gap-4">
-                        <div className="min-w-0 flex-1">
-                          <label className="block px-2">
-                            <span className="sr-only">Title</span>
-                            <input
-                              name="title"
-                              required
-                              placeholder={`New ${childLabel}`}
-                              className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 font-cal text-3xl text-black outline-none focus:border-stone-300 focus:bg-stone-50"
-                            />
-                          </label>
-                          <p className="mt-2 px-2 text-sm text-stone-600">
-                            Create a new slide for the {selectedSet.title || selectedSet.handle} carousel.
-                          </p>
-                        </div>
-                        <div className="flex items-start gap-3">
-                          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Status</div>
-                            <select
-                              name="workflow_state"
-                              form="create-carousel-slide"
-                              defaultValue="published"
-                              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-black"
-                            >
-                              {workflowStates.map((state) => (
-                                <option key={state} value={state}>
-                                  {humanizeCollectionLabel(state)}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Sort Order</div>
-                            <input
-                              name="sort_order"
-                              form="create-carousel-slide"
-                              type="number"
-                              defaultValue="0"
-                              className="w-20 rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-black"
-                            />
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            <Link
-                              href={buildCollectionHref({ createSlide: undefined })}
-                              className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
-                            >
-                              Close
-                            </Link>
-                            <button type="submit" className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold text-white">
-                              Save {childLabel}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-                        <div className="space-y-4 rounded-xl border border-stone-200 bg-stone-50 p-4">
-                          <MediaPickerField
-                            siteId={effectiveSiteId}
-                            name="media_id"
-                            label="Media Manager"
-                            allowUpload
-                            allowedMimePrefixes={["image/"]}
-                          />
-                        </div>
-
-                        <div className="space-y-4">
-                          <label className="grid gap-2 text-sm text-black">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">Description</span>
-                            <textarea name="description" rows={10} className="rounded-lg border border-stone-200 bg-white px-3 py-3 text-sm text-black" />
-                          </label>
-
-                          <label className="grid gap-2 text-sm text-black">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA Text</span>
-                            <textarea name="cta_text" rows={3} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black" />
-                          </label>
-
-                          <label className="grid gap-2 text-sm text-black">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-500">CTA URL</span>
-                            <CarouselCtaUrlField
-                              name="cta_url"
-                              siteSubdomain={effectiveSite?.subdomain || ""}
-                              rows={3}
-                              className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-black"
-                            />
-                          </label>
-                        </div>
-                      </div>
-                      </form>
-                    </div>
-                  </div>
+                  <CollectionChildCreateModal
+                    siteId={effectiveSiteId}
+                    siteSubdomain={effectiveSite?.subdomain || ""}
+                    setId={selectedSet.id}
+                    setTitle={selectedSet.title || selectedSet.handle}
+                    childLabel={childLabel}
+                    closeHref={buildCollectionHref({ createSlide: undefined })}
+                    workflowStates={workflowStates}
+                    saveAction={saveCollectionChild}
+                  />
                 ) : null}
 
                 {editSlideId

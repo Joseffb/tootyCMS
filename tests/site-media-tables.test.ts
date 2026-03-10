@@ -74,6 +74,16 @@ describe("site media tables", () => {
     expect(mocks.transaction).toHaveBeenCalledTimes(1);
   });
 
+  it("reports site media tables as ready only when both the table and sequence exist", async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [{ relation_name: "present" }] });
+    mocks.execute.mockResolvedValueOnce({ rows: [{ relation_name: null }] });
+
+    const { siteMediaTableReady } = await import("@/lib/site-media-tables");
+
+    await expect(siteMediaTableReady("site-1")).resolves.toBe(false);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
   it("repairs the id default and sequence ownership when ensuring the physical table", async () => {
     const statements: string[] = [];
     mocks.execute.mockImplementation(async (query: { queryChunks?: Array<{ value?: string }> }) => {

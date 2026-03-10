@@ -1,6 +1,6 @@
 {
   "name": "tooty-cms",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -13,6 +13,10 @@
     "format:write": "prettier --write \"**/*.{css,js,json,jsx,ts,tsx}\"",
     "format": "prettier \"**/*.{css,js,json,jsx,ts,tsx}\"",
     "start": "next start",
+    "vercel:dev": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-dev} vercel dev",
+    "vercel:build": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-build} vercel build",
+    "vercel:preview": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-build} vercel build && vercel deploy --prebuilt",
+    "env:pull": "vercel env pull .env.local",
     "lint": "eslint .",
     "audit:ux": "node ./scripts/audit-ux-a11y.mjs",
     "maintenance:browserslist-db": "node ./scripts/ensure-browserslist-db.mjs",

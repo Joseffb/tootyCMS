@@ -4,6 +4,7 @@ import { placeholderBlurhash } from "@/lib/utils";
 import { getSitePublicUrl } from "@/lib/site-url";
 import Link from "next/link";
 import { DEFAULT_TOOTY_IMAGE } from "@/lib/tooty-images";
+import { getDomainPostAdminItemPath } from "@/lib/domain-post-admin-routes";
 
 type DomainPostCardSite = Pick<SelectSite, "id" | "subdomain" | "customDomain" | "isPrimary">;
 
@@ -34,13 +35,11 @@ export default function DomainPostCard({
   });
   const postUrl = `${baseUrl.replace(/\/$/, "")}/${domainKey}/${data.slug}`;
   const urlLabel = postUrl.replace(/^https?:\/\//, "");
+  const adminHref = getDomainPostAdminItemPath(siteId, domainKey, data.id);
 
   return (
     <div className="relative rounded-lg border border-stone-200 pb-10 shadow-md transition-all hover:shadow-xl dark:border-stone-700 dark:hover:border-white">
-      <Link
-        href={`/site/${siteId}/domain/${domainKey}/post/${data.id}`}
-        className="flex flex-col overflow-hidden rounded-lg"
-      >
+      <Link href={adminHref} className="flex flex-col overflow-hidden rounded-lg">
         <div className="relative h-44 overflow-hidden">
           <BlurImage
             alt={data.title ?? "Card thumbnail"}

@@ -1,3 +1,4 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "devCommand": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-dev} next dev --webpack --port $PORT"
 }

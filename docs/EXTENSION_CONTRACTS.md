@@ -18,6 +18,7 @@ Core must remain platform-generic:
 - Core must not be changed to satisfy one specific plugin or one specific theme.
 - Plugins and themes must adapt to published core contracts and extension points.
 - If a request pressures core toward a one-off extension-specific behavior, the default answer is to reject it or solve it through existing generic contracts.
+- Core may own governed Spine Services and platform-wide default providers when those providers remain replaceable through stable extension contracts.
 
 ## Tenant Storage Boundary Contract (MUST)
 
@@ -49,6 +50,7 @@ Examples:
 
 - `<prefix>site_{id}_domain_posts`
 - `<prefix>site_{id}_domain_post_meta`
+- `<prefix>site_{id}_domain_events_queue`
 - `<prefix>site_{id}_terms`
 - `<prefix>site_{id}_term_taxonomies`
 - `<prefix>site_{id}_media`
@@ -61,6 +63,7 @@ Do not store tenant feature rows in shared multi-tenant feature tables that depe
 Prohibited for feature storage:
 
 - shared `site_*` feature tables like `<prefix>site_domain_posts`, `<prefix>site_media`, `<prefix>site_terms` (table names without concrete `<siteId>` in the table name)
+- shared/global event queues like `<prefix>domain_events_queue`; domain event queues must be site-physical
 
 ### 4) Column rule
 
@@ -168,6 +171,84 @@ Per-site overrides:
 - A site may define custom permalink tokens in settings (WordPress-style), but the default contract above must remain the system default.
 - When overrides are enabled, canonical URL output, sitemap generation, and route resolution must use the active site pattern.
 
+## Extension Trust And Signature Policy (MUST)
+
+Extension installation is a security, trust, and supportability boundary.
+
+Core must classify installable plugin or theme packages into exactly three trust tiers:
+
+### 1) `tooty_verified`
+
+This tier applies when:
+
+- the package signature is valid
+- the signer is in the Tooty trusted signer set shipped or updated through Core trust metadata
+
+This tier may include:
+
+- first-party Tooty extensions
+- third-party extensions that have passed a Tooty marketplace review/signing process
+
+Required behavior:
+
+- install may proceed without an interruptive warning flow
+- UI may show a quiet verification signal such as `Verified by Tooty`
+- this is the only tier allowed to feel seamless by default
+
+### 2) `signed_unverified`
+
+This tier applies when:
+
+- the package signature is cryptographically valid
+- the signer is not in the Tooty trusted signer set
+
+Required behavior:
+
+- install must not be silent
+- UI must present a blocking high-friction warning before installation continues
+- warning copy must frame the risk in terms of security, compatibility, and supportability
+- warning UI must clearly state that the publisher is not verified by Tooty
+- operator confirmation must be explicit; a passive notice or non-blocking toast is insufficient
+
+### 3) `unsigned_or_invalid`
+
+This tier applies when:
+
+- the package has no signature
+- the signature is invalid
+- the signer identity cannot be resolved
+
+Required behavior:
+
+- install must be rejected
+- normal runtime/admin flows must not provide a silent or convenience bypass
+
+### Public Product Framing
+
+Public/admin messaging for extension trust must be framed as:
+
+- security
+- integrity
+- compatibility
+- supportability
+
+Core must not describe the trust policy as brand protection, marketplace suppression, or anti-competitive preference.
+
+### Marketplace / Registry Compatibility
+
+Future marketplace or registry support is allowed, but it must preserve the local trust model.
+
+Rules:
+
+- local signature verification remains mandatory even when a package is downloaded from a Tooty marketplace or registry
+- download source alone must not determine the trust tier
+- a marketplace-listed third-party package may be classified as `tooty_verified` only when it is signed by a Tooty-trusted signer after the Tooty review/approval path
+- a validly signed package from an untrusted signer remains `signed_unverified` whether it is installed from a file upload, direct URL, or future marketplace/registry source
+
+### Dev/Local Exception
+
+If a pre-v1 local development bypass exists, it must be explicitly scoped to dev/test environments and must not weaken the default production trust model.
+
 ## Plugin Contract
 
 Typed contract: `PluginContract` (`lib/extension-contracts.ts`)
@@ -178,6 +259,66 @@ Core's responsibility for plugins is limited to the plugin spine:
 - lifecycle and hook dispatch
 - capability bridge
 - loading/activation mechanism
+
+## Content Meta Contract (MUST)
+
+Core owns canonical content meta persistence.
+
+### Themes
+
+Themes are read-only consumers of content meta.
+
+Allowed surface:
+- `core.content.meta.read(...)`
+
+Themes must not:
+- write content meta
+- delete content meta
+- mutate scheduler or publish state through meta writes
+
+### Plugins
+
+Plugins may use governed content meta CRUD only for plugin-owned content.
+
+Allowed surfaces:
+- `core.content.meta.read(...)`
+- `core.content.meta.set(...)`
+- `core.content.meta.delete(...)`
+
+Mandatory rules:
+- plugin content meta CRUD must not apply to core-owned `post` or `page` content
+- the plugin must declare `permissions.contentMeta.requested = true`
+- the acting user must hold:
+  - `manage_plugin_content_meta`, or
+  - `manage_plugin_{pluginId}_content_meta`
+- plugin-scoped mutation must be restricted to content types owned by that same plugin
+
+Core-reserved hidden content meta keys may exist for core lifecycle features, including:
+- `_view_count`
+- `_publish_at`
+
+Themes and plugins must not rely on hidden core lifecycle keys unless the relevant Core API contract explicitly exposes them.
+
+## Plugin Permission Declaration + Install Consent (MUST)
+
+Core owns roles. Plugins may declare requested capabilities and suggested default role grants, but they do not create roles.
+
+Manifest contract:
+- plugins may declare `permissions.contentMeta.requested = true`
+- plugins may declare `permissions.contentMeta.suggestedRoles`
+
+Derived capability rules:
+- requesting plugin content-meta access creates a plugin-scoped capability contract:
+  - `manage_plugin_{pluginId}_content_meta`
+- plugins must not declare or request capabilities for another plugin id
+
+Install flow rules:
+- if a plugin requests governed permissions, install must present a blocking warning/consent step
+- consent UI must show:
+  - requested capability keys
+  - which existing roles would gain them through suggested grants
+- admin must explicitly confirm before install continues
+- suggested grants for non-existent roles may be ignored, but they must not silently create roles
 
 Infrastructure note:
 
@@ -204,6 +345,7 @@ Hard boundary:
   - generic reusable primitives
   - kernel-owned infrastructure services
   - platform-wide default implementations that remain provider-replaceable through a spine contract
+- This is a governed Spine Services model, not a literal empty-orchestrator model. See [Spine Services](./SPINE_SERVICES.md).
 - Before any new extension-facing feature work continues, existing plugin-specific files must be removed or generalized so they are truly platform-generic.
 - The only pre-v1 exception is the governed `export-import` spine service. Its transport may remain kernel-owned because it is treated as a platform service packaged in plugin form, not as a normal feature plugin.
 - Feature behavior, business rules, admin UI, and route handlers belong in the plugin itself unless the user explicitly approves a platform-level architectural change.

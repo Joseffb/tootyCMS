@@ -16,6 +16,17 @@ function makeRequest(url: string, host: string, cookie?: string) {
   });
 }
 
+function makeForwardedHostRequest(url: string, host: string, forwardedHost: string, cookie?: string) {
+  const headers: Record<string, string> = {
+    host,
+    "x-forwarded-host": forwardedHost,
+  };
+  if (cookie) headers.cookie = cookie;
+  return new NextRequest(url, {
+    headers,
+  });
+}
+
 describe("middleware routing", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_ROOT_DOMAIN = "example.com";
@@ -36,6 +47,7 @@ describe("middleware routing", () => {
     const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/dashboard");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-cache, must-revalidate");
   });
 
   it("rewrites the canonical /app/cp login path to the internal /app login route", async () => {
@@ -44,6 +56,7 @@ describe("middleware routing", () => {
     const response = await proxy(req);
 
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://example.com/app/login");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-cache, must-revalidate");
   });
 
   it("preserves /app/cp/login even when a stale auth cookie exists", async () => {
@@ -111,6 +124,7 @@ describe("middleware routing", () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://example.com/app/cp/settings/users");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-cache, must-revalidate");
   });
 
   it("preserves setup on the root host", async () => {
@@ -167,6 +181,26 @@ describe("middleware routing", () => {
     expect(response.headers.get("x-middleware-rewrite")).toBe("http://localhost:3001/app/login");
   });
 
+  it("treats IPv6 loopback host as localhost root domain", async () => {
+    const req = makeRequest("http://[::1]:3000/app/cp/login", "[::1]:3000");
+
+    const response = await proxy(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://localhost:3000/app/login");
+  });
+
+  it("prefers forwarded host when proxying localhost traffic", async () => {
+    const req = makeForwardedHostRequest(
+      "http://127.0.0.1:3000/app/cp/login",
+      "127.0.0.1:3000",
+      "localhost:3000",
+    );
+
+    const response = await proxy(req);
+
+    expect(response.headers.get("x-middleware-rewrite")).toBe("http://localhost:3000/app/login");
+  });
+
   it("redirects /app/login on the root host to the canonical /app/cp/login path", async () => {
     const req = makeRequest("http://example.com/app/login", "example.com");
 
@@ -182,6 +216,7 @@ describe("middleware routing", () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://example.com/app/cp/login");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-cache, must-revalidate");
   });
 
   it("normalizes preview hostnames before tenant rewrite", async () => {

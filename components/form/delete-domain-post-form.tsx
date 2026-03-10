@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { deleteDomainPost } from "@/lib/actions";
+import { getDomainPostAdminListPath } from "@/lib/domain-post-admin-routes";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -27,6 +28,11 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
     })();
   }, [postName]);
 
+  const expectedConfirmation = resolvedPostName.trim() || "delete";
+  const confirmationHelp = expectedConfirmation === "delete"
+    ? 'Please type "delete" below to confirm removing this untitled entry.'
+    : `Please type "${expectedConfirmation}" below to confirm deleting "${resolvedPostName}".`;
+
   return (
     <form
       action={async (formData: FormData) => {
@@ -36,7 +42,7 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
           return;
         }
         router.refresh();
-        router.push(`/site/${siteId}/domain/${domainKey}`);
+        router.push(getDomainPostAdminListPath(siteId, domainKey));
         toast.success("Successfully deleted entry.");
       }}
       className="rounded-lg border border-red-600 bg-white dark:bg-black"
@@ -44,14 +50,14 @@ export default function DeleteDomainPostForm({ postName, siteId, domainKey }: Pr
       <div className="relative flex flex-col space-y-4 p-5 sm:p-10">
         <h2 className="font-cal text-xl dark:text-white">Delete Entry</h2>
         <p className="text-sm text-stone-500 dark:text-stone-400">
-          Please type <b>&quot;Delete&quot;</b> below to confirm deleting <b>{resolvedPostName}</b>.
+          {confirmationHelp}
         </p>
 
         <input
           name="confirm"
           type="text"
           required
-          placeholder="Please confirm your delete request"
+          placeholder={expectedConfirmation}
           className="w-full max-w-md rounded-md border border-stone-300 text-sm text-stone-900 placeholder-stone-300 focus:border-stone-500 focus:outline-none focus:ring-stone-500 dark:border-stone-600 dark:bg-black dark:text-white dark:placeholder-stone-700"
         />
       </div>

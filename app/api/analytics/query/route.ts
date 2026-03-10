@@ -1,20 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { resolveAnalyticsSiteId } from "@/lib/analytics-site";
-import { ensureDomainQueueTable } from "@/lib/domain-queue";
 import db from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { quotedSiteDomainQueueTableName } from "@/lib/domain-queue";
 
 export const runtime = "nodejs";
-
-function prefix() {
-  const raw = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
-  return raw.endsWith("_") ? raw : `${raw}_`;
-}
-
-function quotedQueueTable() {
-  return `"${`${prefix()}domain_events_queue`.replace(/"/g, "\"\"")}"`;
-}
 
 function normalizeDomain(input: string) {
   return input.trim().toLowerCase().replace(/:\d+$/, "");
@@ -29,11 +20,17 @@ async function queryRows(query: any) {
   return ((result as any)?.rows || []) as Array<Record<string, unknown>>;
 }
 
+function siteQueueTable(siteId?: string | null) {
+  const normalizedSiteId = String(siteId || "").trim();
+  if (!normalizedSiteId) return null;
+  return quotedSiteDomainQueueTableName(normalizedSiteId);
+}
+
 async function fallbackVisitorsPerDay(siteId?: string | null, domain?: string | null) {
-  const table = quotedQueueTable();
+  const table = siteQueueTable(siteId);
+  if (!table) return [];
   const normalizedDomain = normalizeDomain(String(domain || ""));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const bySite = siteId ? sql`AND coalesce(event->>'siteId', '') = ${siteId}` : sql``;
   const byDomain = normalizedDomain && normalizedDomain !== "all" && normalizedDomain !== "nevergonnahappen"
     ? sql`AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}`
     : sql``;
@@ -44,7 +41,6 @@ async function fallbackVisitorsPerDay(siteId?: string | null, domain?: string | 
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${bySite}
       ${byDomain}
     GROUP BY 1
     ORDER BY 1 ASC
@@ -56,10 +52,10 @@ async function fallbackVisitorsPerDay(siteId?: string | null, domain?: string | 
 }
 
 async function fallbackTopPages(siteId?: string | null, domain?: string | null) {
-  const table = quotedQueueTable();
+  const table = siteQueueTable(siteId);
+  if (!table) return [];
   const normalizedDomain = normalizeDomain(String(domain || ""));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const bySite = siteId ? sql`AND coalesce(event->>'siteId', '') = ${siteId}` : sql``;
   const byDomain = normalizedDomain && normalizedDomain !== "all" && normalizedDomain !== "nevergonnahappen"
     ? sql`AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}`
     : sql``;
@@ -70,7 +66,6 @@ async function fallbackTopPages(siteId?: string | null, domain?: string | null) 
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${bySite}
       ${byDomain}
     GROUP BY 1
     ORDER BY visitors DESC
@@ -83,10 +78,10 @@ async function fallbackTopPages(siteId?: string | null, domain?: string | null) 
 }
 
 async function fallbackTopDevices(siteId?: string | null, domain?: string | null) {
-  const table = quotedQueueTable();
+  const table = siteQueueTable(siteId);
+  if (!table) return [];
   const normalizedDomain = normalizeDomain(String(domain || ""));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const bySite = siteId ? sql`AND coalesce(event->>'siteId', '') = ${siteId}` : sql``;
   const byDomain = normalizedDomain && normalizedDomain !== "all" && normalizedDomain !== "nevergonnahappen"
     ? sql`AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}`
     : sql``;
@@ -97,7 +92,6 @@ async function fallbackTopDevices(siteId?: string | null, domain?: string | null
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${bySite}
       ${byDomain}
     GROUP BY 1
     ORDER BY visitors DESC
@@ -110,10 +104,10 @@ async function fallbackTopDevices(siteId?: string | null, domain?: string | null
 }
 
 async function fallbackTopLocations(siteId?: string | null, domain?: string | null) {
-  const table = quotedQueueTable();
+  const table = siteQueueTable(siteId);
+  if (!table) return [];
   const normalizedDomain = normalizeDomain(String(domain || ""));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const bySite = siteId ? sql`AND coalesce(event->>'siteId', '') = ${siteId}` : sql``;
   const byDomain = normalizedDomain && normalizedDomain !== "all" && normalizedDomain !== "nevergonnahappen"
     ? sql`AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}`
     : sql``;
@@ -124,7 +118,6 @@ async function fallbackTopLocations(siteId?: string | null, domain?: string | nu
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${bySite}
       ${byDomain}
     GROUP BY 1
     ORDER BY visitors DESC
@@ -137,10 +130,10 @@ async function fallbackTopLocations(siteId?: string | null, domain?: string | nu
 }
 
 async function fallbackTopSources(siteId?: string | null, domain?: string | null) {
-  const table = quotedQueueTable();
+  const table = siteQueueTable(siteId);
+  if (!table) return [];
   const normalizedDomain = normalizeDomain(String(domain || ""));
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const bySite = siteId ? sql`AND coalesce(event->>'siteId', '') = ${siteId}` : sql``;
   const byDomain = normalizedDomain && normalizedDomain !== "all" && normalizedDomain !== "nevergonnahappen"
     ? sql`AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}`
     : sql``;
@@ -151,7 +144,6 @@ async function fallbackTopSources(siteId?: string | null, domain?: string | null
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${bySite}
       ${byDomain}
     GROUP BY 1
     ORDER BY visitors DESC
@@ -185,10 +177,13 @@ async function fallbackDomainShare(domain: string, siteId?: string | null) {
       meta: { provider: "internal_queue", fallback: true, window_days: 30 },
     };
   }
-  const table = quotedQueueTable();
-  const siteFilter = siteId
-    ? sql`AND coalesce(event->>'siteId', '') = ${siteId}`
-    : sql``;
+  const table = siteQueueTable(siteId);
+  if (!table) {
+    return {
+      data: [{ domain: normalizedDomain, pct_hits: 0, hits: 0, total_hits: 0 }],
+      meta: { provider: "internal_queue", fallback: true, window_days: 30 },
+    };
+  }
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const totalResult = await db.execute(sql`
     SELECT COUNT(*)::int AS count
@@ -196,7 +191,6 @@ async function fallbackDomainShare(domain: string, siteId?: string | null) {
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${siteFilter}
   `);
   const total = Number((totalResult as any)?.rows?.[0]?.count || 0);
   if (!total) {
@@ -212,7 +206,6 @@ async function fallbackDomainShare(domain: string, siteId?: string | null) {
     WHERE status = 'processed'
       AND coalesce(event->>'name', '') = 'page_view'
       AND created_at >= ${thirtyDaysAgo}
-      ${siteFilter}
       AND lower(coalesce(event->>'domain', '')) = ${normalizedDomain}
   `);
   const hits = Number((domainResult as any)?.rows?.[0]?.count || 0);
@@ -263,7 +256,6 @@ async function fallbackForQuery(name: string, siteId?: string | null, domain?: s
 }
 
 export async function GET(req: NextRequest) {
-  await ensureDomainQueueTable();
   const incoming = new URL(req.url);
   const name = incoming.searchParams.get("name");
   if (!name) return new NextResponse("Missing ?name=", { status: 400 });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { VIEW_COUNT_META_KEY } from "@/lib/view-count";
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock("@/lib/site-domain-type-tables", () => ({
   siteTableExists: mocks.siteTableExists,
 }));
 
-import { listSiteDomainPostMetaMany, listSiteDomainPosts } from "@/lib/site-domain-post-store";
+import { countSiteDomainPostUsageByDomain, listSiteDomainPostMetaMany, listSiteDomainPosts } from "@/lib/site-domain-post-store";
 
 describe("listSiteDomainPostMetaMany", () => {
   beforeEach(() => {
@@ -48,7 +49,7 @@ describe("listSiteDomainPostMetaMany", () => {
     });
     mocks.siteTableExists.mockResolvedValue(true);
     mocks.execute.mockResolvedValue({
-      rows: [{ domainPostId: "post-1", key: "view_count", value: "9" }],
+      rows: [{ domainPostId: "post-1", key: VIEW_COUNT_META_KEY, value: "9" }],
     });
   });
 
@@ -57,10 +58,10 @@ describe("listSiteDomainPostMetaMany", () => {
       siteId: "site-1",
       dataDomainKey: "post",
       postIds: ["post-1", "post-2"],
-      keys: ["view_count"],
+      keys: [VIEW_COUNT_META_KEY],
     });
 
-    expect(rows).toEqual([{ domainPostId: "post-1", key: "view_count", value: "9" }]);
+    expect(rows).toEqual([{ domainPostId: "post-1", key: VIEW_COUNT_META_KEY, value: "9" }]);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     const query = mocks.execute.mock.calls[0]?.[0];
     const dialect = new PgDialect();
@@ -94,7 +95,24 @@ describe("listSiteDomainPostMetaMany", () => {
       keys: ["carousel_id"],
     });
 
-    expect(rows).toEqual([{ domainPostId: "post-1", key: "view_count", value: "9" }]);
+    expect(rows).toEqual([{ domainPostId: "post-1", key: VIEW_COUNT_META_KEY, value: "9" }]);
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an empty result when pooled reads still report the meta table as a missing relation", async () => {
+    mocks.execute.mockRejectedValueOnce({
+      code: "42P01",
+      message: 'relation "tooty_site_1_domain_post_meta" does not exist',
+    });
+
+    const rows = await listSiteDomainPostMetaMany({
+      siteId: "site-1",
+      dataDomainKey: "post",
+      postIds: ["post-1"],
+      keys: [VIEW_COUNT_META_KEY],
+    });
+
+    expect(rows).toEqual([]);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
 });
@@ -152,6 +170,59 @@ describe("listSiteDomainPosts", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.dataDomainKey).toBe("carousel_slide");
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a domain when the read pool still reports the content table as a missing relation", async () => {
+    mocks.execute.mockRejectedValueOnce({
+      code: "42P01",
+      message: 'relation "tooty_site_1_domain_carousel_slide" does not exist',
+    });
+
+    const rows = await listSiteDomainPosts({
+      siteId: "site-1",
+      dataDomainKey: "carousel-slide",
+      includeInactiveDomains: true,
+    });
+
+    expect(rows).toEqual([]);
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("countSiteDomainPostUsageByDomain", () => {
+  beforeEach(() => {
+    mocks.execute.mockReset();
+    mocks.listSiteDataDomains.mockReset();
+    mocks.ensureSiteDomainTypeTables.mockReset();
+    mocks.siteTableExists.mockReset();
+
+    mocks.listSiteDataDomains.mockResolvedValue([
+      {
+        id: 1,
+        key: "post",
+        label: "Posts",
+        description: null,
+        settings: {},
+        isActive: true,
+      },
+    ]);
+    mocks.ensureSiteDomainTypeTables.mockResolvedValue({
+      contentTable: "tooty_site_1_domain_post",
+      metaTable: "tooty_site_1_domain_post_meta",
+    });
+    mocks.siteTableExists.mockResolvedValue(true);
+  });
+
+  it("treats missing pooled content relations as zero usage instead of throwing", async () => {
+    mocks.execute.mockRejectedValueOnce({
+      code: "42P01",
+      message: 'relation "tooty_site_1_domain_post" does not exist',
+    });
+
+    const counts = await countSiteDomainPostUsageByDomain("site-1");
+
+    expect(counts.get(1)).toBe(0);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
 });

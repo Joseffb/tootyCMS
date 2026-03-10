@@ -1,5 +1,5 @@
 import { isbot } from "isbot";
-export const VIEW_COUNT_META_KEY = "view_count";
+export const VIEW_COUNT_META_KEY = "_view_count";
 export const VIEW_COUNT_COOKIE = "tooty_view_count_window";
 export const VIEW_COUNT_WINDOW_MS = 1000 * 60 * 60 * 6;
 const VIEW_COUNT_COOKIE_LIMIT = 32;

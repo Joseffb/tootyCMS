@@ -63,7 +63,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
     dataDomainKey,
     postId,
   });
-  const current = parseViewCount(metaRows.find((row) => row.key === VIEW_COUNT_META_KEY)?.value);
+  const currentRow = metaRows.find((row) => row.key === VIEW_COUNT_META_KEY);
+  const current = parseViewCount(currentRow?.value);
   const nextValue = current + 1;
 
   await upsertSiteDomainPostMeta({

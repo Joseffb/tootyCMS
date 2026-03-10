@@ -3,6 +3,10 @@ import db from "@/lib/db";
 import { getTextSetting, setTextSetting } from "@/lib/cms-config";
 import { rbacRoles, sites, users } from "@/lib/schema";
 import { getSiteUserRole } from "@/lib/site-user-tables";
+import {
+  isPluginScopedContentMetaCapability,
+  MANAGE_PLUGIN_CONTENT_META_CAPABILITY,
+} from "@/lib/plugin-permissions";
 
 export const NETWORK_ADMIN_ROLE = "network admin" as const;
 export const USER_ROLES = ["administrator", "editor", "author"] as const;
@@ -46,10 +50,12 @@ export const SITE_CAPABILITIES = [
   "site.media.delete.own",
   "site.media.delete.any",
   "site.analytics.read",
+  MANAGE_PLUGIN_CONTENT_META_CAPABILITY,
 ] as const;
 
-export type SiteCapability = (typeof SITE_CAPABILITIES)[number];
-export type CapabilityMap = Record<SiteCapability, boolean>;
+export type PluginSiteCapability = `manage_plugin_${string}_content_meta`;
+export type SiteCapability = (typeof SITE_CAPABILITIES)[number] | PluginSiteCapability;
+export type CapabilityMap = Record<string, boolean>;
 export type CapabilityMatrix = Record<string, CapabilityMap>;
 const RBAC_CAPABILITY_MATRIX_KEY = "rbac_capability_matrix_v1";
 const CAPABILITY_CACHE_TTL_MS = 5_000;
@@ -108,7 +114,7 @@ function normalizeCapabilityMap(input: unknown, fallback: CapabilityMap): Capabi
     "site.media.delete.any": ["media.delete.any", "media.manage"],
     "site.analytics.read": ["analytics.read"],
   };
-  return Object.fromEntries(
+  const normalized = Object.fromEntries(
     SITE_CAPABILITIES.map((capability) => {
       const aliases = legacyAlias[capability] ?? [];
       const legacyValue = aliases
@@ -117,6 +123,18 @@ function normalizeCapabilityMap(input: unknown, fallback: CapabilityMap): Capabi
       return [capability, Boolean(source[capability] ?? legacyValue ?? fallback[capability])];
     }),
   ) as CapabilityMap;
+
+  const dynamicCapabilityKeys = new Set<string>();
+  for (const key of Object.keys(fallback || {})) {
+    if (isPluginScopedContentMetaCapability(key)) dynamicCapabilityKeys.add(key);
+  }
+  for (const key of Object.keys(source)) {
+    if (isPluginScopedContentMetaCapability(key)) dynamicCapabilityKeys.add(key);
+  }
+  for (const capability of dynamicCapabilityKeys) {
+    normalized[capability] = Boolean(source[capability] ?? fallback[capability]);
+  }
+  return normalized;
 }
 
 function defaultCapabilityMapFor(role: string): CapabilityMap {
@@ -160,6 +178,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": true,
       "site.analytics.read": true,
+      [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: true,
     };
   }
   if (normalized === "editor") {
@@ -199,6 +218,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": true,
       "site.analytics.read": true,
+      [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
     };
   }
   if (normalized === "author") {
@@ -238,6 +258,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": false,
       "site.analytics.read": false,
+      [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
     };
   }
   return {
@@ -276,6 +297,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
     "site.media.delete.own": false,
     "site.media.delete.any": false,
     "site.analytics.read": false,
+    [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
   };
 }
 
@@ -457,7 +479,33 @@ export async function roleHasCapability(role: unknown, capability: SiteCapabilit
   const normalizedRole = normalizeRole(role);
   if (!normalizedRole) return false;
   const matrix = await getCapabilityMatrix();
-  return Boolean(matrix[normalizedRole]?.[capability]);
+  const value = Boolean(matrix[normalizedRole]?.[capability]);
+  if (value) return true;
+  if (isPluginScopedContentMetaCapability(capability)) {
+    return Boolean(matrix[normalizedRole]?.[MANAGE_PLUGIN_CONTENT_META_CAPABILITY]);
+  }
+  return false;
+}
+
+export async function grantRoleCapabilities(role: string, capabilities: string[]) {
+  const normalizedRole = normalizeRole(role);
+  if (!normalizedRole) throw new Error("Role is required");
+  const current = await getCapabilityMatrix();
+  const next = {
+    ...(current[normalizedRole] ?? defaultCapabilityMapFor(normalizedRole)),
+  };
+  for (const capability of capabilities) {
+    const normalizedCapability = String(capability || "").trim().toLowerCase();
+    if (!normalizedCapability) continue;
+    if (
+      !(SITE_CAPABILITIES as readonly string[]).includes(normalizedCapability) &&
+      !isPluginScopedContentMetaCapability(normalizedCapability)
+    ) {
+      continue;
+    }
+    next[normalizedCapability] = true;
+  }
+  await saveRoleCapabilities(normalizedRole, next);
 }
 
 export async function getSiteRoleForUser(siteId: string, userId: string) {
