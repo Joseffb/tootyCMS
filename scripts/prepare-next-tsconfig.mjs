@@ -13,8 +13,25 @@ const basePath = path.resolve(repoRoot, baseArg || "tsconfig.json");
 function sanitizeIncludes(include) {
   return include.filter((entry) => {
     const normalized = String(entry || "");
-    return !normalized.startsWith(".next-test-") && !normalized.startsWith(".next-playwright-harness-");
+    return (
+      !normalized.startsWith(".next-test-") &&
+      !normalized.startsWith(".next-playwright-harness-") &&
+      !normalized.startsWith(".next-vercel-dev")
+    );
   });
+}
+
+function normalizeRelativePath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  return normalized === "" ? "." : normalized;
+}
+
+function rebaseRelativePath(value, fromDir, toDir) {
+  const raw = String(value || "").trim();
+  if (!raw) return raw;
+  if (path.isAbsolute(raw)) return raw;
+  const absolute = path.resolve(fromDir, raw);
+  return normalizeRelativePath(path.relative(toDir, absolute));
 }
 
 function createManagedTsconfig(baseConfig, distDir = "") {
@@ -24,7 +41,14 @@ function createManagedTsconfig(baseConfig, distDir = "") {
   const nextConfig = {
     ...baseConfig,
     include,
-    exclude: Array.from(new Set([...exclude, ".next-test-*/**", ".next-playwright-harness-*/**"])),
+    exclude: Array.from(
+      new Set([
+        ...exclude,
+        ".next-test-*/**",
+        ".next-playwright-harness-*/**",
+        ".next-vercel-dev*/**",
+      ]),
+    ),
   };
 
   if (distDir) {
@@ -47,6 +71,25 @@ export function buildManagedTsconfig(baseConfig, distDir = "") {
 export function prepareManagedTsconfig(outputFile, distDir = "", sourceFile = basePath) {
   const base = JSON.parse(fs.readFileSync(sourceFile, "utf8"));
   const nextConfig = createManagedTsconfig(base, distDir);
+  const outputDir = path.dirname(path.resolve(outputFile));
+  const sourceDir = path.dirname(path.resolve(sourceFile));
+
+  if (nextConfig.compilerOptions && typeof nextConfig.compilerOptions === "object") {
+    const compilerOptions = { ...nextConfig.compilerOptions };
+    const hasPaths =
+      compilerOptions.paths &&
+      typeof compilerOptions.paths === "object" &&
+      Object.keys(compilerOptions.paths).length > 0;
+
+    if (typeof compilerOptions.baseUrl === "string" && compilerOptions.baseUrl.trim()) {
+      compilerOptions.baseUrl = rebaseRelativePath(compilerOptions.baseUrl, sourceDir, outputDir);
+    } else if (hasPaths) {
+      compilerOptions.baseUrl = normalizeRelativePath(path.relative(outputDir, sourceDir));
+    }
+
+    nextConfig.compilerOptions = compilerOptions;
+  }
+
   fs.writeFileSync(outputFile, `${JSON.stringify(nextConfig, null, 2)}\n`);
 }
 

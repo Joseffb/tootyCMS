@@ -27,6 +27,26 @@ Current tree status:
 
 ## Active Items
 
+### 8. Local `vercel dev` isolation and lock clarity
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/scripts/vercel-dev.sh`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/scripts/prepare-next-tsconfig.mjs`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/package.json`
+- Scope:
+  - make `pnpm vercel:dev` use a managed Vercel-specific tsconfig
+  - suppress the Vercel CLI self-upgrade prompt that can crash healthy local sessions
+  - fail fast with a clear lock-owner error instead of letting `vercel dev` proxy a broken split-brain session
+- Affected surfaces:
+  - local Vercel dev workflow
+  - `.next-vercel-dev` lock handling
+  - root `tsconfig.json` churn from Vercel-specific dist types
+- Result:
+  - `vercel:dev` now disables the upgrade prompt via `NO_UPDATE_NOTIFIER=1`
+  - it generates and uses a managed Vercel-only tsconfig
+  - it aborts clearly when another Vercel dev session already owns the lock, instead of surfacing a confusing proxy 404
+
 ### 7. Integration harness slot-lock cleanup race
 
 - Status: `verified`

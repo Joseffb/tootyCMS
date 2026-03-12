@@ -13,7 +13,7 @@
     "format:write": "prettier --write \"**/*.{css,js,json,jsx,ts,tsx}\"",
     "format": "prettier \"**/*.{css,js,json,jsx,ts,tsx}\"",
     "start": "next start",
-    "vercel:dev": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-dev} vercel dev",
+    "vercel:dev": "bash ./scripts/vercel-dev.sh",
     "vercel:build": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-build} vercel build",
     "vercel:preview": "NEXT_DIST_DIR=${NEXT_DIST_DIR:-.next-vercel-build} vercel build && vercel deploy --prebuilt",
     "env:pull": "vercel env pull .env.local",
