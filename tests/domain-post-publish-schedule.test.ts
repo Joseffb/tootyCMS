@@ -185,6 +185,49 @@ describe("updateDomainPostMetadata scheduled publish", () => {
     );
   });
 
+  it("forces a currently published post back to unpublished when scheduling a future publish", async () => {
+    const futureIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    mocks.listSiteDomainPostMeta.mockResolvedValue([{ key: "_publish_at", value: futureIso }]);
+    mocks.canUserMutateDomainPost.mockResolvedValue({
+      allowed: true,
+      post: {
+        id: "post-1",
+        siteId: "site-1",
+        dataDomainKey: "page",
+        slug: "about-this-site",
+        title: "About This Site",
+        published: true,
+      },
+    });
+    mocks.setDomainPostPublishedState.mockResolvedValueOnce({
+      ok: true,
+      post: {
+        id: "post-1",
+        slug: "about-this-site",
+        published: false,
+      },
+    });
+
+    const formData = new FormData();
+    formData.append("published", "true");
+    const result = await updateDomainPostMetadata(formData, "post-1", "published");
+
+    expect(mocks.setDomainPostPublishedState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        postId: "post-1",
+        nextPublished: false,
+      }),
+    );
+    expect(mocks.createScheduleEntry).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        scheduled: true,
+        published: false,
+        publishAt: futureIso,
+      }),
+    );
+  });
+
   it("publishes immediately and clears stale _publish_at when the timestamp is due", async () => {
     const dueIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     mocks.listSiteDomainPostMeta.mockResolvedValue([{ key: "_publish_at", value: dueIso }]);

@@ -1,6 +1,6 @@
 import db from "@/lib/db";
 import { sites } from "@/lib/schema";
-import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 import { eq, sql } from "drizzle-orm";
 import { findSiteDataDomainById, listSiteDataDomains } from "@/lib/site-data-domain-registry";
 
@@ -11,6 +11,31 @@ const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
 const ensureCache = new Map<string, { contentTable: string; metaTable: string }>();
 const inFlight = new Map<string, Promise<{ contentTable: string; metaTable: string }>>();
+
+export function resetSiteDomainTypeTablesCache(siteId?: string, domainKey?: string) {
+  const normalizedSiteId = String(siteId || "").trim();
+  const normalizedDomainKey = normalizeDomainKey(String(domainKey || ""));
+  if (!normalizedSiteId) {
+    ensureCache.clear();
+    inFlight.clear();
+    return;
+  }
+
+  if (normalizedDomainKey) {
+    const cacheKey = `${normalizedSiteId}:${normalizedDomainKey}`;
+    ensureCache.delete(cacheKey);
+    inFlight.delete(cacheKey);
+    return;
+  }
+
+  const sitePrefix = `${normalizedSiteId}:`;
+  for (const cacheKey of Array.from(ensureCache.keys())) {
+    if (cacheKey.startsWith(sitePrefix)) ensureCache.delete(cacheKey);
+  }
+  for (const cacheKey of Array.from(inFlight.keys())) {
+    if (cacheKey.startsWith(sitePrefix)) inFlight.delete(cacheKey);
+  }
+}
 
 type SqlExecutor = { execute?: typeof db.execute };
 type QueryRows<T> = { rows?: T[] };
@@ -83,6 +108,15 @@ function isDuplicatePgTypeError(error: unknown) {
   );
 }
 
+function isDuplicatePgRelationError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; constraint?: string };
+  return (
+    candidate.code === "42P07" ||
+    (candidate.code === "23505" && candidate.constraint === "pg_class_relname_nsp_index")
+  );
+}
+
 async function executeDdl(executor: SqlExecutor, statement: string) {
   if (typeof executor.execute !== "function") return;
   try {
@@ -93,16 +127,66 @@ async function executeDdl(executor: SqlExecutor, statement: string) {
   }
 }
 
+async function relationExistsWithExecutor(executor: SqlExecutor, relationName: string) {
+  if (typeof executor.execute !== "function") return true;
+  const result = (await executor.execute(
+    sql`SELECT to_regclass(${`public.${relationName}`}) AS relation_name`,
+  )) as QueryRows<{ relation_name?: string | null }>;
+  if (!result || !Array.isArray(result.rows)) return true;
+  return Boolean(result.rows[0]?.relation_name);
+}
+
+async function waitForRelationVisible(executor: SqlExecutor, relationName: string, attempts = 10) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await relationExistsWithExecutor(executor, relationName)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+  }
+  return false;
+}
+
+function createPendingRelationRetryError(relationName: string) {
+  return Object.assign(new Error(`Pending concurrent relation creation: ${relationName}`), { code: "55P03" });
+}
+
+async function createNamedRelation(
+  executor: SqlExecutor,
+  relationName: string,
+  statement: string,
+  options?: { allowDuplicateType?: boolean },
+) {
+  if (typeof executor.execute !== "function") return;
+  try {
+    await executor.execute(sql.raw(statement));
+  } catch (error) {
+    const duplicateType = Boolean(options?.allowDuplicateType) && isDuplicatePgTypeError(error);
+    const duplicateRelation = isDuplicatePgRelationError(error);
+    if (!duplicateType && !duplicateRelation) throw error;
+    if (!(await waitForRelationVisible(executor, relationName))) {
+      throw createPendingRelationRetryError(relationName);
+    }
+  }
+  if (!(await waitForRelationVisible(executor, relationName))) {
+    throw createPendingRelationRetryError(relationName);
+  }
+}
+
 async function createPhysicalSiteDomainTypeTables(executor: SqlExecutor, siteId: string, domainKey: string) {
   const contentTable = siteDomainTypeTableName(siteId, domainKey);
   const metaTable = siteDomainTypeMetaTableName(siteId, domainKey);
   const prefixedUsers = `${normalizedPrefix}network_users`;
+  const contentPrimaryKey = physicalObjectName(contentTable, "pkey");
+  const contentSlugUnique = physicalObjectName(contentTable, "slug_key");
+  const contentUserForeignKey = physicalObjectName(contentTable, "user_id_fkey");
+  const metaPrimaryKey = physicalObjectName(metaTable, "pkey");
+  const metaDomainPostForeignKey = physicalObjectName(metaTable, "domain_post_id_fkey");
+  const metaDomainPostKeyUnique = physicalObjectName(metaTable, "domain_post_id_key_key");
 
-  await executeDdl(
+  await createNamedRelation(
     executor,
+    contentTable,
     `
     CREATE TABLE IF NOT EXISTS ${quoted(contentTable)} (
-      "id" TEXT PRIMARY KEY,
+      "id" TEXT CONSTRAINT ${quoted(contentPrimaryKey)} PRIMARY KEY,
       "title" TEXT,
       "description" TEXT,
       "content" TEXT,
@@ -113,12 +197,13 @@ async function createPhysicalSiteDomainTypeTables(executor: SqlExecutor, siteId:
       "image" TEXT NOT NULL DEFAULT '',
       "imageBlurhash" TEXT NOT NULL DEFAULT '${DEFAULT_IMAGE_BLURHASH}',
       "published" BOOLEAN NOT NULL DEFAULT FALSE,
-      "userId" TEXT REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+      "userId" TEXT CONSTRAINT ${quoted(contentUserForeignKey)} REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
       "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE ("slug")
+      CONSTRAINT ${quoted(contentSlugUnique)} UNIQUE ("slug")
     )
   `,
+    { allowDuplicateType: true },
   );
 
   await executeDdl(
@@ -137,19 +222,21 @@ async function createPhysicalSiteDomainTypeTables(executor: SqlExecutor, siteId:
   `,
   );
 
-  await executeDdl(
+  await createNamedRelation(
     executor,
+    metaTable,
     `
     CREATE TABLE IF NOT EXISTS ${quoted(metaTable)} (
-      "id" BIGSERIAL PRIMARY KEY,
-      "domainPostId" TEXT NOT NULL REFERENCES ${quoted(contentTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "id" BIGSERIAL CONSTRAINT ${quoted(metaPrimaryKey)} PRIMARY KEY,
+      "domainPostId" TEXT NOT NULL CONSTRAINT ${quoted(metaDomainPostForeignKey)} REFERENCES ${quoted(contentTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
       "key" TEXT NOT NULL,
       "value" TEXT NOT NULL DEFAULT '',
       "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE ("domainPostId", "key")
+      CONSTRAINT ${quoted(metaDomainPostKeyUnique)} UNIQUE ("domainPostId", "key")
     )
   `,
+    { allowDuplicateType: true },
   );
 
   await executeDdl(
@@ -168,11 +255,11 @@ export async function ensureSiteDomainTypeTables(siteId: string, domainKey: stri
   if (!normalizedDomainKey) throw new Error("domainKey is required.");
 
   const cacheKey = `${normalizedSiteId}:${normalizedDomainKey}`;
-  const cached = ensureCache.get(cacheKey);
-  if (cached) return cached;
-
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
+
+  const cached = ensureCache.get(cacheKey);
+  if (cached) return cached;
 
   const resolveSiteForValidation = async () => {
     let siteLookupPerformed = false;
@@ -223,17 +310,20 @@ export async function ensureSiteDomainTypeTables(siteId: string, domainKey: stri
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
       await createPhysicalSiteDomainTypeTables(tx, normalizedSiteId, normalizedDomainKey);
 
-      const resolved = {
+      return {
         contentTable: siteDomainTypeTableName(normalizedSiteId, normalizedDomainKey),
         metaTable: siteDomainTypeMetaTableName(normalizedSiteId, normalizedDomainKey),
       };
-      ensureCache.set(cacheKey, resolved);
-      return resolved;
     }),
   );
 
-  inFlight.set(cacheKey, run);
-  return run.finally(() => {
+  const tracked = run.then((resolved) => {
+    ensureCache.set(cacheKey, resolved);
+    return resolved;
+  });
+
+  inFlight.set(cacheKey, tracked);
+  return tracked.finally(() => {
     inFlight.delete(cacheKey);
   });
 }

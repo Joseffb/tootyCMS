@@ -34,6 +34,9 @@ type Props = {
     editMenu?: string | string[];
     createItem?: string | string[];
     editItem?: string | string[];
+    pendingMenuTitle?: string | string[];
+    pendingMenuKey?: string | string[];
+    pendingMenuLocation?: string | string[];
   }>;
 };
 
@@ -102,6 +105,9 @@ function buildMenuSettingsHref(
     editMenu?: string;
     createItem?: boolean;
     editItem?: string;
+    pendingMenuTitle?: string;
+    pendingMenuKey?: string;
+    pendingMenuLocation?: string;
   } = {},
 ) {
   const url = new URL(`http://tooty.local${adminBasePath}/site/${siteId}/settings/menus`);
@@ -111,6 +117,9 @@ function buildMenuSettingsHref(
   if (options.editMenu) url.searchParams.set("editMenu", options.editMenu);
   if (options.createItem) url.searchParams.set("createItem", "1");
   if (options.editItem) url.searchParams.set("editItem", options.editItem);
+  if (options.pendingMenuTitle) url.searchParams.set("pendingMenuTitle", options.pendingMenuTitle);
+  if (options.pendingMenuKey) url.searchParams.set("pendingMenuKey", options.pendingMenuKey);
+  if (options.pendingMenuLocation) url.searchParams.set("pendingMenuLocation", options.pendingMenuLocation);
   return `${url.pathname}${url.search}`;
 }
 
@@ -127,6 +136,13 @@ function revalidateMenuPaths(siteId: string, adminBasePath: string) {
   revalidatePath("/[domain]/t/[slug]", "page");
 }
 
+async function readMenuWithFallback(siteId: string, menuId: string) {
+  const directMenu = await getSiteMenuDefinition(siteId, menuId);
+  if (directMenu) return directMenu;
+  const listedMenus = await listSiteMenus(siteId);
+  return listedMenus.find((menu) => menu.id === menuId) || null;
+}
+
 async function waitForMenuReadConsistency(
   siteId: string,
   menuId: string,
@@ -135,10 +151,11 @@ async function waitForMenuReadConsistency(
 ) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const menu = await getSiteMenuDefinition(siteId, menuId);
-    if (matches(menu)) return;
+    const menu = await readMenuWithFallback(siteId, menuId);
+    if (matches(menu)) return menu;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
+  return null;
 }
 
 function upsertMenuIntoList(menus: SiteMenuDefinition[], menu: SiteMenuDefinition) {
@@ -175,22 +192,40 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
   const selectedMenuId = stringParam(query.menu) || editMenuId;
   const createItemRequested = stringParam(query.createItem) === "1";
   const editItemId = stringParam(query.editItem);
+  const pendingMenuTitle = String(stringParam(query.pendingMenuTitle)).trim();
+  const pendingMenuKey = String(stringParam(query.pendingMenuKey)).trim();
+  const pendingMenuLocation = String(stringParam(query.pendingMenuLocation)).trim();
+  const shouldRenderPendingMenuState = Boolean(selectedMenuId && pendingMenuTitle);
   let selectedMenu = selectedMenuId
-    ? menus.find((menu) => menu.id === selectedMenuId) || (await getSiteMenuDefinition(siteData.id, selectedMenuId))
+    ? menus.find((menu) => menu.id === selectedMenuId) || (await readMenuWithFallback(siteData.id, selectedMenuId))
     : null;
-  if (selectedMenuId && !selectedMenu) {
-    await waitForMenuReadConsistency(siteData.id, selectedMenuId, (menu) => Boolean(menu), 12_000);
-    menus = await listSiteMenus(siteData.id);
+  if (selectedMenuId && !selectedMenu && !shouldRenderPendingMenuState) {
     selectedMenu =
-      menus.find((menu) => menu.id === selectedMenuId) || (await getSiteMenuDefinition(siteData.id, selectedMenuId));
+      (await waitForMenuReadConsistency(siteData.id, selectedMenuId, (menu) => Boolean(menu), 12_000)) || null;
+    menus = await listSiteMenus(siteData.id);
+    selectedMenu = selectedMenu || menus.find((menu) => menu.id === selectedMenuId) || null;
   }
   if (selectedMenuId) {
-    const freshSelectedMenu = await getSiteMenuDefinition(siteData.id, selectedMenuId);
+    const freshSelectedMenu = await readMenuWithFallback(siteData.id, selectedMenuId);
     if (freshSelectedMenu) {
       selectedMenu = freshSelectedMenu;
       menus = upsertMenuIntoList(menus, freshSelectedMenu);
     }
   }
+  const pendingSelectedMenu =
+    selectedMenuId && !selectedMenu && pendingMenuTitle
+      ? ({
+          id: selectedMenuId,
+          siteId: siteData.id,
+          key: pendingMenuKey || "pending-menu",
+          title: pendingMenuTitle,
+          description: "",
+          location: (pendingMenuLocation || "unassigned") as SiteMenuDefinition["location"],
+          sortOrder: 10,
+          items: [],
+        } satisfies SiteMenuDefinition)
+      : null;
+  const selectedMenuRecord = selectedMenu || pendingSelectedMenu;
   const selectedItemId = stringParam(query.item) || editItemId;
   const selectedItem = selectedMenu?.items.find((item) => item.id === selectedItemId) || null;
   const editingMenu = editMenuId
@@ -246,19 +281,26 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     const record = menuId
       ? await updateSiteMenu(siteData.id, menuId, payload)
       : await createSiteMenu(siteData.id, payload);
-
     await waitForMenuReadConsistency(
       siteData.id,
       record.id,
       (menu) =>
-        Boolean(menu) &&
-        menu?.key === payload.key &&
-        menu?.title === payload.title &&
-        menu?.location === payload.location,
+        menu != null &&
+        menu.key === record.key &&
+        menu.title === record.title &&
+        menu.location === record.location,
+      menuId ? 12_000 : 20_000,
     );
 
     revalidateMenuPaths(siteData.id, adminBasePath);
-    redirect(menuSettingsHref(adminBasePath, siteData.id, record.id));
+    redirect(
+      buildMenuSettingsHref(adminBasePath, siteData.id, {
+        menu: record.id,
+        pendingMenuTitle: record.title,
+        pendingMenuKey: record.key,
+        pendingMenuLocation: String(record.location || "unassigned"),
+      }),
+    );
   }
 
   async function deleteMenuAction(formData: FormData) {
@@ -320,12 +362,12 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
     redirect(menuSettingsHref(adminBasePath, siteData.id, menuId));
   }
 
-  const selectedMenuSettingsHref = selectedMenu
-    ? menuSettingsHref(adminBasePath, siteData.id, selectedMenu.id)
+  const selectedMenuSettingsHref = selectedMenuRecord
+    ? menuSettingsHref(adminBasePath, siteData.id, selectedMenuRecord.id)
     : menuSettingsHref(adminBasePath, siteData.id);
-  const showDetailView = Boolean(selectedMenu);
+  const showDetailView = Boolean(selectedMenuRecord);
   const showListWorkspace = !showDetailView;
-  const showDetailMissingNotice = Boolean(selectedMenuId) && !selectedMenu;
+  const showDetailMissingNotice = Boolean(selectedMenuId) && !selectedMenuRecord;
   const renderMenuForm = showMenuForm ? (
     <section className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
       <div className="flex items-center justify-between gap-3">
@@ -434,12 +476,17 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
         <section className="rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-black">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
-              <h1 className="font-cal text-2xl text-black dark:text-white">{selectedMenu?.title}</h1>
+              <h1 className="font-cal text-2xl text-black dark:text-white">{selectedMenuRecord?.title}</h1>
               <p className="max-w-3xl text-sm text-stone-600 dark:text-stone-400">
-                {selectedMenu?.description?.trim()
-                  ? selectedMenu.description
+                {selectedMenuRecord?.description?.trim()
+                  ? selectedMenuRecord.description
                   : "Manage this menu’s items, images, descriptions, and extension-ready metadata."}
               </p>
+              {selectedMenuRecord && !selectedMenu ? (
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                  Syncing the newly saved menu. Details will appear as soon as the database read catches up.
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-3 md:justify-end">
               <Link
@@ -449,7 +496,10 @@ export default async function SiteMenuSettingsPage({ params, searchParams }: Pro
                 Back to Menus
               </Link>
               <Link
-                href={buildMenuSettingsHref(adminBasePath, siteData.id, { menu: selectedMenu?.id, editMenu: selectedMenu?.id })}
+                href={buildMenuSettingsHref(adminBasePath, siteData.id, {
+                  menu: selectedMenuRecord?.id,
+                  editMenu: selectedMenuRecord?.id,
+                })}
                 className="rounded-md border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-black"
               >
                 Edit Menu

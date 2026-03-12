@@ -1,7 +1,7 @@
 import db from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { rbacRoles, users, sites } from "@/lib/schema";
-import { sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
@@ -167,6 +167,12 @@ async function createPhysicalSiteUserTables(executor: SqlExecutor, siteId: strin
   const prefixedUsers = `${normalizedPrefix}network_users`;
   const usersIdSequence = usersIdSequenceName(siteId);
   const userMetaIdSequence = userMetaIdSequenceName(siteId);
+  const usersPrimaryKey = physicalObjectName(usersTable, "pkey");
+  const usersUserForeignKey = physicalObjectName(usersTable, "user_id_fkey");
+  const usersUserUnique = physicalObjectName(usersTable, "user_id_key");
+  const metaPrimaryKey = physicalObjectName(metaTable, "pkey");
+  const metaSiteUserForeignKey = physicalObjectName(metaTable, "site_user_id_fkey");
+  const metaSiteUserKeyUnique = physicalObjectName(metaTable, "site_user_id_key_key");
 
   await createNamedRelation(
     executor,
@@ -180,13 +186,13 @@ async function createPhysicalSiteUserTables(executor: SqlExecutor, siteId: strin
     usersTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(usersTable)} (
-        id BIGINT PRIMARY KEY DEFAULT nextval('${usersIdSequence}'),
-        user_id TEXT NOT NULL REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        id BIGINT CONSTRAINT ${quoted(usersPrimaryKey)} PRIMARY KEY DEFAULT nextval('${usersIdSequence}'),
+        user_id TEXT NOT NULL CONSTRAINT ${quoted(usersUserForeignKey)} REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
         role TEXT NOT NULL DEFAULT 'author',
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id)
+        CONSTRAINT ${quoted(usersUserUnique)} UNIQUE (user_id)
       )
     `,
     { allowDuplicateType: true },
@@ -224,13 +230,13 @@ async function createPhysicalSiteUserTables(executor: SqlExecutor, siteId: strin
     metaTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(metaTable)} (
-        id BIGINT PRIMARY KEY DEFAULT nextval('${userMetaIdSequence}'),
-        site_user_id BIGINT NOT NULL REFERENCES ${quoted(usersTable)}("id") ON DELETE CASCADE,
+        id BIGINT CONSTRAINT ${quoted(metaPrimaryKey)} PRIMARY KEY DEFAULT nextval('${userMetaIdSequence}'),
+        site_user_id BIGINT NOT NULL CONSTRAINT ${quoted(metaSiteUserForeignKey)} REFERENCES ${quoted(usersTable)}("id") ON DELETE CASCADE,
         key TEXT NOT NULL,
         value TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (site_user_id, key)
+        CONSTRAINT ${quoted(metaSiteUserKeyUnique)} UNIQUE (site_user_id, key)
       )
     `,
     { allowDuplicateType: true },

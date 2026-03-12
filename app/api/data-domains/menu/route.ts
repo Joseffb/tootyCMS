@@ -55,8 +55,8 @@ export async function GET(request: Request) {
         const n = Number(rawOrder);
         return Number.isFinite(n) ? n : undefined;
       })(),
-      listHref: `/site/${siteId}/domain/${domain.key}`,
-      addHref: `/site/${siteId}/domain/${domain.key}/create`,
+      listHref: `/app/site/${siteId}/domain/${domain.key}`,
+      addHref: `/app/site/${siteId}/domain/${domain.key}/create`,
     }))
     .sort((a, b) => {
       const aHasOrder = Number.isFinite(a.order);

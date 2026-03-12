@@ -161,4 +161,22 @@ describe("GET /api/admin/bootstrap", () => {
     expect(json.navContext.mainSiteId).toBe("site-1");
     expect(json.navContext.effectiveSiteId).toBe("site-2");
   });
+
+  it("emits canonical app-scoped content navigation hrefs", async () => {
+    mocks.getAllDataDomains.mockResolvedValueOnce([
+      { id: 1, key: "post", label: "Post", assigned: true, isActive: true, settings: {} },
+    ]);
+
+    const response = await GET(
+      new Request("http://localhost/api/admin/bootstrap?siteId=site-1&path=%2Fapp%2Fcp%2Fsite%2Fsite-1"),
+    );
+    const json = await response.json();
+
+    expect(json.dataDomainItems).toEqual([
+      expect.objectContaining({
+        listHref: "/app/site/site-1/domain/post",
+        addHref: "/app/site/site-1/domain/post/create",
+      }),
+    ]);
+  });
 });

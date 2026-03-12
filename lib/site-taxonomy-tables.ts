@@ -1,6 +1,6 @@
 import db from "@/lib/db";
 import { sites } from "@/lib/schema";
-import { sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 import { eq, sql } from "drizzle-orm";
 import {
   index,
@@ -408,6 +408,14 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
   const termsIdSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "terms_id_seq");
   const taxonomiesIdSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "term_taxonomies_id_seq");
   const metaIdSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "term_taxonomy_meta_id_seq");
+  const termsPrimaryKey = physicalObjectName(termsTable, "pkey");
+  const termsSlugUnique = physicalObjectName(termsTable, "slug_key");
+  const taxonomiesPrimaryKey = physicalObjectName(taxonomiesTable, "pkey");
+  const taxonomiesTermTaxonomyUnique = physicalObjectName(taxonomiesTable, "term_id_taxonomy_key");
+  const relationshipsPrimaryKey = physicalObjectName(relationshipsTable, "pkey");
+  const domainsPrimaryKey = physicalObjectName(domainsTable, "pkey");
+  const metaPrimaryKey = physicalObjectName(metaTable, "pkey");
+  const metaTaxonomyKeyUnique = physicalObjectName(metaTable, "term_taxonomy_id_key_key");
 
   await createNamedRelation(
     executor,
@@ -421,9 +429,9 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
     termsTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(termsTable)} (
-        "id" INTEGER PRIMARY KEY DEFAULT nextval('${termsIdSequence}'),
+        "id" INTEGER CONSTRAINT ${quoted(termsPrimaryKey)} PRIMARY KEY DEFAULT nextval('${termsIdSequence}'),
         "name" TEXT NOT NULL,
-        "slug" TEXT NOT NULL UNIQUE,
+        "slug" TEXT NOT NULL CONSTRAINT ${quoted(termsSlugUnique)} UNIQUE,
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -457,7 +465,7 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
     taxonomiesTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(taxonomiesTable)} (
-        "id" INTEGER PRIMARY KEY DEFAULT nextval('${taxonomiesIdSequence}'),
+        "id" INTEGER CONSTRAINT ${quoted(taxonomiesPrimaryKey)} PRIMARY KEY DEFAULT nextval('${taxonomiesIdSequence}'),
         "termId" INTEGER NOT NULL,
         "taxonomy" TEXT NOT NULL,
         "description" TEXT,
@@ -465,7 +473,7 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
         "count" INTEGER NOT NULL DEFAULT 0,
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE ("termId", "taxonomy")
+        CONSTRAINT ${quoted(taxonomiesTermTaxonomyUnique)} UNIQUE ("termId", "taxonomy")
       )
     `,
     { allowDuplicateType: true },
@@ -492,7 +500,7 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
       CREATE TABLE IF NOT EXISTS ${quoted(relationshipsTable)} (
         "objectId" TEXT NOT NULL,
         "termTaxonomyId" INTEGER NOT NULL,
-        PRIMARY KEY ("objectId", "termTaxonomyId")
+        CONSTRAINT ${quoted(relationshipsPrimaryKey)} PRIMARY KEY ("objectId", "termTaxonomyId")
       )
     `,
     { allowDuplicateType: true },
@@ -519,7 +527,7 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
       CREATE TABLE IF NOT EXISTS ${quoted(domainsTable)} (
         "dataDomainId" INTEGER NOT NULL,
         "termTaxonomyId" INTEGER NOT NULL,
-        PRIMARY KEY ("dataDomainId", "termTaxonomyId")
+        CONSTRAINT ${quoted(domainsPrimaryKey)} PRIMARY KEY ("dataDomainId", "termTaxonomyId")
       )
     `,
     { allowDuplicateType: true },
@@ -551,13 +559,13 @@ async function createPhysicalSiteTaxonomyTables(executor: SqlExecutor, siteId: s
     metaTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(metaTable)} (
-        "id" INTEGER PRIMARY KEY DEFAULT nextval('${metaIdSequence}'),
+        "id" INTEGER CONSTRAINT ${quoted(metaPrimaryKey)} PRIMARY KEY DEFAULT nextval('${metaIdSequence}'),
         "termTaxonomyId" INTEGER NOT NULL,
         "key" TEXT NOT NULL,
         "value" TEXT NOT NULL DEFAULT '',
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE ("termTaxonomyId", "key")
+        CONSTRAINT ${quoted(metaTaxonomyKeyUnique)} UNIQUE ("termTaxonomyId", "key")
       )
     `,
     { allowDuplicateType: true },

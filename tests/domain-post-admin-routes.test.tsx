@@ -7,16 +7,8 @@ import path from "node:path";
 import DomainPostCard from "@/components/domain-post-card";
 import CreateDomainPostButton from "@/components/create-domain-post-button";
 
-const pushMock = vi.fn();
-
 vi.mock("next/link", () => ({
   default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a>,
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: pushMock,
-  }),
 }));
 
 vi.mock("@/components/blur-image", () => ({
@@ -30,7 +22,6 @@ vi.mock("@/components/icons/loading-dots", () => ({
 describe("domain post admin routes", () => {
   afterEach(() => {
     cleanup();
-    pushMock.mockReset();
   });
 
   it("uses canonical /app/site post edit hrefs", () => {
@@ -63,12 +54,11 @@ describe("domain post admin routes", () => {
     expect(editLink).toBeTruthy();
   });
 
-  it("pushes canonical /app/site create hrefs", () => {
+  it("uses canonical /app/site create hrefs", () => {
     render(<CreateDomainPostButton siteId="site-1" domainKey="page" domainLabel="Page" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create New Page" }));
-
-    expect(pushMock).toHaveBeenCalledWith("/app/site/site-1/domain/page/create");
+    const link = screen.getByRole("link", { name: "Create New Page" });
+    expect(link.getAttribute("href")).toBe("/app/site/site-1/domain/page/create");
   });
 
   it("uses canonical /app/site list hrefs after delete", () => {

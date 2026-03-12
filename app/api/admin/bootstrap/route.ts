@@ -184,8 +184,8 @@ export async function GET(request: Request) {
           const n = Number(rawOrder);
           return Number.isFinite(n) ? n : undefined;
         })(),
-        listHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}`,
-        addHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
+        listHref: `/app/site/${scope.effectiveSiteId}/domain/${domain.key}`,
+        addHref: `/app/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
       }))
       .sort((a, b) => {
         const aHasOrder = Number.isFinite(a.order);
@@ -210,8 +210,8 @@ export async function GET(request: Request) {
           label: pluralizeLabel(domain.label),
           singular: singularizeLabel(domain.label),
           order: undefined,
-          listHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}`,
-          addHref: `/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
+          listHref: `/app/site/${scope.effectiveSiteId}/domain/${domain.key}`,
+          addHref: `/app/site/${scope.effectiveSiteId}/domain/${domain.key}/create`,
         }));
     }
   }

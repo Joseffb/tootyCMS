@@ -40,7 +40,8 @@ describe("GET /api/data-domains/menu", () => {
     const json = await res.json();
 
     expect(json.items.map((item: any) => item.singular)).toEqual(["Post", "Page", "Showcase"]);
-    expect(json.items[0].listHref).toBe("/site/site-1/domain/post");
+    expect(json.items[0].listHref).toBe("/app/site/site-1/domain/post");
+    expect(json.items[0].addHref).toBe("/app/site/site-1/domain/post/create");
   });
 
   it("hides domains marked private from the menu", async () => {

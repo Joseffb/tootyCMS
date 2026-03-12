@@ -1,7 +1,7 @@
 import db from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { sites } from "@/lib/schema";
-import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
@@ -50,7 +50,7 @@ async function createPhysicalSiteSettingsTable(executor: SqlExecutor, siteId: st
     executor,
     `
     CREATE TABLE IF NOT EXISTS ${quoted(table)} (
-      "key" TEXT PRIMARY KEY,
+      "key" TEXT CONSTRAINT ${quoted(physicalObjectName(table, "pkey"))} PRIMARY KEY,
       "value" TEXT NOT NULL,
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )

@@ -1,7 +1,7 @@
 import db from "@/lib/db";
 import { createId } from "@paralleldrive/cuid2";
 import { sites } from "@/lib/schema";
-import { sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 import { ensureSiteMediaTable } from "@/lib/site-media-tables";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -301,14 +301,22 @@ async function createPhysicalSiteMenuTables(executor: SqlExecutor, siteId: strin
   const metaTable = siteMenuItemMetaTableName(siteId);
   const mediaTable = sitePhysicalTableName(normalizedPrefix, siteId, "media");
   const metaIdSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "menu_item_meta_id_seq");
+  const menusPrimaryKey = physicalObjectName(menusTable, "pkey");
+  const menusKeyUnique = physicalObjectName(menusTable, "key_key");
+  const itemsPrimaryKey = physicalObjectName(itemsTable, "pkey");
+  const itemsMenuForeignKey = physicalObjectName(itemsTable, "menu_id_fkey");
+  const itemsMediaForeignKey = physicalObjectName(itemsTable, "media_id_fkey");
+  const metaPrimaryKey = physicalObjectName(metaTable, "pkey");
+  const metaMenuItemForeignKey = physicalObjectName(metaTable, "menu_item_id_fkey");
+  const metaMenuItemKeyUnique = physicalObjectName(metaTable, "menu_item_id_key_key");
 
   await createNamedRelation(
     executor,
     menusTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(menusTable)} (
-        "id" TEXT PRIMARY KEY,
-        "key" TEXT NOT NULL UNIQUE,
+        "id" TEXT CONSTRAINT ${quoted(menusPrimaryKey)} PRIMARY KEY,
+        "key" TEXT NOT NULL CONSTRAINT ${quoted(menusKeyUnique)} UNIQUE,
         "title" TEXT NOT NULL,
         "description" TEXT NOT NULL DEFAULT '',
         "location" TEXT,
@@ -339,13 +347,13 @@ async function createPhysicalSiteMenuTables(executor: SqlExecutor, siteId: strin
     itemsTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(itemsTable)} (
-        "id" TEXT PRIMARY KEY,
-        "menuId" TEXT NOT NULL REFERENCES ${quoted(menusTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "id" TEXT CONSTRAINT ${quoted(itemsPrimaryKey)} PRIMARY KEY,
+        "menuId" TEXT NOT NULL CONSTRAINT ${quoted(itemsMenuForeignKey)} REFERENCES ${quoted(menusTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
         "parentId" TEXT,
         "title" TEXT NOT NULL,
         "href" TEXT NOT NULL,
         "description" TEXT NOT NULL DEFAULT '',
-        "mediaId" INTEGER REFERENCES ${quoted(mediaTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+        "mediaId" INTEGER CONSTRAINT ${quoted(itemsMediaForeignKey)} REFERENCES ${quoted(mediaTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
         "target" TEXT,
         "rel" TEXT,
         "external" BOOLEAN NOT NULL DEFAULT FALSE,
@@ -391,13 +399,13 @@ async function createPhysicalSiteMenuTables(executor: SqlExecutor, siteId: strin
     metaTable,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(metaTable)} (
-        "id" INTEGER PRIMARY KEY,
-        "menuItemId" TEXT NOT NULL REFERENCES ${quoted(itemsTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "id" INTEGER CONSTRAINT ${quoted(metaPrimaryKey)} PRIMARY KEY,
+        "menuItemId" TEXT NOT NULL CONSTRAINT ${quoted(metaMenuItemForeignKey)} REFERENCES ${quoted(itemsTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
         "key" TEXT NOT NULL,
         "value" TEXT NOT NULL DEFAULT '',
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE ("menuItemId", "key")
+        CONSTRAINT ${quoted(metaMenuItemKeyUnique)} UNIQUE ("menuItemId", "key")
       )
     `,
     { allowDuplicateType: true },

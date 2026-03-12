@@ -33,6 +33,7 @@ type Props = {
   }>;
   searchParams?: Promise<{
     pending?: string;
+    new?: string;
   }>;
 };
 
@@ -160,7 +161,8 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
   const resolvedPostId = decodeURIComponent(postId);
   const canonicalPath = getDomainPostAdminItemPath(siteId, resolvedDomainKey, resolvedPostId);
   const isPendingHydration = String(resolvedSearchParams.pending || "").trim() === "1";
-  const pendingPostReadAttempts = isPendingHydration ? 60 : 45;
+  const isNewDraft = String(resolvedSearchParams.new || "").trim() === "1";
+  const pendingPostReadAttempts = isNewDraft ? 1 : isPendingHydration ? 60 : 45;
   const { site } = await resolveAuthorizedSiteForAnyCapability(session.user.id, siteId, [
     "site.content.read",
     "site.content.create",
@@ -194,11 +196,67 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
         initialRecord: pendingData,
       })
     : pendingData;
-  if ((!domain || !data) && isPendingHydration) {
+  if (!domain) {
+    notFound();
+  }
+
+  if (!data && isNewDraft) {
+    const [canCreate, canPublish, writingSettings, commentsPluginEnabled] = await Promise.all([
+      userCan("site.content.create", session.user.id, { siteId: effectiveSiteId }),
+      userCan("site.content.publish", session.user.id, { siteId: effectiveSiteId }),
+      getSiteWritingSettings(effectiveSiteId),
+      hasEnabledCommentProvider(effectiveSiteId),
+    ]);
+    if (!canCreate) {
+      notFound();
+    }
+    const commentsGateEnabled = commentsPluginEnabled && writingSettings.enableComments;
+    return (
+      <Editor
+        post={{
+          id: resolvedPostId,
+          siteId: effectiveSiteId,
+          dataDomainId: domain.id,
+          dataDomainKey: domain.key,
+          dataDomainLabel: domain.label,
+          title: "",
+          description: "",
+          content: "",
+          password: "",
+          usePassword: false,
+          layout: null,
+          slug: "",
+          image: "",
+          imageBlurhash: "",
+          published: false,
+          userId: session.user.id,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          categories: [],
+          tags: [],
+          meta: [],
+          taxonomyAssignments: [],
+          site: {
+            subdomain: site.subdomain ?? null,
+          },
+        }}
+        defaultEditorMode="rich-text"
+        defaultEnableComments={commentsGateEnabled}
+        commentsPluginEnabled={commentsGateEnabled}
+        onSave={updateDomainPost}
+        onUpdateMetadata={updateDomainPostMetadata}
+        canEdit
+        canPublish={canPublish}
+        materializeDraftOnFirstSave
+      />
+    );
+  }
+
+  if (!data && isPendingHydration) {
     return <PendingAdminItemHydration canonicalPath={canonicalPath} />;
   }
 
-  if (!domain || !data) {
+  if (!data) {
     notFound();
   }
 
@@ -264,7 +322,7 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
 
   return (
     <>
-      {isPendingHydration ? <ReplaceAdminItemUrlInPlace canonicalPath={canonicalPath} /> : null}
+      {isPendingHydration ? <ReplaceAdminItemUrlInPlace canonicalPath={canonicalPath} waitForEditorReady /> : null}
       <Editor
         post={hydratedPost}
         defaultEditorMode="rich-text"

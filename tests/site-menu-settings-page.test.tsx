@@ -215,4 +215,25 @@ describe("SiteMenuSettingsPage", () => {
     expect(screen.getByText("Footer Menu Stale Read")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Edit Menu" })).toBeTruthy();
   });
+
+  it("shows a syncing detail state for a newly created menu while pooled reads catch up", async () => {
+    vi.mocked(listSiteMenus).mockResolvedValueOnce([]);
+    vi.mocked(getSiteMenuDefinition).mockResolvedValue(null);
+
+    const ui = await SiteMenuSettingsPage({
+      params: Promise.resolve({ id: "site-1" }),
+      searchParams: Promise.resolve({
+        menu: "menu-pending",
+        pendingMenuTitle: "Lifecycle Footer Menu chromium",
+        pendingMenuKey: "lifecycle-footer-menu-chromium",
+        pendingMenuLocation: "footer",
+      }),
+    });
+
+    render(ui);
+
+    expect(screen.getByRole("heading", { name: "Lifecycle Footer Menu chromium" })).toBeTruthy();
+    expect(screen.getByText("Syncing the newly saved menu. Details will appear as soon as the database read catches up.")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Selected Menu Not Available" })).toBeNull();
+  });
 });

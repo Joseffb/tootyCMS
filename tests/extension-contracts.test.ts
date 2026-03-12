@@ -156,6 +156,43 @@ describe("extension contracts", () => {
           ctaTextMetaKey: "cta_text",
           ctaUrlMetaKey: "cta_url",
           workflowStates: ["draft", "published", "archived"],
+          workspaceLayout: "split",
+          parentEditorFields: [
+            {
+              key: "story_label_map",
+              label: "Story Label Map",
+              type: "textarea",
+              target: "meta",
+              metaKey: "story_label_map",
+              rows: 8,
+            },
+          ],
+          childEditorFields: [
+            {
+              key: "chapter_key",
+              label: "Chapter Key",
+              type: "text",
+              target: "meta",
+              metaKey: "chapter_key",
+            },
+          ],
+          childNestedItems: {
+            metaKey: "story_experience_elements",
+            singularLabel: "Artifact",
+            pluralLabel: "Artifacts",
+            fields: [
+              {
+                key: "title",
+                label: "Title",
+                type: "text",
+              },
+              {
+                key: "mediaId",
+                label: "Media",
+                type: "media",
+              },
+            ],
+          },
         },
       },
       "collection-plugin",
@@ -174,6 +211,51 @@ describe("extension contracts", () => {
       ctaTextMetaKey: "cta_text",
       ctaUrlMetaKey: "cta_url",
       workflowStates: ["draft", "published", "archived"],
+      workspaceLayout: "split",
+      parentEditorFields: [
+        {
+          key: "story_label_map",
+          label: "Story Label Map",
+          type: "textarea",
+          placeholder: "",
+          helpText: "",
+          rows: 8,
+          target: "meta",
+          metaKey: "story_label_map",
+        },
+      ],
+      childEditorFields: [
+        {
+          key: "chapter_key",
+          label: "Chapter Key",
+          type: "text",
+          placeholder: "",
+          helpText: "",
+          target: "meta",
+          metaKey: "chapter_key",
+        },
+      ],
+      childNestedItems: {
+        metaKey: "story_experience_elements",
+        singularLabel: "Artifact",
+        pluralLabel: "Artifacts",
+        fields: [
+          {
+            key: "title",
+            label: "Title",
+            type: "text",
+            placeholder: "",
+            helpText: "",
+          },
+          {
+            key: "mediaId",
+            label: "Media",
+            type: "media",
+            placeholder: "",
+            helpText: "",
+          },
+        ],
+      },
     });
   });
 
@@ -240,5 +322,138 @@ describe("extension contracts", () => {
       label: "Hero Image",
       type: "media",
     });
+  });
+
+  it("normalizes editor tab descriptors for editor-only plugins", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "story-plugin",
+        name: "Story Plugin",
+        editor: {
+          tabs: [
+            {
+              id: "story",
+              label: "Story",
+              order: 320,
+              supportsDomains: [" Post ", "page"],
+              requiresCapability: "site.content.edit.any",
+              sections: [
+                {
+                  id: "overview",
+                  title: "Overview",
+                  fragment: {
+                    kind: "html",
+                    html: "<p>Story settings</p>",
+                  },
+                  fields: [
+                    {
+                      key: "story_enabled",
+                      label: "Enable Story",
+                      type: "checkbox",
+                    },
+                    {
+                      key: "chapter_style",
+                      label: "Chapter Style",
+                      type: "radio",
+                      options: [
+                        { label: "Cinematic", value: "cinematic" },
+                      ],
+                    },
+                    {
+                      key: "artifacts",
+                      label: "Artifacts",
+                      type: "repeater",
+                      fields: [
+                        {
+                          key: "title",
+                          label: "Title",
+                          type: "text",
+                        },
+                        {
+                          key: "media",
+                          label: "Media",
+                          type: "media",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "story-plugin",
+    );
+
+    expect(plugin?.editor?.tabs).toEqual([
+      {
+        id: "story",
+        label: "Story",
+        order: 320,
+        supportsDomains: ["post", "page"],
+        requiresCapability: "site.content.edit.any",
+        sections: [
+          {
+            id: "overview",
+            title: "Overview",
+            description: "",
+            fragment: {
+              kind: "html",
+              html: "<p>Story settings</p>",
+            },
+            fields: [
+              {
+                key: "story_enabled",
+                label: "Enable Story",
+                type: "checkbox",
+                placeholder: "",
+                helpText: "",
+                metaKey: undefined,
+                fields: undefined,
+              },
+              {
+                key: "chapter_style",
+                label: "Chapter Style",
+                type: "radio",
+                placeholder: "",
+                helpText: "",
+                options: [{ label: "Cinematic", value: "cinematic" }],
+                metaKey: undefined,
+                fields: undefined,
+              },
+              {
+                key: "artifacts",
+                label: "Artifacts",
+                type: "repeater",
+                placeholder: "",
+                helpText: "",
+                metaKey: undefined,
+                fields: [
+                  {
+                    key: "title",
+                    label: "Title",
+                    type: "text",
+                    placeholder: "",
+                    helpText: "",
+                    metaKey: undefined,
+                    fields: undefined,
+                  },
+                  {
+                    key: "media",
+                    label: "Media",
+                    type: "media",
+                    placeholder: "",
+                    helpText: "",
+                    metaKey: undefined,
+                    fields: undefined,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 });

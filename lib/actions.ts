@@ -189,7 +189,12 @@ async function findContentPublishScheduleForPost(postId: string) {
 }
 
 async function syncContentPublishScheduleForPost(input: {
-  post: Awaited<ReturnType<typeof findDomainPostForMutation>>;
+  post: {
+    id: string;
+    siteId?: string | null;
+    title?: string | null;
+    slug?: string | null;
+  } | null;
   publishAt: string | null;
   createIfMissing: boolean;
 }) {
@@ -301,6 +306,47 @@ async function withRetryableSiteWrite<T>(run: () => Promise<T>, attempts = 5): P
     }
   }
   throw lastError;
+}
+
+async function getSiteDomainPostByIdWithRetry(
+  input: { siteId: string; postId: string; dataDomainKey?: string },
+  attempts = 24,
+) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const record = await getSiteDomainPostById(input);
+    if (record || attempt === attempts) {
+      return record;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(150 * attempt, 1_500)));
+  }
+  return null;
+}
+
+async function resolveValidSiteTaxonomyIdsWithRetry(
+  siteId: string,
+  requestedTaxonomyIds: number[],
+  attempts = 6,
+) {
+  let validTaxonomyIds: number[] = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    validTaxonomyIds = Array.from(
+      new Set(
+        (
+          await withResolvedSiteTaxonomyTables(siteId, async ({ termTaxonomiesTable }) =>
+            db
+              .select({ id: termTaxonomiesTable.id })
+              .from(termTaxonomiesTable)
+              .where(inArray(termTaxonomiesTable.id, requestedTaxonomyIds)),
+          )
+        ).map((row) => row.id),
+      ),
+    );
+    if (validTaxonomyIds.length === requestedTaxonomyIds.length || attempt === attempts) {
+      return validTaxonomyIds;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(200 * attempt, 1_250)));
+  }
+  return validTaxonomyIds;
 }
 
 async function withTaxonomyWriteRecovery<T>(siteId: string, run: () => Promise<T>): Promise<T> {
@@ -540,9 +586,15 @@ const quoteIdentifier = (identifier: string) => `"${String(identifier || "").rep
 async function countSiteDomainTypeUsage(siteId: string, domainKey: string) {
   const tableName = siteDomainTypeTableName(siteId, domainKey);
   if (!(await siteTableExists(tableName))) return 0;
-  const result = (await db.execute(
-    sql.raw(`SELECT COUNT(*)::int AS count FROM ${quoteIdentifier(tableName)}`),
-  )) as { rows?: Array<{ count?: number | string | null }> };
+  let result: { rows?: Array<{ count?: number | string | null }> };
+  try {
+    result = (await db.execute(
+      sql.raw(`SELECT COUNT(*)::int AS count FROM ${quoteIdentifier(tableName)}`),
+    )) as { rows?: Array<{ count?: number | string | null }> };
+  } catch (error) {
+    if (isMissingRelationError(error)) return 0;
+    throw error;
+  }
   const value = result.rows?.[0]?.count;
   return typeof value === "number" ? value : Number.parseInt(String(value ?? "0"), 10) || 0;
 }
@@ -1853,6 +1905,8 @@ export const createDomainPost = withSiteAuth(
 export const updateDomainPost = async (
   data: {
     id: string;
+    siteId?: string | null;
+    dataDomainKey?: string | null;
     title?: string | null;
     description?: string | null;
     slug?: string;
@@ -1872,13 +1926,43 @@ export const updateDomainPost = async (
     return { error: "Not authenticated" };
   }
 
-  const mutation = await canUserMutateDomainPost(session.user.id, data.id, "edit");
-  const existing = mutation.post;
-  if (!existing || !mutation.allowed) {
+  const requestedSiteId = normalizeSiteScope(String(data.siteId || ""));
+  const requestedDomainKey = String(data.dataDomainKey || "")
+    .trim()
+    .toLowerCase();
+  const mutation = await canUserMutateDomainPost(
+    session.user.id,
+    data.id,
+    "edit",
+    requestedSiteId || null,
+  );
+  const existingPost = mutation.post;
+  const existing =
+    existingPost ||
+    (requestedSiteId && requestedDomainKey
+      ? {
+          id: data.id,
+          siteId: requestedSiteId,
+          dataDomainKey: requestedDomainKey,
+          slug: "",
+        }
+      : null);
+  if (!existing) {
+    return { error: "Post not found or not authorized" };
+  }
+
+  const canCreatePlaceholder =
+    !existingPost &&
+    requestedSiteId.length > 0 &&
+    requestedDomainKey.length > 0 &&
+    (await userCan("site.content.create", session.user.id, { siteId: requestedSiteId }));
+
+  if (!mutation.allowed && !canCreatePlaceholder) {
     return { error: "Post not found or not authorized" };
   }
 
   try {
+    let createdFresh = false;
     const normalizeTaxonomyIds = (...sources: Array<Array<number | string> | undefined>) =>
       Array.from(
         new Set(
@@ -1900,38 +1984,82 @@ export const updateDomainPost = async (
       ),
     );
 
-    if (requestedTaxonomyIds.length > 0) {
-      const validTaxonomyIds = Array.from(
-        new Set(
-          (
-            await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termTaxonomiesTable }) =>
-              db
-                .select({ id: termTaxonomiesTable.id })
-                .from(termTaxonomiesTable)
-                .where(inArray(termTaxonomiesTable.id, requestedTaxonomyIds)),
-            )
-          ).map((row) => row.id),
-        ),
-      );
-      if (validTaxonomyIds.length !== requestedTaxonomyIds.length) {
-        return { error: "One or more taxonomy terms are invalid for this site." };
-      }
+    const validRequestedTaxonomyIds =
+      requestedTaxonomyIds.length > 0
+        ? await resolveValidSiteTaxonomyIdsWithRetry(existing.siteId, requestedTaxonomyIds)
+        : [];
+    if (requestedTaxonomyIds.length > 0 && validRequestedTaxonomyIds.length !== requestedTaxonomyIds.length) {
+      return { error: "One or more taxonomy terms are invalid for this site." };
     }
 
-    const postRecord = await updateSiteDomainPostById({
-      siteId: existing.siteId,
-      postId: data.id,
-      dataDomainKey: existing.dataDomainKey,
-      patch: {
-        title: data.title,
-        description: data.description,
-        ...(typeof data.slug === "string" ? { slug: toSeoSlug(data.slug) } : {}),
-        content: data.content,
-        password: data.password ?? "",
-        ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
-        layout: data.layout ?? null,
-      },
-    });
+    const rawSlugInput = typeof data.slug === "string" ? data.slug.trim() : "";
+    const normalizedSlugInput = rawSlugInput ? toSeoSlug(rawSlugInput) : "";
+    const fallbackCreateSlug =
+      normalizedSlugInput ||
+      toSeoSlug(String(data.title || "").trim()) ||
+      toSeoSlug(`${existing.dataDomainKey}-${data.id}`) ||
+      `${existing.dataDomainKey}-${data.id}`;
+    const updatePatch = {
+      title: data.title,
+      description: data.description,
+      ...(rawSlugInput ? { slug: normalizedSlugInput } : {}),
+      content: data.content,
+      password: data.password ?? "",
+      ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
+      layout: data.layout ?? null,
+    };
+    const recoveryPatch = {
+      ...updatePatch,
+      slug: rawSlugInput ? normalizedSlugInput : fallbackCreateSlug,
+    };
+
+    let postRecord = null;
+    if (existingPost) {
+      postRecord = await updateSiteDomainPostById({
+        siteId: existing.siteId,
+        postId: data.id,
+        dataDomainKey: existing.dataDomainKey,
+        patch: updatePatch,
+      });
+    } else {
+      const domain = await getSiteDataDomainByKey(existing.siteId, existing.dataDomainKey);
+      if (!domain) {
+        return { error: "Data domain not found for site." };
+      }
+      try {
+        postRecord = await createSiteScopedDomainPost({
+          siteId: existing.siteId,
+          userId: session.user.id,
+          dataDomainId: domain.id,
+          dataDomainKey: domain.key,
+          id: data.id,
+          title: data.title ?? "",
+          description: data.description ?? "",
+          content: data.content ?? "",
+          password: data.password ?? "",
+          usePassword: typeof data.usePassword === "boolean" ? data.usePassword : false,
+          layout: data.layout ?? null,
+          slug: fallbackCreateSlug,
+          published: false,
+        });
+        createdFresh = true;
+      } catch (error: any) {
+        if (error?.code !== "23505") throw error;
+        postRecord = await getSiteDomainPostByIdWithRetry({
+          siteId: existing.siteId,
+          postId: data.id,
+          dataDomainKey: existing.dataDomainKey,
+        });
+        if (postRecord) {
+          postRecord = await updateSiteDomainPostById({
+            siteId: existing.siteId,
+            postId: data.id,
+            dataDomainKey: existing.dataDomainKey,
+            patch: recoveryPatch,
+          });
+        }
+      }
+    }
     if (!postRecord) {
       return { error: "Post not found or not authorized" };
     }
@@ -1944,21 +2072,11 @@ export const updateDomainPost = async (
           const advisoryKey = `${existing.siteId}:domain-post-taxonomies`;
           await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
           await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, data.id));
-          if (requestedTaxonomyIds.length > 0) {
-            const validTaxonomyIds = Array.from(
-              new Set(
-                (
-                  await tx
-                    .select({ id: termTaxonomiesTable.id })
-                    .from(termTaxonomiesTable)
-                    .where(inArray(termTaxonomiesTable.id, requestedTaxonomyIds))
-                ).map((row) => row.id),
-              ),
-            );
+          if (validRequestedTaxonomyIds.length > 0) {
             await tx
               .insert(termRelationshipsTable)
               .values(
-                validTaxonomyIds.map((termTaxonomyId) => ({
+                validRequestedTaxonomyIds.map((termTaxonomyId) => ({
                   objectId: data.id,
                   termTaxonomyId,
                 })),
@@ -1976,11 +2094,37 @@ export const updateDomainPost = async (
           value: entry.value.trim(),
         }))
         .filter((entry) => entry.key.length > 0);
+      const scheduledPublishAtEntry = normalizedMeta.find((entry) => entry.key === HIDDEN_PUBLISH_AT_META_KEY);
+      const normalizedScheduledPublishAt = scheduledPublishAtEntry
+        ? normalizeScheduledPublishAt(scheduledPublishAtEntry.value)
+        : { ok: true as const, value: null as string | null };
+      if (!normalizedScheduledPublishAt.ok) {
+        return { error: normalizedScheduledPublishAt.error };
+      }
+      const persistedMeta = normalizedMeta
+        .filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY)
+        .concat(
+          normalizedScheduledPublishAt.value
+            ? [{ key: HIDDEN_PUBLISH_AT_META_KEY, value: normalizedScheduledPublishAt.value }]
+            : [],
+        );
       await replaceSiteDomainPostMeta({
         siteId: existing.siteId,
         dataDomainKey: existing.dataDomainKey,
         postId: data.id,
-        entries: normalizedMeta,
+        entries: persistedMeta,
+      });
+      await syncContentPublishScheduleForPost({
+        post: {
+          id: postRecord.id,
+          siteId: postRecord.siteId || existing.siteId,
+          title:
+            typeof data.title === "string" && data.title.trim().length > 0
+              ? data.title
+              : existingPost?.title ?? null,
+        },
+        publishAt: normalizedScheduledPublishAt.value,
+        createIfMissing: true,
       });
     }
 
@@ -2008,7 +2152,21 @@ export const updateDomainPost = async (
       postId: data.id,
     });
 
-    const { siteId, slug } = existing;
+    if (createdFresh) {
+      await emitCmsLifecycleEvent({
+        name: "custom_event",
+        siteId: existing.siteId,
+        payload: {
+          event: "content_created",
+          contentType: existing.dataDomainKey,
+          contentId: postRecord.id,
+        },
+      });
+    }
+
+    const siteId = postRecord.siteId || existing.siteId;
+    const previousSlug = String(existingPost?.slug || "").trim();
+    const nextSlug = String(postRecord.slug || fallbackCreateSlug).trim();
     if (siteId) {
       const siteRow = await db.query.sites.findFirst({
         where: eq(sites.id, siteId),
@@ -2018,11 +2176,21 @@ export const updateDomainPost = async (
       if (siteRow?.subdomain) {
         const domain = `${siteRow.subdomain}.${rootDomain}`;
         revalidateTag(`${domain}-posts`, "max");
-        revalidateTag(`${domain}-${slug}`, "max");
+        if (previousSlug) {
+          revalidateTag(`${domain}-${previousSlug}`, "max");
+        }
+        if (nextSlug) {
+          revalidateTag(`${domain}-${nextSlug}`, "max");
+        }
       }
       if (siteRow?.customDomain) {
         revalidateTag(`${siteRow.customDomain}-posts`, "max");
-        revalidateTag(`${siteRow.customDomain}-${slug}`, "max");
+        if (previousSlug) {
+          revalidateTag(`${siteRow.customDomain}-${previousSlug}`, "max");
+        }
+        if (nextSlug) {
+          revalidateTag(`${siteRow.customDomain}-${nextSlug}`, "max");
+        }
       }
     }
     revalidatePublicContentCache();
@@ -2032,6 +2200,7 @@ export const updateDomainPost = async (
       categories: cats,
       tags: tagRows,
       meta: metaRows,
+      created: createdFresh,
     };
   } catch (error: any) {
     console.error("updateDomainPost error:", error);
@@ -2174,6 +2343,22 @@ export const updateDomainPostMetadata = async (
           const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
           const scheduleInFuture = Boolean(scheduledDate && scheduledDate.getTime() > Date.now());
           if (scheduleInFuture) {
+            if (post.published) {
+              const unpublishResult = await setDomainPostPublishedState({
+                postId: post.id,
+                nextPublished: false,
+                actorType: "admin",
+                actorId: session.user.id,
+                userId: session.user.id,
+              });
+              if (!unpublishResult.ok) {
+                return {
+                  error: unpublishResult.reason === "transition_blocked"
+                    ? `Transition blocked: ${unpublishResult.from} -> ${unpublishResult.to}`
+                    : "Failed to update publish status",
+                };
+              }
+            }
             await syncContentPublishScheduleForPost({
               post,
               publishAt: scheduledAt,
@@ -2460,6 +2645,7 @@ function revalidatePublicContentCache() {
   // Frontend routes are path-cached; invalidate all public content surfaces after writes.
   revalidatePath("/[domain]", "layout");
   revalidatePath("/[domain]/[slug]", "page");
+  revalidatePath("/[domain]/[slug]/[child]", "page");
   revalidatePath("/[domain]/posts", "page");
   revalidatePath("/[domain]/c/[slug]", "page");
   revalidatePath("/[domain]/t/[slug]", "page");

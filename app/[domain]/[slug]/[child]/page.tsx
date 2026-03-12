@@ -16,6 +16,7 @@ import { buildArchivePath, buildDetailPath, resolveNoDomainPrefixDomain } from "
 import { trace } from "@/lib/debug";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { applyThemeContentTransform } from "@/lib/theme-content-transform";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 import PostViewTracker from "@/components/post-view-tracker";
 import { getPublicCommentCapabilities } from "@/lib/comments-spine";
@@ -145,6 +146,23 @@ export default async function DomainPostPage({
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
   const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
+  const entryContext = {
+    id: (data as any)?.id || "",
+    dataDomain: decodedDataDomain,
+    title: (data as any)?.title || "",
+    description: (data as any)?.description || "",
+    slug: (data as any)?.slug || decodedSlug,
+    meta: postMeta,
+  };
+  const transformedContentHtml = await applyThemeContentTransform(
+    kernel,
+    toThemePostHtml((data as any)?.content || ""),
+    {
+      siteId: siteId || "",
+      routeKind: "domain_detail",
+      entry: entryContext,
+    },
+  );
   const baseHeaderMenu = siteId ? await getSiteMenu(siteId, "header") : [];
   const rawMenuItems = siteId
     ? await kernel.applyFilters("nav:items", baseHeaderMenu, {
@@ -183,11 +201,7 @@ export default async function DomainPostPage({
         {
           kernel,
           slotContext: {
-            entry: {
-              id: (data as any)?.id || "",
-              dataDomain: decodedDataDomain,
-              meta: postMeta,
-            },
+            entry: entryContext,
           },
         },
       );
@@ -223,10 +237,10 @@ export default async function DomainPostPage({
           href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath(decodedDataDomain, (data as any)?.slug || decodedSlug, writing)}`,
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
-          content_html: toThemePostHtml((data as any)?.content || ""),
+          content_html: transformedContentHtml,
         },
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
-        content: toThemePostHtml((data as any)?.content || ""),
+        content: transformedContentHtml,
         links: {
           root: rootUrl,
           main_site: siteUrl,
@@ -274,11 +288,7 @@ export default async function DomainPostPage({
     const fallbackThemeRuntime = await getThemeRenderContext(siteId, "domain_detail", [], {
       kernel,
       slotContext: {
-        entry: {
-          id: (data as any)?.id || "",
-          dataDomain: decodedDataDomain,
-          meta: postMeta,
-        },
+        entry: entryContext,
       },
     });
     postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};

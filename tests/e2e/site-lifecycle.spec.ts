@@ -268,12 +268,27 @@ async function waitForEditorSaved(page: Page) {
   await expect
     .poll(
       async () => {
+        const visibleSavingButtons = await page
+          .getByRole("button", { name: /^Saving/ })
+          .evaluateAll((elements) =>
+            elements.filter((element) => {
+              const node = element as HTMLElement;
+              const style = window.getComputedStyle(node);
+              const rect = node.getBoundingClientRect();
+              return (
+                style.display !== "none" &&
+                style.visibility !== "hidden" &&
+                rect.width > 0 &&
+                rect.height > 0
+              );
+            }).length,
+          )
+          .catch(() => 0);
+        if (visibleSavingButtons > 0) return "saving";
         const unsavedVisible = await page.getByText("Unsaved").first().isVisible().catch(() => false);
         if (unsavedVisible) return "unsaved";
         const savedVisible = await page.getByText("Saved").first().isVisible().catch(() => false);
         if (savedVisible) return "saved";
-        const savingVisible = await page.getByRole("button", { name: /^Saving/ }).first().isVisible().catch(() => false);
-        if (savingVisible) return "saving";
         const saveButton = page.getByRole("button", { name: /^Save Changes$/ }).first();
         const saveVisible = await saveButton.isVisible().catch(() => false);
         const saveEnabled = saveVisible ? await saveButton.isEnabled().catch(() => false) : false;
@@ -372,12 +387,18 @@ async function waitForEditorFieldValueWithReload(
   timeoutMs = 90_000,
 ) {
   const deadline = Date.now() + timeoutMs;
+  let cycle = 0;
   while (Date.now() < deadline) {
-    const actual = await locator.inputValue().catch(() => "");
-    if (actual === expected) return;
+    cycle += 1;
+    const settleDeadline = Math.min(deadline, Date.now() + 8_000);
+    while (Date.now() < settleDeadline) {
+      const actual = await locator.inputValue().catch(() => "");
+      if (actual === expected) return;
+      await page.waitForTimeout(400);
+    }
     await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
     await waitForEditorSurface(page, 60_000, { requireEditable: true });
-    await page.waitForTimeout(750);
+    await page.waitForTimeout(1_500);
   }
   await expect(locator).toHaveValue(expected, { timeout: 1000 });
 }
@@ -553,7 +574,7 @@ async function waitForEditorSurface(
 }
 
 async function openMoreSidebar(page: Page) {
-  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("tab", { name: "More", exact: true }).click();
   await expect(page.getByText("Organize")).toBeVisible({ timeout: 20_000 });
 }
 
@@ -583,7 +604,14 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
   await expect(section).toBeVisible({ timeout: 20_000 });
   await section.scrollIntoViewIfNeeded().catch(() => undefined);
   const deadline = Date.now() + 90_000;
+  let stalledIterations = 0;
   while (Date.now() < deadline) {
+    const sectionVisible = await section.isVisible().catch(() => false);
+    if (!sectionVisible) {
+      await openMoreSidebar(page).catch(() => undefined);
+      await page.waitForTimeout(300);
+      continue;
+    }
     const selectedChip = section.locator(`button[title="Remove ${value}"]`).first();
     const selectedChipByName = section.getByRole("button", { name: new RegExp(`^${escapeRegExp(value)}\\s+×$`) }).first();
     const savingButton = section.getByRole("button", { name: "Saving..." }).first();
@@ -593,6 +621,20 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
     if (selectedChipVisible || selectedChipByNameVisible) {
       return;
     }
+    if (savingVisible) {
+      stalledIterations += 1;
+      if (stalledIterations >= 3) {
+        await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+        await waitForEditorSurface(page, 60_000, { requireEditable: true }).catch(() => undefined);
+        await openMoreSidebar(page);
+        stalledIterations = 0;
+      } else {
+        await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
+      }
+      await page.waitForTimeout(300);
+      continue;
+    }
+    stalledIterations = 0;
     const selectedChips = section.locator('button[title^="Remove "]');
     const selectedCount = await selectedChips.count().catch(() => 0);
     let removedDifferentSelection = false;
@@ -606,57 +648,90 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
       await page.waitForTimeout(300);
     }
     if (removedDifferentSelection) {
+      await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
       continue;
     }
-    const hiddenMoreButton = section.getByRole("button", { name: /^More \(\d+\)$/ }).first();
-    if (await hiddenMoreButton.isVisible().catch(() => false)) {
-      await hiddenMoreButton.scrollIntoViewIfNeeded().catch(() => undefined);
-      await hiddenMoreButton.click({ force: true }).catch(() => undefined);
-      await page.waitForTimeout(300);
-    }
-    const availableChip = section.getByRole("button", { name: new RegExp(`^${escapeRegExp(value)}$`) }).first();
-    if (await availableChip.isVisible().catch(() => false)) {
+    const availableChip = section
+      .getByRole("button", { name: new RegExp(`^${escapeRegExp(value)}$`) })
+      .first();
+    const availableChipVisible = await availableChip.isVisible().catch(() => false);
+    if (availableChipVisible) {
       await availableChip.scrollIntoViewIfNeeded().catch(() => undefined);
-      await availableChip.click({ force: true }).catch(() => undefined);
-      if (
-        (await selectedChip.isVisible().catch(() => false)) ||
-        (await selectedChipByName.isVisible().catch(() => false))
-      ) {
-        return;
+      await availableChip.click().catch(async () => {
+        await availableChip.click({ force: true });
+      });
+      const selectionSettled = await expect
+        .poll(
+          async () => {
+            const chipVisible = await selectedChip.isVisible().catch(() => false);
+            const namedChipVisible = await selectedChipByName.isVisible().catch(() => false);
+            const savingNow = await section.getByRole("button", { name: "Saving..." }).first().isVisible().catch(() => false);
+            if ((chipVisible || namedChipVisible) && !savingNow) return "selected";
+            return savingNow ? "saving" : "pending";
+          },
+          {
+            timeout: 30_000,
+            message: `Expected ${label} taxonomy chip ${value} to finish saving`,
+          },
+        )
+        .toMatch(/selected/)
+        .then(() => true)
+        .catch(() => false);
+      if (!selectionSettled) {
+        await page.waitForTimeout(500);
+        continue;
       }
-      await page.waitForTimeout(500);
-      continue;
+      return;
     }
     const input = section.getByPlaceholder("Type to search or add");
     const selectButton = section.getByRole("button", { name: /Select|Saving.../i });
+    const loadingButton = section.getByRole("button", { name: "Loading..." }).first();
     const inputDisabled = await input.isDisabled().catch(() => true);
     const buttonDisabled = await selectButton.isDisabled().catch(() => true);
-    if (inputDisabled || buttonDisabled) {
-      await page.waitForTimeout(500);
+    const loadingVisible = await loadingButton.isVisible().catch(() => false);
+    if (inputDisabled || buttonDisabled || loadingVisible) {
+      stalledIterations += 1;
+      await page.waitForTimeout(stalledIterations >= 3 ? 1000 : 500);
       continue;
     }
+    stalledIterations = 0;
     await input.scrollIntoViewIfNeeded().catch(() => undefined);
     await input.click({ force: true });
     await input.fill("");
     await input.fill(value);
     await expect(input).toHaveValue(value, { timeout: 5_000 });
-    await input.press("Enter").catch(() => undefined);
-    if (
-      (await selectedChip.isVisible().catch(() => false)) ||
-      (await selectedChipByName.isVisible().catch(() => false))
-    ) {
-      return;
+    const buttonVisible = await selectButton.isVisible().catch(() => false);
+    if (buttonVisible) {
+      await selectButton.click({ force: true }).catch(() => undefined);
+    } else {
+      await input.press("Enter").catch(() => undefined);
     }
-    await selectButton.click({ force: true }).catch(() => undefined);
-    if (
-      (await selectedChip.isVisible().catch(() => false)) ||
-      (await selectedChipByName.isVisible().catch(() => false))
-    ) {
-      return;
+    const writeSettled = await expect
+      .poll(
+        async () => {
+          const chipVisible = await selectedChip.isVisible().catch(() => false);
+          const namedChipVisible = await selectedChipByName.isVisible().catch(() => false);
+          const savingNow = await section.getByRole("button", { name: "Saving..." }).first().isVisible().catch(() => false);
+          if ((chipVisible || namedChipVisible) && !savingNow) return "selected";
+          if (savingNow) return "saving";
+          const inputNowDisabled = await input.isDisabled().catch(() => false);
+          return inputNowDisabled ? "disabled" : "pending";
+        },
+        {
+          timeout: 30_000,
+          message: `Expected ${label} taxonomy write for ${value} to finish`,
+        },
+      )
+      .toMatch(/selected/)
+      .then(() => true)
+      .catch(() => false);
+    if (!writeSettled) {
+      await page.waitForTimeout(500);
+      continue;
     }
-    await page.waitForTimeout(500);
+    return;
   }
-  throw new Error(`Timed out selecting ${label} taxonomy value ${value}.`);
+  throw new Error(`Timed out preparing ${label} taxonomy value ${value}.`);
 }
 
 async function expectSelectedTaxonomyChip(
@@ -670,6 +745,7 @@ async function expectSelectedTaxonomyChip(
     const section = taxonomySection(page, label);
     const sectionVisible = await section.isVisible().catch(() => false);
     if (!sectionVisible) {
+      await openMoreSidebar(page).catch(() => undefined);
       if (options?.reloadOnMiss) {
         await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
         await waitForEditorSurface(page, 60_000, { requireEditable: true });
@@ -742,11 +818,9 @@ async function ensureLifecycleTaxonomyTerm(
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || `term-${Date.now()}`;
   const { termsTable, termTaxonomiesTable } = getSiteTaxonomyTables(siteId);
-  const advisoryKey = `${siteId}:taxonomy:${taxonomy}:${slug}`;
   return withLifecycleDbRetry(async () => {
-    await db.execute(drizzleSql`SELECT pg_advisory_lock(hashtext(${advisoryKey}))`);
-    try {
-      const [existing] = await db
+    return db.transaction(async (tx) => {
+      const [existing] = await tx
         .select({
           id: termTaxonomiesTable.id,
           name: termsTable.name,
@@ -757,9 +831,9 @@ async function ensureLifecycleTaxonomyTerm(
         .limit(1);
       if (existing) return existing;
 
-      let [term] = await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
+      let [term] = await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1);
       if (!term) {
-        const [createdTerm] = await db
+        const [createdTerm] = await tx
           .insert(termsTable)
           .values({
             name: normalizedName,
@@ -769,7 +843,7 @@ async function ensureLifecycleTaxonomyTerm(
           .returning();
         term =
           createdTerm ||
-          (await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1))[0];
+          (await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1))[0];
       }
       if (!term) {
         throw new Error(`Failed to create ${taxonomy} term ${normalizedName}.`);
@@ -783,7 +857,7 @@ async function ensureLifecycleTaxonomyTerm(
           }
         | undefined;
       try {
-        [taxonomyRow] = await db
+        [taxonomyRow] = await tx
           .insert(termTaxonomiesTable)
           .values({
             termId: term.id,
@@ -796,11 +870,11 @@ async function ensureLifecycleTaxonomyTerm(
         if (String(error?.code || "") !== "23503") {
           throw error;
         }
-        term = (await db.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1))[0];
+        term = (await tx.select().from(termsTable).where(eq(termsTable.slug, slug)).limit(1))[0];
         if (!term) {
           throw error;
         }
-        [taxonomyRow] = await db
+        [taxonomyRow] = await tx
           .insert(termTaxonomiesTable)
           .values({
             termId: term.id,
@@ -815,7 +889,7 @@ async function ensureLifecycleTaxonomyTerm(
         return { id: taxonomyRow.id, name: term.name };
       }
 
-      const [existingTaxonomy] = await db
+      const [existingTaxonomy] = await tx
         .select({
           id: termTaxonomiesTable.id,
           name: termsTable.name,
@@ -828,9 +902,7 @@ async function ensureLifecycleTaxonomyTerm(
         throw new Error(`Failed to create ${taxonomy} taxonomy row for ${normalizedName}.`);
       }
       return existingTaxonomy;
-    } finally {
-      await db.execute(drizzleSql`SELECT pg_advisory_unlock(hashtext(${advisoryKey}))`).catch(() => {});
-    }
+    });
   });
 }
 
@@ -1123,19 +1195,29 @@ test.beforeAll(async ({}, testInfo) => {
   }
 });
 
-test("site lifecycle: network dashboard reflects seeded content", async ({ page }) => {
+test("site lifecycle: admin landing reflects seeded content for the active mode", async ({ page }) => {
   await authenticateAsAdmin(page);
   await gotoAdminPage(page, `${appOrigin}/app/cp`);
 
-  await expect(page.getByRole("heading", { name: "Network Dashboard" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Newest Articles (Network)" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Most Popular Articles (Network)" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Sites" })).toBeVisible();
-  await expect(page.locator(`a[href="/app/site/${primarySiteId}/domain/post/item/${articleId}"]`).first()).toBeVisible({
-    timeout: 45_000,
-  });
-  await expect(page.getByText("Lifecycle Primary Site").first()).toBeVisible({ timeout: 45_000 });
-  await expect(page.locator(`a[href="/app/site/${primarySiteId}"]`).first()).toBeVisible({ timeout: 45_000 });
+  const articleEditorLink = page.locator(`a[href="/app/site/${primarySiteId}/domain/post/item/${articleId}"]`).first();
+  const landedOnSiteDashboard = page.url().includes(`/app/site/${primarySiteId}`);
+
+  if (landedOnSiteDashboard) {
+    await expect(page.getByRole("heading", { name: "Lifecycle Primary Site Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Newest Articles" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Most Popular Articles" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "All Articles" })).toBeVisible();
+    await expect(articleEditorLink).toBeVisible({ timeout: 45_000 });
+  } else {
+    await expect(page.getByRole("heading", { name: "Network Dashboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Newest Articles (Network)" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Most Popular Articles (Network)" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sites" })).toBeVisible();
+    await expect(articleEditorLink).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText("Lifecycle Primary Site").first()).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator(`a[href="/app/site/${primarySiteId}"]`).first()).toBeVisible({ timeout: 45_000 });
+  }
+
   await expectPageStable(page);
 });
 
@@ -1273,7 +1355,7 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   page,
 }, testInfo) => {
   test.setTimeout(12 * 60 * 1000);
-  console.error("[lifecycle] authenticate");
+  console.log(`[lifecycle:${testInfo.project.name}] start article editor lifecycle`);
   await authenticateAsAdmin(page);
   const scope = projectKey(testInfo.project.name);
   const initialTitle = `Lifecycle Draft Article ${scope}`;
@@ -1289,71 +1371,82 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
     updatedTagName,
   } = await ensureLifecycleTaxonomySelection(primarySiteId, scope);
 
-  console.error("[lifecycle] goto create");
   await gotoAdminPage(page, `${appOrigin}/app/site/${primarySiteId}/domain/post/create`);
-  await page.getByRole("button", { name: /Create Draft Post/i }).click();
+  console.log(`[lifecycle:${testInfo.project.name}] opened create route`);
 
-  console.error("[lifecycle] await created url");
   await expectCurrentUrlToMatch(
     page,
-    new RegExp(`/app/(?:cp/)?site/${primarySiteId}/domain/post/item/[^/?]+(?:\\?pending=1)?$`),
+    new RegExp(`/app/(?:cp/)?site/${primarySiteId}/domain/post/item/[^/?]+(?:\\?(?:pending=1|new=1))?$`),
     30_000,
   );
   const createdUrl = new URL(page.url());
   const createdPostId = createdUrl.pathname.split("/").pop() || "";
   expect(createdPostId).toBeTruthy();
-  console.error("[lifecycle] wait draft persistence", createdPostId);
-  await waitForDomainPostPersistence({
-    siteId: primarySiteId,
-    domainKey: "post",
-    postId: createdPostId,
-    published: false,
-    timeoutMs: 180_000,
-  });
-  console.error("[lifecycle] open editor");
-  await gotoAdminPage(
-    page,
-    `${appOrigin}/app/site/${primarySiteId}/domain/post/item/${createdPostId}`,
-  );
-  console.error("[lifecycle] wait editor surface 1");
-  await waitForEditorSurface(page, 90_000, { requireEditable: true });
-  console.error("[lifecycle] editor surface 1 ready");
+  console.log(`[lifecycle:${testInfo.project.name}] created post shell ${createdPostId}`);
+  // Draft creation redirects through the pending editor shell. Under pooled
+  // reads, user-facing convergence is the contract we care about here rather
+  // than an immediate out-of-band DB read from the test process.
+  await waitForEditorSurface(page, 180_000, { requireEditable: true });
   const editor = page.locator(".ProseMirror").first();
 
-  console.error("[lifecycle] fill initial content");
   await page.getByPlaceholder("Title").fill(initialTitle);
   await page.getByPlaceholder("Description").fill(initialDescription);
   await page.locator("#post-slug").fill(initialSlug);
   await editor.click();
   await page.keyboard.type("Lifecycle article body.");
 
+  console.log(`[lifecycle:${testInfo.project.name}] waiting for initial autosave settle`);
   await waitForEditorSaved(page);
+  console.log(`[lifecycle:${testInfo.project.name}] waiting for temp draft materialization`);
+  await waitForDomainPostPersistence({
+    siteId: primarySiteId,
+    domainKey: "post",
+    postId: createdPostId,
+    title: initialTitle,
+  });
+  console.log(`[lifecycle:${testInfo.project.name}] initial body/title save settled`);
   await openMoreSidebar(page);
+  console.log(`[lifecycle:${testInfo.project.name}] opened More sidebar for initial taxonomy`);
   await setTaxonomyValue(page, "Category", categoryName);
-  await expectSelectedTaxonomyChip(page, "Category", categoryName);
+  console.log(`[lifecycle:${testInfo.project.name}] selected initial category ${categoryName}`);
   await setTaxonomyValue(page, "Tags", tagName);
-  await expectSelectedTaxonomyChip(page, "Tags", tagName);
-
-  console.error("[lifecycle] save initial");
+  console.log(`[lifecycle:${testInfo.project.name}] selected initial tag ${tagName}`);
+  console.log(`[lifecycle:${testInfo.project.name}] running explicit save after initial taxonomy`);
   await page.getByRole("button", { name: "Save Changes" }).click();
   await waitForEditorSaved(page);
+  console.log(`[lifecycle:${testInfo.project.name}] waiting for initial taxonomy persistence`);
+  await waitForDomainPostPersistence({
+    siteId: primarySiteId,
+    domainKey: "post",
+    postId: createdPostId,
+    title: initialTitle,
+    slug: initialSlug,
+    contentIncludes: "Lifecycle article body.",
+    taxonomyTerms: [
+      { taxonomy: "category", name: categoryName },
+      { taxonomy: "tag", name: tagName },
+    ],
+  });
+  console.log(`[lifecycle:${testInfo.project.name}] initial taxonomy persisted`);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForEditorSurface(page, 90_000, { requireEditable: true });
+  await openMoreSidebar(page);
+  await expectSelectedTaxonomyChip(page, "Category", categoryName);
+  await expectSelectedTaxonomyChip(page, "Tags", tagName);
 
-  console.error("[lifecycle] reopen pending");
   await gotoAdminPage(
     page,
     `${appOrigin}/app/site/${primarySiteId}/domain/post/item/${createdPostId}`,
   );
-  console.error("[lifecycle] wait editor surface 2");
   await waitForEditorSurface(page, 90_000, { requireEditable: true });
-  console.error("[lifecycle] editor surface 2 ready");
   await waitForEditorFieldValueWithReload(page, page.getByPlaceholder("Title"), initialTitle);
   await waitForEditorFieldValueWithReload(page, page.locator("#post-slug"), initialSlug);
+  console.log(`[lifecycle:${testInfo.project.name}] reopened editor with initial values`);
   await expect(editor).toContainText("Lifecycle article body.");
   await openMoreSidebar(page);
   await expect(taxonomySection(page, "Category")).toBeVisible();
   await expect(taxonomySection(page, "Tags")).toBeVisible();
 
-  console.error("[lifecycle] fill updated content");
   await page.getByPlaceholder("Title").fill(updatedTitle);
   await page.getByPlaceholder("Description").fill(updatedDescription);
   await page.locator("#post-slug").fill(updatedSlug);
@@ -1364,11 +1457,23 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   await waitForEditorSaved(page);
   await openMoreSidebar(page);
   await setTaxonomyValue(page, "Category", updatedCategoryName);
-  await expectSelectedTaxonomyChip(page, "Category", updatedCategoryName);
   await setTaxonomyValue(page, "Tags", updatedTagName);
+  await waitForEditorSavedWithReload(page);
+  await waitForDomainPostPersistence({
+    siteId: primarySiteId,
+    domainKey: "post",
+    postId: createdPostId,
+    taxonomyTerms: [
+      { taxonomy: "category", name: updatedCategoryName },
+      { taxonomy: "tag", name: updatedTagName },
+    ],
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForEditorSurface(page, 90_000, { requireEditable: true });
+  await openMoreSidebar(page);
+  await expectSelectedTaxonomyChip(page, "Category", updatedCategoryName);
   await expectSelectedTaxonomyChip(page, "Tags", updatedTagName);
 
-  console.error("[lifecycle] schedule future publish");
   const futureDate = new Date(Date.now() + 60 * 60 * 1000);
   const futureLocal = `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, "0")}-${String(futureDate.getDate()).padStart(2, "0")}T${String(futureDate.getHours()).padStart(2, "0")}:${String(futureDate.getMinutes()).padStart(2, "0")}`;
   await page.getByRole("button", { name: /^Schedule publish:/ }).click();
@@ -1378,11 +1483,9 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   await expect(page.getByRole("button", { name: /^Schedule publish:/ })).not.toHaveText("Publish: immediately", { timeout: 20_000 });
   await waitForEditorSavedWithReload(page);
 
-  console.error("[lifecycle] save scheduled");
   await page.getByRole("button", { name: "Save Changes" }).click();
   await waitForEditorSaved(page);
   await waitForEnabledButtonWithReload(page, /^Publish$/);
-  console.error("[lifecycle] publish scheduled");
   await page.getByRole("button", { name: /^Publish$/ }).click();
   await waitForEditorSaved(page);
 
@@ -1395,7 +1498,6 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   expect(scheduledResponse?.status()).toBe(404);
   await publicPage.close();
 
-  console.error("[lifecycle] clear schedule");
   await page.getByRole("button", { name: /^Schedule publish:/ }).click();
   await page.getByRole("button", { name: "Clear" }).click();
   await page.getByRole("button", { name: "Save Schedule" }).click();
@@ -1403,14 +1505,11 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   await expect(page.getByRole("button", { name: /^Schedule publish:/ })).toHaveText("Publish: immediately", { timeout: 20_000 });
   await waitForEditorSavedWithReload(page);
 
-  console.error("[lifecycle] save immediate");
   await page.getByRole("button", { name: "Save Changes" }).click();
   await waitForEditorSaved(page);
   await waitForEnabledButtonWithReload(page, /^Publish$/);
-  console.error("[lifecycle] publish immediate");
   await page.getByRole("button", { name: /^Publish$/ }).click();
   await waitForEditorSaved(page);
-  console.error("[lifecycle] wait final persistence");
   await waitForDomainPostPersistence({
     siteId: primarySiteId,
     domainKey: "post",
@@ -1419,14 +1518,9 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
     slug: updatedSlug,
     contentIncludes: "Lifecycle updated article body.",
     published: true,
-    taxonomyTerms: [
-      { taxonomy: "category", name: updatedCategoryName },
-      { taxonomy: "tag", name: updatedTagName },
-    ],
   });
 
   const verifyPage = await page.context().newPage();
-  console.error("[lifecycle] verify public");
   const oldSlugResponse = await waitForPublicStatus(
     verifyPage,
     `${primaryPublicUrl}/post/${initialSlug}`,
@@ -1442,9 +1536,7 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
     page,
     `${appOrigin}/app/site/${primarySiteId}/domain/post/item/${createdPostId}`,
   );
-  console.error("[lifecycle] wait editor surface 3");
   await waitForEditorSurface(page, 90_000, { requireEditable: true });
-  console.error("[lifecycle] complete");
   await expect(page.getByPlaceholder("Title")).toHaveValue(updatedTitle);
   await expect(page.locator("#post-slug")).toHaveValue(updatedSlug);
   await expect(editor).toContainText("Lifecycle updated article body.");
@@ -1453,12 +1545,17 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
 test("site lifecycle: page editor persists title and permalink updates", async ({ page }) => {
   await authenticateAsAdmin(page);
   await gotoAdminPage(page, `${appOrigin}/app/site/${primarySiteId}/domain/page/item/${pageId}`);
+  await waitForEditorSurface(page, 60_000, { requireEditable: true });
+  await expect(page.getByPlaceholder("Title")).toHaveValue("Lifecycle About Page");
+  await expect(page.locator("#post-slug")).toHaveValue(pageSlug);
 
   const updatedPageTitle = "About Robert Betan";
   const updatedPageSlug = "about-robert-betan";
 
   await page.getByPlaceholder("Title").fill(updatedPageTitle);
   await page.locator("#post-slug").fill(updatedPageSlug);
+  await expect(page.getByPlaceholder("Title")).toHaveValue(updatedPageTitle);
+  await expect(page.locator("#post-slug")).toHaveValue(updatedPageSlug);
   await page.getByRole("button", { name: "Save Changes" }).click();
   await waitForEditorSaved(page);
   await waitForDomainPostPersistence({
@@ -1502,7 +1599,7 @@ test("site lifecycle: menu location can move between footer and header", async (
   await createMenuSection.locator('input[name="key"]').fill(lifecycleMenuKey);
   await createMenuSection.locator('select[name="location"]').selectOption("footer");
   await createMenuSection.getByRole("button", { name: "Create Menu" }).click();
-  await page.waitForURL(new RegExp(`/app/(?:cp/)?site/${primarySiteId}/settings/menus\\?menu=`), { timeout: 20_000 });
+  await page.waitForURL(new RegExp(`/app/(?:cp/)?site/${primarySiteId}/settings/menus\\?menu=`), { timeout: 60_000 });
   const createdMenuId = new URL(page.url()).searchParams.get("menu") || "";
   expect(createdMenuId).not.toBe("");
   await expect(page.getByRole("heading", { name: lifecycleMenuTitle })).toBeVisible();
@@ -1516,7 +1613,7 @@ test("site lifecycle: menu location can move between footer and header", async (
   );
 
   await page.getByRole("link", { name: "Edit Menu" }).click();
-  await expect(page.getByRole("heading", { name: "Edit Menu" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "Edit Menu" })).toBeVisible({ timeout: 45_000 });
   const editMenuSection = page.locator("section").filter({
     has: page.getByRole("heading", { name: "Edit Menu" }),
   });

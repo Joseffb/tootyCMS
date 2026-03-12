@@ -152,6 +152,27 @@ Rules:
 - Example: `posts` = listing, `post/:id` = detail.
 - This convention applies to internal APIs and extension-facing routes.
 
+## Editor Extension Contract (MUST)
+
+Plugins may extend the existing item editor through governed editor tabs.
+
+Rules:
+
+- plugins may add ordered right-rail tabs through the published editor-tab contract
+- editor tabs must live inside the existing editor shell; they must not replace or fork the article editor
+- editor-only plugins may omit standalone menu/settings entries
+- core owns tab strip layout, ordering, overflow behavior, focus management, save feedback, and persistence wiring
+- plugins may define structured fields and bounded fragments only; they must not mount arbitrary editor-shell applications
+
+Plugin-managed editor tab data on normal articles/items must use plugin-scoped hidden meta only.
+
+Rules:
+
+- plugin article augmentation data must be stored in hidden meta keys namespaced to the plugin
+- plugins must not mutate arbitrary visible article meta through editor-tab contracts
+- RBAC and tenant checks remain core-owned and mandatory
+- hidden plugin meta must remain hidden from the normal visible meta editor unless a separate core contract explicitly exposes it
+
 ## Permalink Contract (MUST)
 
 Default SEO permalink system for new installs:

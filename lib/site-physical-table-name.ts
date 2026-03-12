@@ -44,6 +44,31 @@ export function sitePhysicalSequenceName(prefix: string, siteId: string, suffix:
   return sitePhysicalTableName(prefix, siteId, suffix);
 }
 
+export function physicalObjectName(baseName: string, suffix: string) {
+  const normalizedBaseName = normalizeToken(baseName);
+  const normalizedSuffix = normalizeToken(suffix);
+  if (!normalizedBaseName) {
+    throw new Error("baseName is required.");
+  }
+  if (!normalizedSuffix) {
+    throw new Error("suffix is required.");
+  }
+
+  const readable = `${normalizedBaseName}_${normalizedSuffix}`;
+  if (readable.length <= PG_IDENTIFIER_MAX_LENGTH) {
+    return readable;
+  }
+
+  const hash = stableHash(`${normalizedBaseName}:${normalizedSuffix}`);
+  const reservedLength = normalizedSuffix.length + hash.length + 2;
+  if (reservedLength >= PG_IDENTIFIER_MAX_LENGTH) {
+    throw new Error(`Cannot build physical object name for suffix "${normalizedSuffix}".`);
+  }
+  const maxBaseLength = PG_IDENTIFIER_MAX_LENGTH - reservedLength;
+  const compactBaseName = normalizedBaseName.slice(0, maxBaseLength);
+  return `${compactBaseName}_${hash}_${normalizedSuffix}`;
+}
+
 function stableHash(input: string) {
   // FNV-1a 64-bit hash encoded as fixed-width lowercase hex.
   let hash = BigInt("0xcbf29ce484222325");

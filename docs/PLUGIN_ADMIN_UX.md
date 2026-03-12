@@ -244,6 +244,52 @@ Do not invent a new interaction style for each plugin unless the domain truly re
 
 This is how Tooty becomes coherent instead of becoming a pile of individually "clever" screens.
 
+### K. Do Not Expose Raw JSON As A Primary Admin Input
+
+Admin users should not be asked to hand-edit JSON for normal product workflows.
+
+Default rule:
+
+- do not add raw JSON textareas or generic JSON object fields to admin apps
+- do not treat "paste JSON here" as an acceptable primary configuration UX
+
+Prefer structured controls instead:
+
+- dropdowns
+- searchable comboboxes
+- creatable select inputs
+- toggles
+- segmented buttons
+- radio groups
+- repeatable field rows
+- keyed list editors
+- modal pickers
+- sortable lists
+
+If users need to add values dynamically, use UI patterns such as:
+
+- creatable dropdowns
+- add-row repeaters
+- key/value editors with explicit labeled fields
+
+Not:
+
+- an unbounded JSON blob field
+
+Why:
+
+- JSON fields shift validation and correctness burden onto the operator
+- they hide schema expectations
+- they increase copy/paste mistakes
+- they are harder to review, harder to diff mentally, and harder to make accessible
+
+Exception rule:
+
+- a raw JSON field is only acceptable for explicitly advanced/debug/import use cases
+- it must be clearly labeled as advanced
+- it must not be the only way to perform a normal admin task
+- the structured UI remains the primary workflow
+
 ## Layout Rules
 
 ### 1. Use Logical Tabs

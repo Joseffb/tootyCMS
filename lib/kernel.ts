@@ -31,6 +31,7 @@ export type KernelFilterName =
   | "admin:floating-widgets"
   | "admin:profile:sections"
   | "admin:schedule-actions"
+  | "admin:editor:tabs"
   | "admin:editor:footer-panels"
   | "domain:scripts"
   | "domain:query"

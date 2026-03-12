@@ -6,9 +6,9 @@ function normalizeOnePath(value: string) {
   return path.isAbsolute(trimmed) ? trimmed : path.join(process.cwd(), trimmed);
 }
 
-function parseConfiguredPaths(rawValue: string | undefined, fallbackDirName: string) {
+function parseConfiguredPaths(rawValue: string | undefined, fallbackDirNames: string[]) {
   const trimmed = (rawValue || "").trim();
-  const parts = (trimmed ? trimmed.split(",") : [fallbackDirName])
+  const parts = (trimmed ? trimmed.split(",") : fallbackDirNames)
     .map((part) => normalizeOnePath(part))
     .filter(Boolean);
   const unique: string[] = [];
@@ -19,11 +19,19 @@ function parseConfiguredPaths(rawValue: string | undefined, fallbackDirName: str
 }
 
 export function getThemesDirs() {
-  return parseConfiguredPaths(process.env.THEMES_PATH, "themes");
+  return parseConfiguredPaths(process.env.THEMES_PATH, [
+    "themes",
+    "../tootyCMS-themes",
+    "../tootyCMS-custom-themes",
+  ]);
 }
 
 export function getPluginsDirs() {
-  return parseConfiguredPaths(process.env.PLUGINS_PATH, "plugins");
+  return parseConfiguredPaths(process.env.PLUGINS_PATH, [
+    "plugins",
+    "../tootyCMS-plugins",
+    "../tootyCMS-custom-plugins",
+  ]);
 }
 
 export function getThemesDir() {

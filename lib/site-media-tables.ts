@@ -1,6 +1,6 @@
 import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
-import { sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 import { eq, sql } from "drizzle-orm";
 import {
   index,
@@ -249,6 +249,9 @@ async function createPhysicalSiteMediaTable(executor: SqlExecutor, siteId: strin
   const table = siteMediaTableName(siteId);
   const usersTable = `${normalizedPrefix}network_users`;
   const idSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "media_id_seq");
+  const primaryKey = physicalObjectName(table, "pkey");
+  const userForeignKey = physicalObjectName(table, "user_id_fkey");
+  const objectKeyUnique = physicalObjectName(table, "object_key_key");
   await createNamedRelation(
     executor,
     idSequence,
@@ -261,11 +264,11 @@ async function createPhysicalSiteMediaTable(executor: SqlExecutor, siteId: strin
     table,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(table)} (
-        "id" INTEGER PRIMARY KEY,
-        "userId" TEXT REFERENCES ${quoted(usersTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+        "id" INTEGER CONSTRAINT ${quoted(primaryKey)} PRIMARY KEY,
+        "userId" TEXT CONSTRAINT ${quoted(userForeignKey)} REFERENCES ${quoted(usersTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
         "provider" TEXT NOT NULL DEFAULT 'blob',
         "bucket" TEXT,
-        "objectKey" TEXT NOT NULL UNIQUE,
+        "objectKey" TEXT NOT NULL CONSTRAINT ${quoted(objectKeyUnique)} UNIQUE,
         "url" TEXT NOT NULL,
         "label" TEXT,
         "altText" TEXT,

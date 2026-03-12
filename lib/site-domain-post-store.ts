@@ -2,7 +2,11 @@ import { createId } from "@paralleldrive/cuid2";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import db from "@/lib/db";
 import { isMissingRelationError } from "@/lib/db-errors";
-import { ensureSiteDomainTypeTables, siteTableExists } from "@/lib/site-domain-type-tables";
+import {
+  ensureSiteDomainTypeTables,
+  resetSiteDomainTypeTablesCache,
+  siteTableExists,
+} from "@/lib/site-domain-type-tables";
 import { sites } from "@/lib/schema";
 import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
 
@@ -137,6 +141,77 @@ async function withDbRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
   throw lastError;
 }
 
+type SiteDomainTableRecoveryOptions = {
+  requireContent?: boolean;
+  requireMeta?: boolean;
+};
+
+const SITE_DOMAIN_TABLE_VISIBILITY_ATTEMPTS = 5;
+const SITE_DOMAIN_QUERY_RECOVERY_ATTEMPTS = 8;
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function areRequiredSiteDomainTablesVisible(
+  tables: { contentTable: string; metaTable: string },
+  options?: SiteDomainTableRecoveryOptions,
+) {
+  const checks: boolean[] = [];
+  if (options?.requireContent !== false) {
+    checks.push(await siteTableExists(tables.contentTable));
+  }
+  if (options?.requireMeta) {
+    checks.push(await siteTableExists(tables.metaTable));
+  }
+  return checks.every(Boolean);
+}
+
+async function ensureSiteDomainTablesReady(
+  siteId: string,
+  domainKey: string,
+  options?: SiteDomainTableRecoveryOptions,
+  attempts = SITE_DOMAIN_TABLE_VISIBILITY_ATTEMPTS,
+) {
+  const normalizedSiteId = String(siteId || "").trim();
+  const normalizedDomainKey = normalizeDomainKey(domainKey);
+  let latest = await ensureSiteDomainTypeTables(normalizedSiteId, normalizedDomainKey);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    latest = await ensureSiteDomainTypeTables(normalizedSiteId, normalizedDomainKey);
+    if (await areRequiredSiteDomainTablesVisible(latest, options)) {
+      return latest;
+    }
+    if (attempt < attempts) {
+      resetSiteDomainTypeTablesCache(normalizedSiteId, normalizedDomainKey);
+      await sleep(Math.min(200 * attempt, 1000));
+    }
+  }
+  return latest;
+}
+
+async function withSiteDomainTableRecovery<T>(
+  siteId: string,
+  domainKey: string,
+  options: SiteDomainTableRecoveryOptions,
+  run: (tables: { contentTable: string; metaTable: string }) => Promise<T>,
+): Promise<T> {
+  const normalizedSiteId = String(siteId || "").trim();
+  const normalizedDomainKey = normalizeDomainKey(domainKey);
+  const maxAttempts = SITE_DOMAIN_QUERY_RECOVERY_ATTEMPTS;
+  let tables = await ensureSiteDomainTablesReady(normalizedSiteId, normalizedDomainKey, options);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await run(tables);
+    } catch (error) {
+      if (!isMissingRelationError(error) || attempt === maxAttempts) throw error;
+    }
+    resetSiteDomainTypeTablesCache(normalizedSiteId, normalizedDomainKey);
+    await sleep(Math.min(200 * attempt, 1200));
+    tables = await ensureSiteDomainTablesReady(normalizedSiteId, normalizedDomainKey, options);
+  }
+  throw new Error("Unreachable site domain table recovery state.");
+}
+
 function normalizeDefinition(
   input: {
     id: number;
@@ -259,7 +334,6 @@ export async function listSiteDomainPosts(input: ListSiteDomainPostsInput) {
     : null;
   const out: SiteDomainPostRecord[] = [];
   for (const definition of filteredDefinitions) {
-    if (!(await siteTableExists(definition.contentTable))) continue;
     const where: SQL[] = [];
     if (typeof input.published === "boolean") where.push(sql`"published" = ${input.published}`);
     if (input.postId) where.push(sql`"id" = ${String(input.postId).trim()}`);
@@ -267,27 +341,33 @@ export async function listSiteDomainPosts(input: ListSiteDomainPostsInput) {
 
     let result: unknown;
     try {
-      result = await withDbRetry(() => db.execute(sql`
-        SELECT
-          "id",
-          "title",
-          "description",
-          "content",
-          "password",
-          "usePassword",
-          "layout",
-          "slug",
-          "image",
-          "imageBlurhash",
-          "published",
-          "userId",
-          "createdAt",
-          "updatedAt"
-        FROM ${sql.raw(quoted(definition.contentTable))}
-        ${where.length > 0 ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``}
-        ORDER BY "updatedAt" DESC
-        ${input.limit ? sql`LIMIT ${Math.max(1, Math.trunc(input.limit))}` : sql``}
-      `));
+      result = await withSiteDomainTableRecovery(
+        siteId,
+        definition.key,
+        { requireContent: true },
+        async (tables) =>
+          withDbRetry(() => db.execute(sql`
+            SELECT
+              "id",
+              "title",
+              "description",
+              "content",
+              "password",
+              "usePassword",
+              "layout",
+              "slug",
+              "image",
+              "imageBlurhash",
+              "published",
+              "userId",
+              "createdAt",
+              "updatedAt"
+            FROM ${sql.raw(quoted(tables.contentTable))}
+            ${where.length > 0 ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``}
+            ORDER BY "updatedAt" DESC
+            ${input.limit ? sql`LIMIT ${Math.max(1, Math.trunc(input.limit))}` : sql``}
+          `)),
+      );
     } catch (error) {
       if (isMissingRelationError(error)) continue;
       throw error;
@@ -352,40 +432,46 @@ export async function createSiteDomainPost(input: CreateSiteDomainPostInput) {
   const slug = String(input.slug || "").trim();
   if (!slug) throw new Error("slug is required.");
 
-  const result = await withDbRetry(() => db.execute(sql`
-    INSERT INTO ${sql.raw(quoted(definition.contentTable))}
-      ("id", "title", "description", "content", "password", "usePassword", "layout", "slug", "image", "imageBlurhash", "published", "userId")
-    VALUES
-      (
-        ${id},
-        ${String(input.title || "")},
-        ${String(input.description || "")},
-        ${String(input.content || "")},
-        ${String(input.password || "")},
-        ${Boolean(input.usePassword)},
-        ${input.layout == null ? null : String(input.layout)},
-        ${slug},
-        ${String(input.image || "")},
-        ${String(input.imageBlurhash || DEFAULT_IMAGE_BLURHASH)},
-        ${Boolean(input.published)},
-        ${input.userId ? String(input.userId) : null}
-      )
-    RETURNING
-      "id",
-      "title",
-      "description",
-      "content",
-      "password",
-      "usePassword",
-      "layout",
-      "slug",
-      "image",
-      "imageBlurhash",
-      "published",
-      "userId",
-      "createdAt",
-      "updatedAt"
-  `));
+  const result = await withSiteDomainTableRecovery(
+    siteId,
+    definition.key,
+    { requireContent: true },
+    async (tables) =>
+      withDbRetry(() => db.execute(sql`
+        INSERT INTO ${sql.raw(quoted(tables.contentTable))}
+          ("id", "title", "description", "content", "password", "usePassword", "layout", "slug", "image", "imageBlurhash", "published", "userId")
+        VALUES
+          (
+            ${id},
+            ${String(input.title || "")},
+            ${String(input.description || "")},
+            ${String(input.content || "")},
+            ${String(input.password || "")},
+            ${Boolean(input.usePassword)},
+            ${input.layout == null ? null : String(input.layout)},
+            ${slug},
+            ${String(input.image || "")},
+            ${String(input.imageBlurhash || DEFAULT_IMAGE_BLURHASH)},
+            ${Boolean(input.published)},
+            ${input.userId ? String(input.userId) : null}
+          )
+        RETURNING
+          "id",
+          "title",
+          "description",
+          "content",
+          "password",
+          "usePassword",
+          "layout",
+          "slug",
+          "image",
+          "imageBlurhash",
+          "published",
+          "userId",
+          "createdAt",
+          "updatedAt"
+      `)),
+  );
   const row = normalizeRows<Record<string, unknown>>(result)[0];
   if (!row) return null;
   return toDomainPostRecord(row, definition, siteId);
@@ -422,26 +508,32 @@ export async function updateSiteDomainPostById(input: UpdateSiteDomainPostInput)
   if ("published" in input.patch) setClauses.push(sql`"published" = ${Boolean(input.patch.published)}`);
   setClauses.push(sql`"updatedAt" = NOW()`);
 
-  const result = await withDbRetry(() => db.execute(sql`
-    UPDATE ${sql.raw(quoted(definition.contentTable))}
-    SET ${sql.join(setClauses, sql`, `)}
-    WHERE "id" = ${postId}
-    RETURNING
-      "id",
-      "title",
-      "description",
-      "content",
-      "password",
-      "usePassword",
-      "layout",
-      "slug",
-      "image",
-      "imageBlurhash",
-      "published",
-      "userId",
-      "createdAt",
-      "updatedAt"
-  `));
+  const result = await withSiteDomainTableRecovery(
+    siteId,
+    definition.key,
+    { requireContent: true },
+    async (tables) =>
+      withDbRetry(() => db.execute(sql`
+        UPDATE ${sql.raw(quoted(tables.contentTable))}
+        SET ${sql.join(setClauses, sql`, `)}
+        WHERE "id" = ${postId}
+        RETURNING
+          "id",
+          "title",
+          "description",
+          "content",
+          "password",
+          "usePassword",
+          "layout",
+          "slug",
+          "image",
+          "imageBlurhash",
+          "published",
+          "userId",
+          "createdAt",
+          "updatedAt"
+      `)),
+  );
   const row = normalizeRows<Record<string, unknown>>(result)[0];
   if (!row) return null;
   return toDomainPostRecord(row, definition, siteId);
@@ -467,11 +559,18 @@ export async function deleteSiteDomainPostById(input: {
     includeInactive: true,
   });
   if (!definition) return null;
-  await withDbRetry(() =>
-    db.execute(sql`DELETE FROM ${sql.raw(quoted(definition.metaTable))} WHERE "domainPostId" = ${postId}`),
-  );
-  await withDbRetry(() =>
-    db.execute(sql`DELETE FROM ${sql.raw(quoted(definition.contentTable))} WHERE "id" = ${postId}`),
+  await withSiteDomainTableRecovery(
+    siteId,
+    definition.key,
+    { requireContent: true, requireMeta: true },
+    async (tables) => {
+      await withDbRetry(() =>
+        db.execute(sql`DELETE FROM ${sql.raw(quoted(tables.metaTable))} WHERE "domainPostId" = ${postId}`),
+      );
+      await withDbRetry(() =>
+        db.execute(sql`DELETE FROM ${sql.raw(quoted(tables.contentTable))} WHERE "id" = ${postId}`),
+      );
+    },
   );
   return existing;
 }
@@ -485,15 +584,21 @@ export async function listSiteDomainPostMeta(input: {
     dataDomainKey: input.dataDomainKey,
     includeInactive: true,
   });
-  if (!definition || !(await siteTableExists(definition.metaTable))) return [];
   let result: unknown;
   try {
-    result = await withDbRetry(() => db.execute(sql`
-      SELECT "key", "value"
-      FROM ${sql.raw(quoted(definition.metaTable))}
-      WHERE "domainPostId" = ${String(input.postId || "").trim()}
-      ORDER BY "key" ASC
-    `));
+    if (!definition) return [];
+    result = await withSiteDomainTableRecovery(
+      input.siteId,
+      definition.key,
+      { requireContent: false, requireMeta: true },
+      async (tables) =>
+        withDbRetry(() => db.execute(sql`
+          SELECT "key", "value"
+          FROM ${sql.raw(quoted(tables.metaTable))}
+          WHERE "domainPostId" = ${String(input.postId || "").trim()}
+          ORDER BY "key" ASC
+        `)),
+    );
   } catch (error) {
     if (isMissingRelationError(error)) return [];
     throw error;
@@ -514,7 +619,6 @@ export async function listSiteDomainPostMetaMany(input: {
     dataDomainKey: input.dataDomainKey,
     includeInactive: true,
   });
-  if (!definition || !(await siteTableExists(definition.metaTable))) return [];
   const postIds = input.postIds.map((value) => String(value || "").trim()).filter(Boolean);
   if (!postIds.length) return [];
   const where: SQL[] = [sql`"domainPostId" IN (${sql.join(postIds.map((value) => sql`${value}`), sql`, `)})`];
@@ -524,11 +628,18 @@ export async function listSiteDomainPostMetaMany(input: {
   }
   let result: unknown;
   try {
-    result = await withDbRetry(() => db.execute(sql`
-      SELECT "domainPostId", "key", "value"
-      FROM ${sql.raw(quoted(definition.metaTable))}
-      WHERE ${sql.join(where, sql` AND `)}
-    `));
+    if (!definition) return [];
+    result = await withSiteDomainTableRecovery(
+      input.siteId,
+      definition.key,
+      { requireContent: false, requireMeta: true },
+      async (tables) =>
+        withDbRetry(() => db.execute(sql`
+          SELECT "domainPostId", "key", "value"
+          FROM ${sql.raw(quoted(tables.metaTable))}
+          WHERE ${sql.join(where, sql` AND `)}
+        `)),
+    );
   } catch (error) {
     if (isMissingRelationError(error)) return [];
     throw error;
@@ -553,19 +664,26 @@ export async function replaceSiteDomainPostMeta(input: {
   if (!definition) return;
   const postId = String(input.postId || "").trim();
   if (!postId) return;
-  await withDbRetry(() =>
-    db.execute(sql`DELETE FROM ${sql.raw(quoted(definition.metaTable))} WHERE "domainPostId" = ${postId}`),
+  await withSiteDomainTableRecovery(
+    input.siteId,
+    definition.key,
+    { requireContent: false, requireMeta: true },
+    async (tables) => {
+      await withDbRetry(() =>
+        db.execute(sql`DELETE FROM ${sql.raw(quoted(tables.metaTable))} WHERE "domainPostId" = ${postId}`),
+      );
+      for (const entry of input.entries) {
+        const key = String(entry.key || "").trim();
+        if (!key) continue;
+        await withDbRetry(() => db.execute(sql`
+          INSERT INTO ${sql.raw(quoted(tables.metaTable))} ("domainPostId", "key", "value")
+          VALUES (${postId}, ${key}, ${String(entry.value || "")})
+          ON CONFLICT ("domainPostId", "key")
+          DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
+        `));
+      }
+    },
   );
-  for (const entry of input.entries) {
-    const key = String(entry.key || "").trim();
-    if (!key) continue;
-    await withDbRetry(() => db.execute(sql`
-      INSERT INTO ${sql.raw(quoted(definition.metaTable))} ("domainPostId", "key", "value")
-      VALUES (${postId}, ${key}, ${String(entry.value || "")})
-      ON CONFLICT ("domainPostId", "key")
-      DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
-    `));
-  }
 }
 
 export async function upsertSiteDomainPostMeta(input: {
@@ -583,12 +701,18 @@ export async function upsertSiteDomainPostMeta(input: {
   const postId = String(input.postId || "").trim();
   const key = String(input.key || "").trim();
   if (!postId || !key) return;
-  await withDbRetry(() => db.execute(sql`
-    INSERT INTO ${sql.raw(quoted(definition.metaTable))} ("domainPostId", "key", "value")
-    VALUES (${postId}, ${key}, ${String(input.value || "")})
-    ON CONFLICT ("domainPostId", "key")
-    DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
-  `));
+  await withSiteDomainTableRecovery(
+    input.siteId,
+    definition.key,
+    { requireContent: false, requireMeta: true },
+    async (tables) =>
+      withDbRetry(() => db.execute(sql`
+        INSERT INTO ${sql.raw(quoted(tables.metaTable))} ("domainPostId", "key", "value")
+        VALUES (${postId}, ${key}, ${String(input.value || "")})
+        ON CONFLICT ("domainPostId", "key")
+        DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()
+      `)),
+  );
 }
 
 export async function deleteSiteDomainPostMeta(input: {
@@ -605,11 +729,17 @@ export async function deleteSiteDomainPostMeta(input: {
   const postId = String(input.postId || "").trim();
   const key = String(input.key || "").trim();
   if (!postId || !key) return;
-  await withDbRetry(() => db.execute(sql`
-    DELETE FROM ${sql.raw(quoted(definition.metaTable))}
-    WHERE "domainPostId" = ${postId}
-      AND "key" = ${key}
-  `));
+  await withSiteDomainTableRecovery(
+    input.siteId,
+    definition.key,
+    { requireContent: false, requireMeta: true },
+    async (tables) =>
+      withDbRetry(() => db.execute(sql`
+        DELETE FROM ${sql.raw(quoted(tables.metaTable))}
+        WHERE "domainPostId" = ${postId}
+          AND "key" = ${key}
+      `)),
+  );
 }
 
 export async function findDomainPostForMutation(postId: string, siteIdHint?: string | null) {
@@ -641,14 +771,16 @@ export async function countSiteDomainPostUsageByDomain(siteId?: string | null) {
   for (const currentSiteId of siteIds) {
     const definitions = await listSiteDomainDefinitions(currentSiteId, { includeInactive: true });
     for (const definition of definitions) {
-      if (!(await siteTableExists(definition.contentTable))) {
-        out.set(definition.id, out.get(definition.id) || 0);
-        continue;
-      }
       let result: unknown;
       try {
-        result = await withDbRetry(() =>
-          db.execute(sql`SELECT COUNT(*)::int AS count FROM ${sql.raw(quoted(definition.contentTable))}`),
+        result = await withSiteDomainTableRecovery(
+          currentSiteId,
+          definition.key,
+          { requireContent: true },
+          async (tables) =>
+            withDbRetry(() =>
+              db.execute(sql`SELECT COUNT(*)::int AS count FROM ${sql.raw(quoted(tables.contentTable))}`),
+            ),
         );
       } catch (error) {
         if (isMissingRelationError(error)) {
@@ -672,12 +804,18 @@ export async function listNetworkDomainPosts(input: {
 }) {
   const posts: SiteDomainPostRecord[] = [];
   for (const siteId of input.siteIds) {
-    const sitePosts = await listSiteDomainPosts({
-      siteId,
-      published: input.published,
-      includeInactiveDomains: false,
-      includeContent: Boolean(input.includeContent),
-    });
+    let sitePosts: SiteDomainPostRecord[] = [];
+    try {
+      sitePosts = await listSiteDomainPosts({
+        siteId,
+        published: input.published,
+        includeInactiveDomains: false,
+        includeContent: Boolean(input.includeContent),
+      });
+    } catch (error) {
+      if (isMissingRelationError(error)) continue;
+      throw error;
+    }
     posts.push(...sitePosts);
   }
   posts.sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());

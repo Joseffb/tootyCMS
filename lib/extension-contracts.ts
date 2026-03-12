@@ -20,6 +20,7 @@ export type ExtensionSettingsField = {
   placeholder?: string;
   helpText?: string;
   defaultValue?: string;
+  rows?: number;
 };
 
 export type PluginEditorSnippet = {
@@ -27,6 +28,36 @@ export type PluginEditorSnippet = {
   title: string;
   description?: string;
   content: string;
+};
+
+export type PluginEditorTabFieldType = ExtensionFieldType | "radio" | "repeater";
+
+export type PluginEditorTabField = Omit<ExtensionSettingsField, "type"> & {
+  type?: PluginEditorTabFieldType;
+  metaKey?: string;
+  fields?: PluginEditorTabField[];
+};
+
+export type PluginEditorTabFragment = {
+  kind: "html";
+  html: string;
+};
+
+export type PluginEditorTabSection = {
+  id: string;
+  title: string;
+  description?: string;
+  fields?: PluginEditorTabField[];
+  fragment?: PluginEditorTabFragment;
+};
+
+export type PluginEditorTab = {
+  id: string;
+  label: string;
+  order?: number;
+  supportsDomains?: string[];
+  requiresCapability?: SiteCapability;
+  sections: PluginEditorTabSection[];
 };
 
 export type PluginMenuPlacement = "settings" | "root" | "both";
@@ -50,6 +81,22 @@ export type PluginCollectionContentModel = {
   ctaTextMetaKey?: string;
   ctaUrlMetaKey?: string;
   workflowStates?: string[];
+  workspaceLayout?: "default" | "split";
+  parentEditorFields?: PluginCollectionWorkspaceField[];
+  childEditorFields?: PluginCollectionWorkspaceField[];
+  childNestedItems?: PluginCollectionNestedItemsModel;
+};
+
+export type PluginCollectionWorkspaceField = ExtensionSettingsField & {
+  target?: "title" | "description" | "content" | "slug" | "image" | "meta";
+  metaKey?: string;
+};
+
+export type PluginCollectionNestedItemsModel = {
+  metaKey: string;
+  singularLabel: string;
+  pluralLabel: string;
+  fields: ExtensionSettingsField[];
 };
 
 export type PluginContract = {
@@ -83,6 +130,7 @@ export type PluginContract = {
   contentModel?: PluginCollectionContentModel;
   editor?: {
     snippets?: PluginEditorSnippet[];
+    tabs?: PluginEditorTab[];
   };
   permissions?: {
     contentMeta?: {
@@ -169,6 +217,94 @@ function cleanField(field: unknown): ExtensionSettingsField | null {
       candidate.defaultValue === undefined || candidate.defaultValue === null
         ? undefined
         : String(candidate.defaultValue),
+    rows:
+      Number.isFinite(Number(candidate.rows)) && Number(candidate.rows) > 0
+        ? Math.max(1, Math.trunc(Number(candidate.rows)))
+        : undefined,
+  };
+}
+
+function cleanPluginEditorTabField(field: unknown, allowRepeater = true): PluginEditorTabField | null {
+  const candidate = asRecord(field);
+  const base = cleanField(field);
+  if (!base) return null;
+  const rawType = String(candidate.type ?? "").trim().toLowerCase();
+  const type: PluginEditorTabFieldType =
+    rawType === "radio" || (allowRepeater && rawType === "repeater")
+      ? (rawType as PluginEditorTabFieldType)
+      : (base.type as PluginEditorTabFieldType);
+  const metaKey = normalizeMetaKey(candidate.metaKey);
+  const fields =
+    type === "repeater" && Array.isArray(candidate.fields)
+      ? candidate.fields
+          .map((entry) => cleanPluginEditorTabField(entry, false))
+          .filter((entry): entry is PluginEditorTabField => Boolean(entry))
+      : undefined;
+  return {
+    ...base,
+    type,
+    metaKey: metaKey || undefined,
+    fields: fields && fields.length > 0 ? fields : undefined,
+  };
+}
+
+function cleanPluginEditorTabSection(section: unknown): PluginEditorTabSection | null {
+  const candidate = asRecord(section);
+  const id = String(candidate.id ?? "").trim();
+  const title = String(candidate.title ?? "").trim();
+  if (!id || !title) return null;
+  const fields = Array.isArray(candidate.fields)
+    ? candidate.fields
+        .map((entry) => cleanPluginEditorTabField(entry))
+        .filter((entry): entry is PluginEditorTabField => Boolean(entry))
+    : [];
+  const fragmentCandidate = candidate.fragment ? asRecord(candidate.fragment) : null;
+  const fragmentHtml = String(fragmentCandidate?.html ?? "").trim();
+  const fragment =
+    fragmentCandidate && String(fragmentCandidate.kind ?? "").trim().toLowerCase() === "html" && fragmentHtml
+      ? ({ kind: "html", html: fragmentHtml } satisfies PluginEditorTabFragment)
+      : undefined;
+  if (fields.length === 0 && !fragment) return null;
+  return {
+    id,
+    title,
+    description: String(candidate.description ?? "").trim(),
+    fields: fields.length > 0 ? fields : undefined,
+    fragment,
+  };
+}
+
+function cleanPluginEditorTab(tab: unknown): PluginEditorTab | null {
+  const candidate = asRecord(tab);
+  const id = String(candidate.id ?? "").trim();
+  const label = String(candidate.label ?? "").trim();
+  if (!id || !label) return null;
+  const sections = Array.isArray(candidate.sections)
+    ? candidate.sections
+        .map((entry) => cleanPluginEditorTabSection(entry))
+        .filter((entry): entry is PluginEditorTabSection => Boolean(entry))
+    : [];
+  if (sections.length === 0) return null;
+  const supportsDomains = Array.isArray(candidate.supportsDomains)
+    ? Array.from(
+        new Set(
+          candidate.supportsDomains
+            .map((entry) => normalizeMetaKey(entry))
+            .filter(Boolean),
+        ),
+      )
+    : undefined;
+  const normalizedCapability = String(candidate.requiresCapability ?? "").trim();
+  const requiresCapability = (SITE_CAPABILITIES as readonly string[]).includes(normalizedCapability)
+    ? (normalizedCapability as SiteCapability)
+    : undefined;
+  return {
+    id,
+    label,
+    order: Number.isFinite(Number(candidate.order)) ? Number(candidate.order) : undefined,
+    supportsDomains: supportsDomains && supportsDomains.length > 0 ? supportsDomains : undefined,
+    requiresCapability,
+    sections,
   };
 }
 
@@ -178,6 +314,51 @@ function normalizeMetaKey(value: unknown) {
     .toLowerCase()
     .replace(/[^a-z0-9_:-]/g, "")
     .slice(0, 80);
+}
+
+function cleanCollectionWorkspaceField(field: unknown): PluginCollectionWorkspaceField | null {
+  const candidate = asRecord(field);
+  const base = cleanField(field);
+  if (!base) return null;
+  const rawTarget = String(candidate.target ?? "").trim().toLowerCase();
+  const target =
+    rawTarget === "title" ||
+    rawTarget === "description" ||
+    rawTarget === "content" ||
+    rawTarget === "slug" ||
+    rawTarget === "image" ||
+    rawTarget === "meta"
+      ? rawTarget
+      : normalizeMetaKey(candidate.metaKey)
+        ? "meta"
+        : undefined;
+  const metaKey = normalizeMetaKey(candidate.metaKey);
+  if (!target) return null;
+  if (target === "meta" && !metaKey) return null;
+  return {
+    ...base,
+    target,
+    metaKey: target === "meta" ? metaKey : undefined,
+  };
+}
+
+function cleanNestedItemsModel(input: unknown): PluginCollectionNestedItemsModel | undefined {
+  const candidate = asRecord(input);
+  const metaKey = normalizeMetaKey(candidate.metaKey);
+  const singularLabel = String(candidate.singularLabel ?? "").trim();
+  const pluralLabel = String(candidate.pluralLabel ?? "").trim();
+  const fields = Array.isArray(candidate.fields)
+    ? candidate.fields
+        .map((field) => cleanField(field))
+        .filter((field): field is ExtensionSettingsField => Boolean(field))
+    : [];
+  if (!metaKey || !singularLabel || !pluralLabel || fields.length === 0) return undefined;
+  return {
+    metaKey,
+    singularLabel,
+    pluralLabel,
+    fields,
+  };
 }
 
 function cleanCollectionContentModel(input: unknown): PluginCollectionContentModel | undefined {
@@ -203,6 +384,18 @@ function cleanCollectionContentModel(input: unknown): PluginCollectionContentMod
         ),
       )
     : undefined;
+  const workspaceLayout = String(candidate.workspaceLayout ?? "").trim().toLowerCase();
+  const parentEditorFields = Array.isArray(candidate.parentEditorFields)
+    ? candidate.parentEditorFields
+        .map((field) => cleanCollectionWorkspaceField(field))
+        .filter((field): field is PluginCollectionWorkspaceField => Boolean(field))
+    : undefined;
+  const childEditorFields = Array.isArray(candidate.childEditorFields)
+    ? candidate.childEditorFields
+        .map((field) => cleanCollectionWorkspaceField(field))
+        .filter((field): field is PluginCollectionWorkspaceField => Boolean(field))
+    : undefined;
+  const childNestedItems = cleanNestedItemsModel(candidate.childNestedItems);
 
   return {
     kind: "collection",
@@ -217,6 +410,10 @@ function cleanCollectionContentModel(input: unknown): PluginCollectionContentMod
     ctaTextMetaKey: normalizeMetaKey(candidate.ctaTextMetaKey) || undefined,
     ctaUrlMetaKey: normalizeMetaKey(candidate.ctaUrlMetaKey) || undefined,
     workflowStates: workflowStates?.length ? workflowStates : undefined,
+    workspaceLayout: workspaceLayout === "split" ? "split" : undefined,
+    parentEditorFields: parentEditorFields?.length ? parentEditorFields : undefined,
+    childEditorFields: childEditorFields?.length ? childEditorFields : undefined,
+    childNestedItems,
   };
 }
 
@@ -244,6 +441,7 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
   const settingsMenu = candidate.settingsMenu ? asRecord(candidate.settingsMenu) : null;
   const editor = candidate.editor ? asRecord(candidate.editor) : null;
   const snippetsRaw = Array.isArray(editor?.snippets) ? editor?.snippets : [];
+  const tabsRaw = Array.isArray(editor?.tabs) ? editor?.tabs : [];
   const settingsRaw = Array.isArray(candidate.settingsFields) ? candidate.settingsFields : [];
   const scopeRaw = String(candidate.scope ?? "").trim().toLowerCase();
   // Backward-compat: legacy "core" scope is normalized to "network".
@@ -327,6 +525,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
               },
             ];
           }),
+          tabs: tabsRaw
+            .map((tab) => cleanPluginEditorTab(tab))
+            .filter((tab): tab is PluginEditorTab => Boolean(tab)),
         }
       : undefined,
     permissions: cleanPluginPermissions(candidate.permissions),

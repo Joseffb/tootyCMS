@@ -1,4 +1,5 @@
 import { siteDomainTypeMetaTableTemplate, siteDomainTypeTableTemplate } from "@/lib/site-domain-type-tables";
+import { ensureSiteDomainTypeTables } from "@/lib/site-domain-type-tables";
 import {
   ensureSiteDataDomainTable,
   findSiteDataDomainByKey,
@@ -61,6 +62,10 @@ export async function ensureDefaultCoreDataDomains(siteId?: string) {
   for (const currentSiteId of targetSiteIds) {
     for (const key of DEFAULT_CORE_DOMAIN_KEYS) {
       const row = await ensureOneCoreDomain(currentSiteId, key);
+      // Core post/page domains must become physically queryable as soon as
+      // they are registered so public routes and network dashboards do not
+      // race a later first-read table creation under shared load.
+      await ensureSiteDomainTypeTables(currentSiteId, key);
       if (!siteId && row?.id && !out.has(key)) {
         out.set(key, row.id);
       }

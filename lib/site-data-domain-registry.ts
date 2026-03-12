@@ -1,7 +1,7 @@
 import db from "@/lib/db";
 import { isMissingRelationError } from "@/lib/db-errors";
 import { sites } from "@/lib/schema";
-import { sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalSequenceName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 import { eq, sql } from "drizzle-orm";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
@@ -137,6 +137,19 @@ function createPendingRelationRetryError(relationName: string) {
   return Object.assign(new Error(`Pending concurrent relation creation: ${relationName}`), { code: "55P03" });
 }
 
+async function withSiteDataDomainTableRecovery<T>(siteId: string, run: () => Promise<T>) {
+  try {
+    await ensureSiteDataDomainTable(siteId);
+    return await run();
+  } catch (error) {
+    if (!isMissingSiteDataDomainRelationError(error)) throw error;
+    siteTableCache.delete(siteId);
+    siteTableInFlight.delete(siteId);
+    await ensureSiteDataDomainTable(siteId);
+    return run();
+  }
+}
+
 async function createNamedRelation(
   executor: SqlExecutor,
   relationName: string,
@@ -163,18 +176,22 @@ async function dataDomainIdDefaultNeedsRepair(executor: SqlExecutor, siteId: str
   if (typeof executor.execute !== "function") return false;
   const table = siteDomainsTable(siteId);
   const idSequence = sitePhysicalSequenceName(normalizedPrefix, siteId, "data_domains_id_seq");
-  const result = (await executor.execute(sql`
-    SELECT column_default
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = ${table}
-      AND column_name = 'id'
-  `).catch((error) => {
-    if (isMissingPgRelationError(error)) {
-      return { rows: [{ column_default: null }] } as QueryRows<{ column_default?: string | null }>;
-    }
-    throw error;
-  })) as QueryRows<{ column_default?: string | null }>;
+  const result = (await withLockRetry(() =>
+    executor.execute!(
+      sql`
+        SELECT column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = ${table}
+          AND column_name = 'id'
+      `,
+    ).catch((error) => {
+      if (isMissingPgRelationError(error)) {
+        return { rows: [{ column_default: null }] } as QueryRows<{ column_default?: string | null }>;
+      }
+      throw error;
+    }),
+  )) as QueryRows<{ column_default?: string | null }>;
   if (!result || !Array.isArray(result.rows)) return false;
   const columnDefault = String(result.rows[0]?.column_default || "");
   return !hasExpectedSequenceDefault(columnDefault, idSequence);
@@ -246,8 +263,8 @@ async function createPhysicalSiteDataDomainTable(executor: SqlExecutor, siteId: 
     table,
     `
       CREATE TABLE IF NOT EXISTS ${quoted(table)} (
-        "id" INTEGER PRIMARY KEY,
-        "key" TEXT NOT NULL UNIQUE,
+        "id" INTEGER CONSTRAINT ${quoted(physicalObjectName(table, "pkey"))} PRIMARY KEY,
+        "key" TEXT NOT NULL CONSTRAINT ${quoted(physicalObjectName(table, "key_key"))} UNIQUE,
         "label" TEXT NOT NULL,
         "contentTable" TEXT NOT NULL,
         "metaTable" TEXT NOT NULL,
@@ -483,22 +500,23 @@ export async function ensureSiteDataDomainTable(siteId: string): Promise<void> {
 export async function listSiteDataDomains(siteId: string, options?: { includeInactive?: boolean }) {
   const normalizedSiteId = String(siteId || "").trim();
   if (!normalizedSiteId) return [] as SiteDataDomainRecord[];
-  await ensureSiteDataDomainTable(normalizedSiteId);
   const table = siteDomainsTable(normalizedSiteId);
-  const result = await withLockRetry(() =>
-    db.execute(sql`
-      SELECT
-        "id",
-        "key",
-        "label",
-        "contentTable",
-        "metaTable",
-        "description",
-        "settings",
-        "isActive"
-      FROM ${sql.raw(quoted(table))}
-      ORDER BY "id" ASC
-    `),
+  const result = await withSiteDataDomainTableRecovery(normalizedSiteId, () =>
+    withLockRetry(() =>
+      db.execute(sql`
+        SELECT
+          "id",
+          "key",
+          "label",
+          "contentTable",
+          "metaTable",
+          "description",
+          "settings",
+          "isActive"
+        FROM ${sql.raw(quoted(table))}
+        ORDER BY "id" ASC
+      `),
+    ),
   );
   const rows = normalizeRows<{
     id: number | string;
@@ -527,23 +545,24 @@ export async function findSiteDataDomainByKey(siteId: string, domainKey: string)
   const normalizedSiteId = String(siteId || "").trim();
   const normalizedDomainKey = normalizeDomainKey(domainKey);
   if (!normalizedSiteId || !normalizedDomainKey) return null;
-  await ensureSiteDataDomainTable(normalizedSiteId);
   const table = siteDomainsTable(normalizedSiteId);
-  const result = await withLockRetry(() =>
-    db.execute(sql`
-      SELECT
-        "id",
-        "key",
-        "label",
-        "contentTable",
-        "metaTable",
-        "description",
-        "settings",
-        "isActive"
-      FROM ${sql.raw(quoted(table))}
-      WHERE "key" = ${normalizedDomainKey}
-      LIMIT 1
-    `),
+  const result = await withSiteDataDomainTableRecovery(normalizedSiteId, () =>
+    withLockRetry(() =>
+      db.execute(sql`
+        SELECT
+          "id",
+          "key",
+          "label",
+          "contentTable",
+          "metaTable",
+          "description",
+          "settings",
+          "isActive"
+        FROM ${sql.raw(quoted(table))}
+        WHERE "key" = ${normalizedDomainKey}
+        LIMIT 1
+      `),
+    ),
   );
   const row = normalizeRows<{
     id: number | string;

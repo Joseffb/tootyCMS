@@ -8,13 +8,14 @@ import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { sendCommunication } from "@/lib/communications";
 import MigrationKitConsole from "@/components/migration-kit-console";
 import CollectionOrderManager from "@/components/plugins/collection-order-manager";
+import CollectionSplitWorkspace from "@/components/plugins/collection-split-workspace";
 import CollectionSetInlineEditor from "@/components/plugins/collection-set-inline-editor";
 import CollectionChildEditModal from "@/components/plugins/collection-child-edit-modal";
 import CollectionChildCreateModal from "@/components/plugins/collection-child-create-modal";
 import PluginSettingsInlineForm from "@/components/plugins/plugin-settings-inline-form";
 import PluginSiteSelect from "@/components/plugins/plugin-site-select";
 import db from "@/lib/db";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { createId } from "@paralleldrive/cuid2";
 import { listSiteIdsForUser } from "@/lib/site-user-tables";
 import { findSiteDataDomainByKey } from "@/lib/site-data-domain-registry";
@@ -26,12 +27,14 @@ import {
   listSiteDomainPostMeta,
   listSiteDomainPostMetaMany,
   listSiteDomainPosts,
-  replaceSiteDomainPostMeta,
   upsertSiteDomainPostMeta,
   updateSiteDomainPostById,
 } from "@/lib/site-domain-post-store";
 import { ensureSiteMediaTable, getSiteMediaTable } from "@/lib/site-media-tables";
 import { getPluginWorkspaceRevalidationPaths } from "@/lib/plugin-admin-cache";
+import { buildDetailPath } from "@/lib/permalink";
+import { getSiteWritingSettings } from "@/lib/cms-config";
+import type { ExtensionSettingsField, PluginCollectionWorkspaceField } from "@/lib/extension-contracts";
 
 type Props = {
   params: Promise<{ pluginId: string }>;
@@ -90,19 +93,19 @@ async function findMediaItemForSite(siteId: string, mediaId: string) {
   await ensureSiteMediaTable(siteId);
   const mediaTable = getSiteMediaTable(siteId);
   const rows = await db
-    .select({ id: mediaTable.id, url: mediaTable.url })
+    .select({ id: mediaTable.id, url: mediaTable.url, label: mediaTable.label, mimeType: mediaTable.mimeType })
     .from(mediaTable)
     .where(eq(mediaTable.id, normalizedMediaId))
     .limit(1);
   return rows[0] || null;
 }
 
-async function listCollectionPostsForDomain(siteId: string, domainKey: string) {
+async function listCollectionPostsForDomain(siteId: string, domainKey: string, options?: { includeContent?: boolean }) {
   const rows = await listSiteDomainPosts({
     siteId,
     dataDomainKey: domainKey,
     includeInactiveDomains: true,
-    includeContent: false,
+    includeContent: Boolean(options?.includeContent),
   });
   return [...rows].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
 }
@@ -135,6 +138,109 @@ async function upsertCollectionMeta(siteId: string, domainKey: string, postId: s
     key,
     value,
   });
+}
+
+function parseNestedItems(value: string) {
+  if (!value) return [] as Array<Record<string, unknown>>;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry) => entry && typeof entry === "object") as Array<Record<string, unknown>>
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function fieldValueFromFormData(formData: FormData, field: PluginCollectionWorkspaceField) {
+  const key = `field_${field.key}`;
+  if (field.type === "checkbox") {
+    return formData.get(key) === "on" ? "true" : "false";
+  }
+  return String(formData.get(key) || "").trim();
+}
+
+function normalizeNestedItemValue(formData: FormData, field: ExtensionSettingsField) {
+  const key = `item_${field.key}`;
+  if (field.type === "checkbox") {
+    return formData.get(key) === "on";
+  }
+  return String(formData.get(key) || "").trim();
+}
+
+async function applyWorkspaceFieldValues(input: {
+  siteId: string;
+  domainKey: string;
+  postId: string;
+  fields: PluginCollectionWorkspaceField[];
+  formData: FormData;
+  currentTitle?: string;
+  currentDescription?: string;
+  currentContent?: string;
+  currentSlug?: string;
+  currentImage?: string;
+}) {
+  const patch: {
+    title?: string;
+    description?: string;
+    content?: string;
+    slug?: string;
+    image?: string;
+  } = {};
+
+  for (const field of input.fields) {
+    const value = fieldValueFromFormData(input.formData, field);
+    switch (field.target) {
+      case "title":
+        patch.title = value;
+        break;
+      case "description":
+        patch.description = value;
+        break;
+      case "content":
+        patch.content = value;
+        break;
+      case "slug":
+        patch.slug = value;
+        break;
+      case "image":
+        patch.image = value;
+        break;
+      case "meta":
+        if (field.metaKey) {
+          await upsertCollectionMeta(input.siteId, input.domainKey, input.postId, field.metaKey, value);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await updateSiteDomainPostById({
+      siteId: input.siteId,
+      postId: input.postId,
+      dataDomainKey: input.domainKey,
+      patch,
+    });
+  }
+}
+
+function normalizeNestedItemRecord(
+  item: Record<string, unknown>,
+  index: number,
+) {
+  const id = String(item.id || "").trim() || createId();
+  const title = String(item.title || "").trim();
+  const summary = String(item.summary || "").trim();
+  const sortOrder = Number(item.sortOrder);
+  return {
+    id,
+    title,
+    summary,
+    sortOrder: Number.isFinite(sortOrder) ? sortOrder : index,
+    values: { ...item, id, title, summary } as Record<string, string | boolean>,
+  };
 }
 
 export default async function PluginSetupPage({ params, searchParams }: Props) {
@@ -202,6 +308,11 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
   if (collectionModel) {
     const model = collectionModel;
+    const useSplitWorkspace =
+      model.workspaceLayout === "split" ||
+      Boolean(model.childNestedItems) ||
+      Boolean(model.parentEditorFields?.length) ||
+      Boolean(model.childEditorFields?.length);
     const canManageCollection = effectiveSiteId
       ? await userCan("site.settings.write", session.user.id, { siteId: effectiveSiteId })
       : canUseSendMessageTool;
@@ -233,12 +344,19 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       : [];
 
     const setIds = setRows.map((row) => row.id);
+    const parentMetaKeys = [
+      model.parentHandleMetaKey,
+      model.workflowMetaKey,
+      ...((model.parentEditorFields || [])
+        .filter((field) => field.target === "meta" && field.metaKey)
+        .map((field) => String(field.metaKey))),
+    ];
     const setMetaRows = setIds.length
       ? await listSiteDomainPostMetaMany({
           siteId: effectiveSiteId,
           dataDomainKey: model.parentTypeKey,
           postIds: setIds,
-          keys: [model.parentHandleMetaKey, model.workflowMetaKey],
+          keys: Array.from(new Set(parentMetaKeys)),
         })
       : [];
 
@@ -296,10 +414,12 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
     }
 
     const slideRows = effectiveSiteId && childDomain
-      ? (await listCollectionPostsForDomain(effectiveSiteId, model.childTypeKey)).map((row) => ({
+      ? (await listCollectionPostsForDomain(effectiveSiteId, model.childTypeKey, { includeContent: useSplitWorkspace })).map((row) => ({
           id: row.id,
           title: row.title,
           description: row.description,
+          content: row.content,
+          slug: row.slug,
           image: row.image,
           published: row.published,
           createdAt: row.createdAt,
@@ -315,6 +435,10 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
       ...(model.mediaMetaKey ? [model.mediaMetaKey] : []),
       ...(model.ctaTextMetaKey ? [model.ctaTextMetaKey] : []),
       ...(model.ctaUrlMetaKey ? [model.ctaUrlMetaKey] : []),
+      ...((model.childEditorFields || [])
+        .filter((field) => field.target === "meta" && field.metaKey)
+        .map((field) => String(field.metaKey))),
+      ...(model.childNestedItems?.metaKey ? [model.childNestedItems.metaKey] : []),
     ];
     const slideMetaRows = slideIds.length
       ? await listSiteDomainPostMetaMany({
@@ -360,6 +484,642 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
         if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
         return a.createdAt.getTime() - b.createdAt.getTime();
       });
+
+    if (useSplitWorkspace) {
+      const selectedCollectionId = String(resolvedSearchParams.set || "").trim() || collections[0]?.id || "";
+      const selectedCollection = selectedCollectionId && selectedCollectionId !== "new"
+        ? collections.find((entry) => entry.id === selectedCollectionId) || null
+        : null;
+      const selectedChildId = String(resolvedSearchParams.chapter || "").trim();
+      const selectedChild = selectedChildId && selectedChildId !== "new"
+        ? slides.find((entry) => entry.id === selectedChildId) || null
+        : null;
+      const nestedModel = model.childNestedItems;
+      const nestedItems = selectedChild && nestedModel
+        ? parseNestedItems(selectedChild.meta[nestedModel.metaKey] || "")
+            .map((item, index) => normalizeNestedItemRecord(item, index))
+            .sort((left, right) => left.sortOrder - right.sortOrder)
+        : [];
+      const selectedNestedItemId = String(resolvedSearchParams.artifact || "").trim();
+      const selectedNestedItem = selectedNestedItemId && selectedNestedItemId !== "new"
+        ? nestedItems.find((entry) => entry.id === selectedNestedItemId) || null
+        : null;
+      const writing = effectiveSiteId ? await getSiteWritingSettings(effectiveSiteId) : null;
+      const samePageLink =
+        selectedCollection && selectedChild && selectedNestedItem
+          ? `#story-artifact/${selectedCollection.id}/${selectedChild.id}/${selectedNestedItem.id}`
+          : "";
+      const crossPageLink =
+        selectedCollection && selectedChild && selectedNestedItem && writing
+          ? `${buildDetailPath(model.childTypeKey, selectedChild.slug, writing)}?story_artifact=${encodeURIComponent(
+              `${selectedCollection.id}:${selectedChild.id}:${selectedNestedItem.id}`,
+            )}`
+          : "";
+
+      async function saveSplitCollection(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        const siteId = String(formData.get("siteId") || "").trim();
+        if (!siteId) return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        await createKernelForRequest(siteId);
+        const domain = await findSiteDataDomainByKey(siteId, model.parentTypeKey);
+        if (!domain) return;
+
+        const setId = String(formData.get("setId") || "").trim();
+        const title = String(formData.get("title") || "").trim();
+        const description = String(formData.get("description") || "").trim();
+        const requestedHandle = String(formData.get("embed_key") || "").trim();
+        const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+          ? String(formData.get("workflow_state") || "draft")
+          : "draft";
+        if (!title) return;
+
+        const targetId = setId || createId();
+        const handle = toSlug(requestedHandle || title, model.parentTypeKey);
+        const published = workflowState === "published";
+        let previousHandle = "";
+        const writing = await getSiteWritingSettings(siteId);
+
+        if (setId) {
+          previousHandle = await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey);
+          await updateSiteDomainPostById({
+            siteId,
+            postId: setId,
+            dataDomainKey: model.parentTypeKey,
+            patch: {
+              title,
+              description,
+              slug: handle,
+              published,
+            },
+          });
+        } else {
+          await createSiteDomainPost({
+            siteId,
+            id: targetId,
+            dataDomainKey: model.parentTypeKey,
+            title,
+            description,
+            content: "",
+            slug: handle,
+            published,
+            userId: current.user.id,
+          });
+        }
+
+        await upsertCollectionMeta(siteId, model.parentTypeKey, targetId, model.parentHandleMetaKey, handle);
+        await upsertCollectionMeta(siteId, model.parentTypeKey, targetId, model.workflowMetaKey, workflowState);
+        await upsertCollectionMeta(
+          siteId,
+          model.parentTypeKey,
+          targetId,
+          "public_path",
+          buildDetailPath(model.parentTypeKey, handle, writing),
+        );
+        await applyWorkspaceFieldValues({
+          siteId,
+          domainKey: model.parentTypeKey,
+          postId: targetId,
+          fields: model.parentEditorFields || [],
+          formData,
+        });
+
+        if (setId && model.childParentKeyMetaKey && handle && previousHandle && handle !== previousHandle) {
+          const childIds = await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId);
+          for (const childId of childIds) {
+            await upsertCollectionMeta(siteId, model.childTypeKey, childId, model.childParentKeyMetaKey, handle);
+          }
+        }
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(
+          `/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(targetId)}`,
+        );
+      }
+
+      async function deleteSplitCollection(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const confirm = String(formData.get("confirm") || "").trim().toLowerCase();
+        if (!siteId || !setId || confirm !== "delete") return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        const childIds = await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId);
+        for (const childId of childIds) {
+          await deleteSiteDomainPostById({ siteId, postId: childId, dataDomainKey: model.childTypeKey });
+        }
+        await deleteSiteDomainPostById({ siteId, postId: setId, dataDomainKey: model.parentTypeKey });
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(`/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}`);
+      }
+
+      async function saveSplitChild(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        if (!siteId || !setId) return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        await createKernelForRequest(siteId);
+        const [parentDomainRow, childDomainRow] = await Promise.all([
+          findSiteDataDomainByKey(siteId, model.parentTypeKey),
+          findSiteDataDomainByKey(siteId, model.childTypeKey),
+        ]);
+        if (!parentDomainRow || !childDomainRow) return;
+
+        const parentRecord = await getSiteDomainPostById({
+          siteId,
+          postId: setId,
+          dataDomainKey: model.parentTypeKey,
+        });
+        if (!parentRecord) return;
+        const parentHandle =
+          (await getCollectionMetaValue(siteId, model.parentTypeKey, setId, model.parentHandleMetaKey)) ||
+          String(parentRecord.slug || "").trim();
+
+        const slideId = String(formData.get("slideId") || "").trim();
+        const title = String(formData.get("title") || "").trim();
+        const description = String(formData.get("description") || "").trim();
+        const content = String(formData.get("content") || "");
+        const workflowState = workflowStates.includes(String(formData.get("workflow_state") || "draft"))
+          ? String(formData.get("workflow_state") || "draft")
+          : "draft";
+        const orderRaw = Number(String(formData.get("sort_order") || "").trim() || "0");
+        const sortOrder = Number.isFinite(orderRaw) ? Math.max(0, Math.trunc(orderRaw)) : 0;
+        if (!title) return;
+
+        const targetId = slideId || createId();
+        const published = workflowState === "published";
+        const childSlug = `${toSlug(title, model.childTypeKey)}-${targetId.slice(-8)}`;
+        const writing = await getSiteWritingSettings(siteId);
+        const existingChild = slideId
+          ? await getSiteDomainPostById({
+              siteId,
+              postId: slideId,
+              dataDomainKey: model.childTypeKey,
+            })
+          : null;
+
+        if (slideId) {
+          await updateSiteDomainPostById({
+            siteId,
+            postId: slideId,
+            dataDomainKey: model.childTypeKey,
+            patch: {
+              title,
+              description,
+              content,
+              published,
+            },
+          });
+        } else {
+          await createSiteDomainPost({
+            siteId,
+            id: targetId,
+            dataDomainKey: model.childTypeKey,
+            title,
+            description,
+            content,
+            slug: childSlug,
+            published,
+            userId: current.user.id,
+          });
+        }
+
+        await upsertCollectionMeta(siteId, model.childTypeKey, targetId, model.childParentMetaKey, setId);
+        await upsertCollectionMeta(siteId, model.childTypeKey, targetId, model.workflowMetaKey, workflowState);
+        await upsertCollectionMeta(siteId, model.childTypeKey, targetId, model.orderMetaKey, String(sortOrder));
+        await upsertCollectionMeta(
+          siteId,
+          model.childTypeKey,
+          targetId,
+          "public_path",
+          buildDetailPath(model.childTypeKey, String(existingChild?.slug || childSlug), writing),
+        );
+        if (model.childParentKeyMetaKey) {
+          await upsertCollectionMeta(siteId, model.childTypeKey, targetId, model.childParentKeyMetaKey, parentHandle);
+        }
+        await applyWorkspaceFieldValues({
+          siteId,
+          domainKey: model.childTypeKey,
+          postId: targetId,
+          fields: model.childEditorFields || [],
+          formData,
+        });
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(
+          `/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&chapter=${encodeURIComponent(targetId)}`,
+        );
+      }
+
+      async function deleteSplitChild(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const slideId = String(formData.get("slideId") || "").trim();
+        const confirm = String(formData.get("confirm") || "").trim().toLowerCase();
+        if (!siteId || !slideId || confirm !== "delete") return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        await deleteSiteDomainPostById({ siteId, postId: slideId, dataDomainKey: model.childTypeKey });
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(
+          `/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}`,
+        );
+      }
+
+      async function reorderSplitChildren(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const rawOrder = String(formData.get("order") || "").trim();
+        if (!siteId || !setId || !rawOrder) return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        let parsed: Array<{ id: string; sortOrder: number }> = [];
+        try {
+          const candidate = JSON.parse(rawOrder);
+          if (Array.isArray(candidate)) {
+            parsed = candidate
+              .map((entry) => ({
+                id: String((entry as any)?.id || "").trim(),
+                sortOrder: Number((entry as any)?.sortOrder),
+              }))
+              .filter((entry) => entry.id && Number.isFinite(entry.sortOrder));
+          }
+        } catch {
+          parsed = [];
+        }
+        if (!parsed.length) return;
+
+        const validIds = new Set(await listChildPostIdsByParent(siteId, model.childTypeKey, model.childParentMetaKey, setId));
+        for (const entry of parsed) {
+          if (!validIds.has(entry.id)) continue;
+          await upsertCollectionMeta(siteId, model.childTypeKey, entry.id, model.orderMetaKey, String(Math.max(0, Math.trunc(entry.sortOrder))));
+        }
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+      }
+
+      async function saveSplitNestedItem(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        if (!nestedModel) return;
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const chapterId = String(formData.get("chapterId") || "").trim();
+        if (!siteId || !setId || !chapterId) return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        const chapter = await getSiteDomainPostById({
+          siteId,
+          postId: chapterId,
+          dataDomainKey: model.childTypeKey,
+        });
+        if (!chapter) return;
+        const parentId = await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, model.childParentMetaKey);
+        if (parentId !== setId) return;
+
+        const currentItems = parseNestedItems(await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, nestedModel.metaKey))
+          .map((item, index) => normalizeNestedItemRecord(item, index));
+        const itemId = String(formData.get("itemId") || "").trim();
+        const nextId = itemId || createId();
+        const existing = currentItems.find((entry) => entry.id === nextId) || null;
+        const values: Record<string, string | boolean> = {};
+        for (const field of nestedModel.fields) {
+          const rawValue = normalizeNestedItemValue(formData, field);
+          values[field.key] = rawValue;
+          if (field.type === "media") {
+            const mediaRow = await findMediaItemForSite(siteId, String(rawValue || ""));
+            values[`${field.key}_url`] = String(mediaRow?.url || "");
+            values[`${field.key}_mime_type`] = String(mediaRow?.mimeType || "");
+            values[`${field.key}_label`] = String(mediaRow?.label || "");
+          }
+        }
+
+        const nextRecord = {
+          id: nextId,
+          title: String(values.title || existing?.title || "").trim(),
+          summary: String(values.summary || existing?.summary || "").trim(),
+          sortOrder: existing?.sortOrder ?? currentItems.length,
+          values: { ...values, id: nextId },
+        };
+        const nextItems = [
+          ...currentItems.filter((entry) => entry.id !== nextId),
+          nextRecord,
+        ].sort((left, right) => left.sortOrder - right.sortOrder);
+
+        await upsertCollectionMeta(
+          siteId,
+          model.childTypeKey,
+          chapterId,
+          nestedModel.metaKey,
+          JSON.stringify(nextItems.map((entry) => ({
+            ...entry.values,
+            id: entry.id,
+            title: entry.title,
+            summary: entry.summary,
+            sortOrder: entry.sortOrder,
+          }))),
+        );
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(
+          `/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&chapter=${encodeURIComponent(chapterId)}&artifact=${encodeURIComponent(nextId)}`,
+        );
+      }
+
+      async function deleteSplitNestedItem(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        if (!nestedModel) return;
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const chapterId = String(formData.get("chapterId") || "").trim();
+        const itemId = String(formData.get("itemId") || "").trim();
+        const confirm = String(formData.get("confirm") || "").trim().toLowerCase();
+        if (!siteId || !setId || !chapterId || !itemId || confirm !== "delete") return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        const parentId = await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, model.childParentMetaKey);
+        if (parentId !== setId) return;
+
+        const currentItems = parseNestedItems(await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, nestedModel.metaKey))
+          .map((item, index) => normalizeNestedItemRecord(item, index))
+          .filter((entry) => entry.id !== itemId);
+        await upsertCollectionMeta(
+          siteId,
+          model.childTypeKey,
+          chapterId,
+          nestedModel.metaKey,
+          JSON.stringify(
+            currentItems.map((entry, index) => ({
+              ...entry.values,
+              id: entry.id,
+              title: entry.title,
+              summary: entry.summary,
+              sortOrder: index,
+            })),
+          ),
+        );
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+        redirect(
+          `/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(siteId)}&set=${encodeURIComponent(setId)}&chapter=${encodeURIComponent(chapterId)}`,
+        );
+      }
+
+      async function reorderSplitNestedItems(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+
+        if (!nestedModel) return;
+        const siteId = String(formData.get("siteId") || "").trim();
+        const setId = String(formData.get("setId") || "").trim();
+        const chapterId = String(formData.get("chapterId") || "").trim();
+        const rawOrder = String(formData.get("order") || "").trim();
+        if (!siteId || !setId || !chapterId || !rawOrder) return;
+        const allowed = await userCan("site.settings.write", current.user.id, { siteId });
+        if (!allowed) return;
+
+        const parentId = await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, model.childParentMetaKey);
+        if (parentId !== setId) return;
+
+        let parsed: Array<{ id: string; sortOrder: number }> = [];
+        try {
+          const candidate = JSON.parse(rawOrder);
+          if (Array.isArray(candidate)) {
+            parsed = candidate
+              .map((entry) => ({
+                id: String((entry as any)?.id || "").trim(),
+                sortOrder: Number((entry as any)?.sortOrder),
+              }))
+              .filter((entry) => entry.id && Number.isFinite(entry.sortOrder));
+          }
+        } catch {
+          parsed = [];
+        }
+        if (!parsed.length) return;
+
+        const orderById = new Map(parsed.map((entry) => [entry.id, Math.max(0, Math.trunc(entry.sortOrder))]));
+        const nextItems = parseNestedItems(await getCollectionMetaValue(siteId, model.childTypeKey, chapterId, nestedModel.metaKey))
+          .map((item, index) => normalizeNestedItemRecord(item, index))
+          .map((entry) => ({
+            ...entry,
+            sortOrder: orderById.get(entry.id) ?? entry.sortOrder,
+          }))
+          .sort((left, right) => left.sortOrder - right.sortOrder);
+        await upsertCollectionMeta(
+          siteId,
+          model.childTypeKey,
+          chapterId,
+          nestedModel.metaKey,
+          JSON.stringify(
+            nextItems.map((entry) => ({
+              ...entry.values,
+              id: entry.id,
+              title: entry.title,
+              summary: entry.summary,
+              sortOrder: entry.sortOrder,
+            })),
+          ),
+        );
+
+        revalidatePluginWorkspace(pluginData.id, siteId);
+      }
+
+      async function saveSplitSettings(formData: FormData) {
+        "use server";
+        const current = await getSession();
+        if (!current?.user?.id) redirect("/login");
+        const nextConfig: Record<string, unknown> = {};
+        for (const field of pluginData.settingsFields || []) {
+          nextConfig[field.key] = field.type === "checkbox" ? formData.get(field.key) === "on" : String(formData.get(field.key) || "");
+        }
+        await savePluginConfig(pluginData.id, nextConfig);
+        revalidatePluginWorkspace(pluginData.id, effectiveSiteId);
+      }
+
+      return (
+        <div className="flex max-w-7xl flex-col gap-6 p-8">
+          <div>
+            <h1 className="font-cal text-3xl font-bold">{pluginData.name}</h1>
+            <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
+              Build chapter-driven multimedia story experiences around the primary reading text.
+            </p>
+          </div>
+
+          <PluginSiteSelect
+            currentValue={effectiveSiteId}
+            actionPath={`/app/plugins/${pluginData.id}`}
+            hiddenParams={{
+              tab,
+              ...(tab === "carousels" ? { view: "split" } : {}),
+              ...(tab === "carousels" && selectedCollectionId ? { set: selectedCollectionId } : {}),
+              ...(tab === "carousels" && selectedChildId ? { chapter: selectedChildId } : {}),
+              ...(tab === "carousels" && selectedNestedItemId ? { artifact: selectedNestedItemId } : {}),
+            }}
+            options={ownedSites.map((site) => ({
+              id: site.id,
+              label: site.name || site.subdomain || site.id,
+            }))}
+          />
+
+          {!effectiveSiteId ? (
+            <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500">
+              Select a site to manage stories.
+            </div>
+          ) : !parentDomain || !childDomain ? (
+            <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500">
+              This plugin&apos;s content types are not available yet. Refresh after plugin registration completes.
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/app/plugins/${pluginData.id}?tab=carousels&view=split&siteId=${encodeURIComponent(effectiveSiteId)}`}
+                  className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                    tab === "carousels"
+                      ? "border-black bg-black text-white"
+                      : "border-stone-300 bg-white text-black"
+                  }`}
+                >
+                  {parentLabel}s
+                </Link>
+                <Link
+                  href={`/app/plugins/${pluginData.id}?tab=settings&siteId=${encodeURIComponent(effectiveSiteId)}`}
+                  className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                    tab === "settings"
+                      ? "border-black bg-black text-white"
+                      : "border-stone-300 bg-white text-black"
+                  }`}
+                >
+                  Settings
+                </Link>
+              </div>
+
+              {tab === "settings" ? (
+                pluginData.settingsFields?.length ? (
+                  <PluginSettingsInlineForm
+                    pluginId={pluginData.id}
+                    siteId={effectiveSiteId || undefined}
+                    fields={pluginData.settingsFields.map((field) => ({
+                      key: field.key,
+                      label: field.label,
+                      type: field.type,
+                      options: field.options,
+                      helpText: field.helpText,
+                      placeholder: field.placeholder,
+                    }))}
+                    values={config}
+                    saveAction={saveSplitSettings}
+                  />
+                ) : (
+                  <div className="rounded-lg border border-dashed border-stone-300 p-6 text-sm text-stone-500">
+                    This plugin does not expose additional settings yet.
+                  </div>
+                )
+              ) : (
+                <CollectionSplitWorkspace
+                  pluginId={pluginData.id}
+                  siteId={effectiveSiteId}
+                  parentLabel={parentLabel}
+                  childLabel={childLabel}
+                  nestedSingularLabel={nestedModel?.singularLabel || "Artifact"}
+                  nestedPluralLabel={nestedModel?.pluralLabel || "Artifacts"}
+                  workflowStates={workflowStates}
+                  collections={collections.map((entry) => ({
+                    id: entry.id,
+                    title: entry.title,
+                    description: entry.description,
+                    handle: entry.handle,
+                    workflowState: entry.workflowState,
+                    meta: entry.meta,
+                  }))}
+                  selectedCollectionId={selectedCollectionId}
+                  selectedCollection={selectedCollection ? {
+                    id: selectedCollection.id,
+                    title: selectedCollection.title,
+                    description: selectedCollection.description,
+                    handle: selectedCollection.handle,
+                    workflowState: selectedCollection.workflowState,
+                    meta: selectedCollection.meta,
+                  } : null}
+                  childrenRecords={slides.map((entry) => ({
+                    id: entry.id,
+                    title: entry.title,
+                    description: entry.description,
+                    content: entry.content || "",
+                    slug: entry.slug,
+                    workflowState: entry.workflowState,
+                    sortOrder: entry.sortOrder,
+                    meta: entry.meta,
+                  }))}
+                  selectedChildId={selectedChildId}
+                  selectedChild={selectedChild ? {
+                    id: selectedChild.id,
+                    title: selectedChild.title,
+                    description: selectedChild.description,
+                    content: selectedChild.content || "",
+                    slug: selectedChild.slug,
+                    workflowState: selectedChild.workflowState,
+                    sortOrder: selectedChild.sortOrder,
+                    meta: selectedChild.meta,
+                  } : null}
+                  nestedItems={nestedItems}
+                  selectedNestedItemId={selectedNestedItemId}
+                  selectedNestedItem={selectedNestedItem}
+                  parentEditorFields={model.parentEditorFields || []}
+                  childEditorFields={model.childEditorFields || []}
+                  nestedFields={nestedModel?.fields || []}
+                  samePageLink={samePageLink}
+                  crossPageLink={crossPageLink}
+                  saveCollectionAction={saveSplitCollection}
+                  deleteCollectionAction={deleteSplitCollection}
+                  saveChildAction={saveSplitChild}
+                  deleteChildAction={deleteSplitChild}
+                  reorderChildrenAction={reorderSplitChildren}
+                  saveNestedItemAction={saveSplitNestedItem}
+                  deleteNestedItemAction={deleteSplitNestedItem}
+                  reorderNestedItemsAction={reorderSplitNestedItems}
+                />
+              )}
+            </>
+          )}
+        </div>
+      );
+    }
 
     async function saveCollectionSet(formData: FormData) {
       "use server";

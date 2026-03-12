@@ -21,6 +21,6 @@ describe("editor delete controls", () => {
       "utf8",
     );
 
-    expect(source).toContain('DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl dark:border-stone-700 dark:bg-stone-950 dark:text-white"');
+    expect(source).toContain('DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl"');
   });
 });

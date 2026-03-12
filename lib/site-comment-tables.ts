@@ -1,7 +1,7 @@
 import db from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { sites } from "@/lib/schema";
-import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
@@ -50,18 +50,24 @@ async function createPhysicalSiteCommentTables(executor: SqlExecutor, siteId: st
   const commentsTable = commentsTableName(siteId);
   const metaTable = commentMetaTableName(siteId);
   const prefixedUsers = `${normalizedPrefix}network_users`;
+  const commentsPrimaryKey = physicalObjectName(commentsTable, "pkey");
+  const commentsAuthorForeignKey = physicalObjectName(commentsTable, "author_id_fkey");
+  const commentsParentForeignKey = physicalObjectName(commentsTable, "parent_id_fkey");
+  const metaPrimaryKey = physicalObjectName(metaTable, "pkey");
+  const metaCommentForeignKey = physicalObjectName(metaTable, "site_comment_id_fkey");
+  const metaCommentKeyUnique = physicalObjectName(metaTable, "site_comment_id_key_key");
 
   await executeDdl(
     executor,
     `
     CREATE TABLE IF NOT EXISTS ${quoted(commentsTable)} (
-      id TEXT PRIMARY KEY,
-      author_id TEXT NULL REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+      id TEXT CONSTRAINT ${quoted(commentsPrimaryKey)} PRIMARY KEY,
+      author_id TEXT NULL CONSTRAINT ${quoted(commentsAuthorForeignKey)} REFERENCES ${quoted(prefixedUsers)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
       context_type TEXT NOT NULL,
       context_id TEXT NOT NULL,
       body TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
-      parent_id TEXT NULL REFERENCES ${quoted(commentsTable)}("id") ON DELETE SET NULL,
+      parent_id TEXT NULL CONSTRAINT ${quoted(commentsParentForeignKey)} REFERENCES ${quoted(commentsTable)}("id") ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -94,13 +100,13 @@ async function createPhysicalSiteCommentTables(executor: SqlExecutor, siteId: st
     executor,
     `
     CREATE TABLE IF NOT EXISTS ${quoted(metaTable)} (
-      id BIGSERIAL PRIMARY KEY,
-      site_comment_id TEXT NOT NULL REFERENCES ${quoted(commentsTable)}("id") ON DELETE CASCADE,
+      id BIGSERIAL CONSTRAINT ${quoted(metaPrimaryKey)} PRIMARY KEY,
+      site_comment_id TEXT NOT NULL CONSTRAINT ${quoted(metaCommentForeignKey)} REFERENCES ${quoted(commentsTable)}("id") ON DELETE CASCADE,
       key TEXT NOT NULL,
       value TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (site_comment_id, key)
+      CONSTRAINT ${quoted(metaCommentKeyUnique)} UNIQUE (site_comment_id, key)
     )
   `,
   );

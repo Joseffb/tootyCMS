@@ -29,6 +29,7 @@ import { buildArchivePath, buildDetailPath, domainPluralSegment, resolveNoDomain
 import { trace } from "@/lib/debug";
 import { hasPostPasswordAccess, requiresPostPasswordGate } from "@/lib/post-password";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
+import { applyThemeContentTransform } from "@/lib/theme-content-transform";
 import { isPluginManagedDataDomain } from "@/lib/plugin-content-types";
 import { DEFAULT_CORE_DOMAIN_KEYS } from "@/lib/default-data-domains";
 import { listSiteDataDomains } from "@/lib/site-data-domain-registry";
@@ -403,6 +404,23 @@ export default async function SitePostPage({
   const siteUrl = configuredRootUrl || derivedSiteUrl;
   const rootUrl = getRootSiteUrl();
   const postMeta = Array.isArray((data as any)?.meta) ? ((data as any).meta as Array<{ key?: string; value?: string }>) : [];
+  const entryContext = {
+    id: (data as any)?.id || "",
+    dataDomain: "post",
+    title: (data as any)?.title || "",
+    description: (data as any)?.description || "",
+    slug: (data as any)?.slug || decodedSlug,
+    meta: postMeta,
+  };
+  const transformedContentHtml = await applyThemeContentTransform(
+    kernel,
+    toThemePostHtml((data as any)?.content || ""),
+    {
+      siteId: siteId || "",
+      routeKind: "domain_detail",
+      entry: entryContext,
+    },
+  );
 
   if (siteId) {
     const normalizedLayout = String(layout || "post").trim().toLowerCase();
@@ -425,11 +443,7 @@ export default async function SitePostPage({
         {
           kernel,
           slotContext: {
-            entry: {
-              id: (data as any)?.id || "",
-              dataDomain: "post",
-              meta: postMeta,
-            },
+            entry: entryContext,
           },
         },
       );
@@ -465,10 +479,10 @@ export default async function SitePostPage({
           href: `${siteUrl.replace(/\/$/, "")}${buildDetailPath("post", (data as any)?.slug || decodedSlug, writing)}`,
           created_at: (data as any)?.createdAt ? toDateString((data as any).createdAt) : "",
           layout,
-          content_html: toThemePostHtml((data as any)?.content || ""),
+          content_html: transformedContentHtml,
         },
         gallery_media: parseGalleryMediaFromContent((data as any)?.content || ""),
-        content: toThemePostHtml((data as any)?.content || ""),
+        content: transformedContentHtml,
         links: {
           root: rootUrl,
           main_site: siteUrl,
@@ -523,11 +537,7 @@ export default async function SitePostPage({
     const fallbackThemeRuntime = await getThemeRenderContext(siteId, "domain_detail", [], {
       kernel,
       slotContext: {
-        entry: {
-          id: (data as any)?.id || "",
-          dataDomain: "post",
-          meta: postMeta,
-        },
+        entry: entryContext,
       },
     });
     postData.themeSlots = fallbackThemeRuntime.tooty?.slots || {};

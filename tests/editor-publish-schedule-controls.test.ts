@@ -3,15 +3,18 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 describe("editor publish schedule controls", () => {
-  it("closes the schedule dialog before waiting on the async save path", () => {
+  it("closes the schedule dialog immediately on submit but does not auto-reopen it on async failure", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
+    const handlerStart = source.indexOf("const saveScheduledPublishAt =");
+    const handlerEnd = source.indexOf("const handleThumbnailUpload =");
+    const handler = source.slice(handlerStart, handlerEnd);
 
-    expect(source).toContain('setPublishScheduleDialogOpen(false);');
-    expect(source).toContain('toast.success(normalized ? "Scheduled publish time updated." : "Scheduled publish cleared.");');
-    expect(source).toContain('setPublishScheduleDialogOpen(true);');
+    expect(handler).toContain('setPublishScheduleDialogOpen(false);');
+    expect(handler).toContain('toast.success(normalized ? "Scheduled publish time updated." : "Scheduled publish cleared.");');
+    expect(handler).not.toContain('setPublishScheduleDialogOpen(true);');
   });
 
   it("renders the schedule dialog on an opaque system surface instead of a transparent overlay shell", () => {
@@ -20,7 +23,7 @@ describe("editor publish schedule controls", () => {
       "utf8",
     );
 
-    expect(source).toContain('DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl dark:border-stone-700 dark:bg-stone-950 dark:text-white"');
+    expect(source).toContain('DialogContent className="max-w-md border-stone-200 bg-white text-stone-900 shadow-2xl"');
   });
 
   it("uses an opaque dialog base surface instead of relying on theme background variables", () => {
@@ -60,23 +63,55 @@ describe("editor publish schedule controls", () => {
       "utf8",
     );
 
+    expect(source).toContain("function isPlaceholderServerDraft(input: {");
     expect(source).toContain("const effectivePost = shouldUseCachedEditorState");
+    expect(source).toContain("const shouldPreferCachedDraftOverPlaceholderServer =");
+    expect(source).toContain("const shouldPreferCachedEditorStateForIncompleteServer =");
+    expect(source).toContain("const cacheIsFreshEnoughForIncompleteServer =");
+    expect(source).toContain("cachedSelectedTermCount > serverSelectedTermCount ||");
+    expect(source).toContain("cachedVisibleMetaCount > serverVisibleMetaCount");
+    expect(source).toContain("isPlaceholderServerDraft({");
+    expect(source).toContain("cachedCompletenessScore > serverCompletenessScore &&");
     expect(source).toContain("setData(effectivePost);");
     expect(source).toContain("const applyDataUpdate = (updater: SetStateAction<PostWithSite>) => {");
-    expect(source).toContain('onChange={(e) => applyDataUpdate((prev) => ({ ...prev, title: e.target.value }))}');
-    expect(source).toContain('onChange={(e) => applyDataUpdate((prev) => ({ ...prev, description: e.target.value }))}');
-    expect(source).toContain('onChange={(e) => applyDataUpdate((prev) => ({ ...prev, slug: normalizeSlugDraft(e.target.value) }))}');
+    expect(source).toContain("const handleTitleInput = (value: string) => {");
+    expect(source).toContain('if ((current.title ?? "") === value && titleValueRef.current === value) {');
+    expect(source).toContain("titleValueRef.current = value;");
+    expect(source).toContain("const current = dataRef.current;");
+    expect(source).toContain("const nextData = { ...current, title: value };");
+    expect(source).toContain("applyDataUpdate(nextData);");
+    expect(source).toContain("const handleDescriptionInput = (value: string) => {");
+    expect(source).toContain("descriptionValueRef.current = value;");
+    expect(source).toContain("applyDataUpdate((prev) => ({ ...prev, description: value }));");
+    expect(source).toContain("const handleSlugDraftInput = (value: string) => {");
+    expect(source).toContain("const nextSlugDraft = normalizeSlugDraft(value);");
+    expect(source).toContain("slugValueRef.current = nextSlugDraft;");
+    expect(source).toContain("applyDataUpdate((prev) => ({ ...prev, slug: nextSlugDraft }));");
+    expect(source).toContain("const handleSlugCommit = (value: string) => {");
+    expect(source).toContain("const nextSlug = normalizeSeoSlug(value);");
+    expect(source).toContain("slugValueRef.current = nextSlug;");
+    expect(source).toContain("applyDataUpdate((current) => ({ ...current, slug: nextSlug }));");
+    expect(source).toContain('onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value)}');
+    expect(source).toContain("onChange={(e) => handleTitleInput(e.currentTarget.value)}");
+    expect(source).toContain("onChange={(e) => handleDescriptionInput(e.currentTarget.value)}");
+    expect(source).toContain("onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}");
+    expect(source).not.toContain('onInput={(e) => handleDescriptionInput((e.target as HTMLTextAreaElement).value)}');
+    expect(source).not.toContain('onInput={(e) => handleSlugDraftInput((e.target as HTMLInputElement).value)}');
+    expect(source).toContain("onBlur={(e) => handleSlugCommit(e.currentTarget.value)}");
   });
 
-  it("updates the scheduled publish label optimistically before the async metadata write completes", () => {
+  it("persists scheduled publish through the dedicated hidden-meta action instead of the generic autosave queue", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
 
-    expect(source).toContain("const previousMetaEntries = metaEntriesRef.current;");
-    expect(source).toContain("setMetaEntries(nextMetaEntries);");
-    expect(source).toContain("setMetaEntries(previousMetaEntries);");
+    expect(source).toContain('formData.append("publishAt", normalized ?? "");');
+    expect(source).toContain("await onUpdateMetadata(formData, post.id, HIDDEN_PUBLISH_AT_META_KEY);");
+    expect(source).toContain("const nextPublishAt =");
+    expect(source).toContain("const nextPublished =");
+    expect(source).toContain("skipNextAutosaveRef.current = true;");
+    expect(source).toContain("applyDataUpdate((prev) => ({ ...prev, published: nextPublished }));");
   });
 
   it("flushes editor persistence before changing publish state or publish schedule", () => {
@@ -101,8 +136,11 @@ describe("editor publish schedule controls", () => {
     expect(source).toContain("const waitForPendingTaxonomyWrites = async () => {");
     expect(source).toContain("await Promise.allSettled(Array.from(pendingTaxonomyTasksRef.current));");
     expect(source).toContain("await waitForPendingTaxonomyWrites();");
-    expect(source).toContain('disabled={saveStatus === "saving"}');
-    expect(source).toContain('disabled={isPendingPublishAction || !canPublish}');
+    expect(source).toContain(
+      'const isEditorMutationPending = saveStatus === "saving" || isPendingPublishAction || isPendingPublishSchedule;',
+    );
+    expect(source).toContain('disabled={isEditorMutationPending}');
+    expect(source).toContain('disabled={isEditorMutationPending || !canPublish}');
     expect(source).not.toContain("Waiting for taxonomy...");
   });
 
@@ -117,26 +155,42 @@ describe("editor publish schedule controls", () => {
     expect(source).toContain('className="rounded border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"');
   });
 
-  it("does not force immediate autosave while taxonomy selections are still settling", () => {
+  it("persists the active editor sidebar tab per post so taxonomy work does not drop back to Style after remounts", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
 
-    expect(source).toContain("const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {");
-    expect(source).toContain("    enqueueSave(false, { selectedTermsByTaxonomy: next });");
-    expect(source).toContain("    const next = updateSelectedTermsByTaxonomy((prev) => {");
-    expect(source).not.toContain("    }, true);\n    enqueueSave();");
+    expect(source).toContain('const EDITOR_SIDEBAR_TAB_KEY_PREFIX = "tooty.editor.sidebar-tab.v1:";');
+    expect(source).toContain("function readEditorSidebarTab(postId: string): string | null {");
+    expect(source).toContain("function writeEditorSidebarTab(postId: string, tabId: string) {");
+    expect(source).toContain('const [sidebarTab, setSidebarTab] = useState<string>(() => readEditorSidebarTab(post.id) || "document");');
+    expect(source).toContain("const storedSidebarTab = readEditorSidebarTab(post.id);");
+    expect(source).toContain("writeEditorSidebarTab(post.id, sidebarTab);");
   });
 
-  it("enqueues taxonomy saves against the exact next taxonomy snapshot instead of waiting for ref synchronization", () => {
+  it("stages taxonomy selections locally and leaves persistence to the normal autosave and explicit save flow", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
 
-    expect(source).toContain("const nextSelectedTermsByTaxonomy = updateSelectedTermsByTaxonomy((prev) => {");
-    expect(source).toContain("enqueueSave(false, { selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy });");
+    expect(source).toContain("const skipNextAutosaveRef = useRef(false);");
+    expect(source).toContain("const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {");
+    expect(source).toContain("    updateSelectedTermsByTaxonomy((prev) => {");
+    expect(source).not.toContain("    }, true);");
+    expect(source).toContain("if (skipNextAutosaveRef.current) {");
+    expect(source).toContain("skipNextAutosaveRef.current = false;");
+  });
+
+  it("creates taxonomy terms without forcing a second immediate taxonomy save path", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "components/editor/editor.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain("updateSelectedTermsByTaxonomy((prev) => {");
+    expect(source).not.toContain("        }, true);");
     expect(source).toContain("const buildSaveSnapshot = (snapshot?: EditorSaveSnapshot) => {");
   });
 
@@ -151,6 +205,18 @@ describe("editor publish schedule controls", () => {
       "const selectedTerms = snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current;",
     );
     expect(source).toContain("const nextMetaEntries = snapshot?.metaEntries ?? metaEntriesRef.current;");
+    expect(source).toContain("const hasMountedTitleField = titleInputRef.current != null;");
+    expect(source).toContain("const hasMountedDescriptionField = descriptionInputRef.current != null;");
+    expect(source).toContain("const hasMountedSlugField = slugInputRef.current != null;");
+    expect(source).toContain("const liveTitleValue = titleInputRef.current?.value ?? \"\";");
+    expect(source).toContain("const liveDescriptionValue = descriptionInputRef.current?.value ?? \"\";");
+    expect(source).toContain("const liveSlugValue = slugInputRef.current?.value ?? \"\";");
+    expect(source).toContain("const nextTitle = hasMountedTitleField ? liveTitleValue : titleValueRef.current || latest.title || \"\";");
+    expect(source).toContain("const nextDescription = hasMountedDescriptionField");
+    expect(source).toContain("? liveDescriptionValue");
+    expect(source).toContain(": descriptionValueRef.current || latest.description || \"\";");
+    expect(source).toContain("const nextSlug = normalizeSeoSlug(");
+    expect(source).toContain("hasMountedSlugField ? liveSlugValue : slugValueRef.current || latest.slug || \"\",");
   });
 
   it("reads taxonomy selection input from a synchronized ref so fast fill-and-click interactions do not lose the typed value", () => {
@@ -179,15 +245,28 @@ describe("editor publish schedule controls", () => {
     expect(source).not.toContain("await saveQueue.flush().catch(() => undefined);");
   });
 
-  it("does a single storage read before creating taxonomy terms instead of retrying for tens of seconds", () => {
+  it("deduplicates in-flight taxonomy create/select requests so double submits do not strand the sidebar in Saving state", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "components/editor/editor.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain("const pendingTaxonomyRequestKeysRef = useRef(new Set<string>());");
+    expect(source).toContain("const requestKey = `${taxonomy}:${trimmed.toLowerCase()}`;");
+    expect(source).toContain("if (pendingTaxonomyRequestKeysRef.current.has(requestKey)) return;");
+    expect(source).toContain("pendingTaxonomyRequestKeysRef.current.add(requestKey);");
+    expect(source).toContain("pendingTaxonomyRequestKeysRef.current.delete(requestKey);");
+  });
+
+  it("creates taxonomy terms directly without redundant full-taxonomy preflight reads", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
 
     expect(source).not.toContain("const resolveExistingTaxonomyTerm = async (taxonomy: string, trimmed: string) => {");
-    expect(source).toContain("const resolvedTerms = await getTaxonomyTerms(siteId, taxonomy);");
-    expect(source).toContain("const normalizedResolvedTerms = mergeResolvedTaxonomyTerms(taxonomy, resolvedTerms);");
+    expect(source).not.toContain("const resolvedTerms = await getTaxonomyTerms(siteId, taxonomy);");
+    expect(source).not.toContain("const mergeResolvedTaxonomyTerms = (taxonomy: string, resolvedTerms: TaxonomyTerm[]) => {");
     expect(source).toContain("const created = await createTaxonomyTerm({ siteId, taxonomy, label: trimmed });");
   });
 

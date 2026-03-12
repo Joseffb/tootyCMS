@@ -2,7 +2,7 @@ import db from "@/lib/db";
 import { sql } from "drizzle-orm";
 import type { DomainEvent } from "@/lib/domain-events";
 import { createId } from "@paralleldrive/cuid2";
-import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
+import { physicalObjectName, sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 type QueueStatus = "queued" | "processing" | "processed" | "dead_letter";
 
@@ -84,7 +84,7 @@ export async function ensureSiteDomainQueueTable(siteId: string) {
   await db.execute(
     sql.raw(`
       CREATE TABLE IF NOT EXISTS ${table} (
-        id text PRIMARY KEY,
+        id text CONSTRAINT "${physicalObjectName(tableName, "pkey")}" PRIMARY KEY,
         event jsonb NOT NULL,
         status text NOT NULL DEFAULT 'queued',
         attempts integer NOT NULL DEFAULT 0,

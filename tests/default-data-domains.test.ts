@@ -20,6 +20,17 @@ vi.mock("@/lib/site-data-domain-registry", () => ({
   }),
 }));
 
+const ensureSiteDomainTypeTables = vi.fn(async () => ({
+  contentTable: "tooty_site_site_1_domain_post",
+  metaTable: "tooty_site_site_1_domain_post_meta",
+}));
+
+vi.mock("@/lib/site-domain-type-tables", () => ({
+  ensureSiteDomainTypeTables,
+  siteDomainTypeTableTemplate: vi.fn((key: string) => `tooty_site_{id}_domain_${key}`),
+  siteDomainTypeMetaTableTemplate: vi.fn((key: string) => `tooty_site_{id}_domain_${key}_meta`),
+}));
+
 vi.mock("@/lib/db", () => {
   const db = {
     select: vi.fn(() => ({
@@ -33,6 +44,7 @@ describe("ensureDefaultCoreDataDomains", () => {
   beforeEach(() => {
     state.inserted.length = 0;
     state.findCalls = 0;
+    ensureSiteDomainTypeTables.mockClear();
     process.env.CMS_DB_PREFIX = "tooty_";
   });
 
@@ -57,5 +69,7 @@ describe("ensureDefaultCoreDataDomains", () => {
       contentTable: "tooty_site_{id}_domain_page",
       metaTable: "tooty_site_{id}_domain_page_meta",
     });
+    expect(ensureSiteDomainTypeTables).toHaveBeenNthCalledWith(1, "site-1", "post");
+    expect(ensureSiteDomainTypeTables).toHaveBeenNthCalledWith(2, "site-1", "page");
   });
 });

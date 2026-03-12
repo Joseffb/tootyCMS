@@ -132,4 +132,47 @@ describe("content meta extension api", () => {
       key: "caption",
     });
   });
+
+  it("allows plugin-scoped hidden meta on core-owned content within the plugin namespace", async () => {
+    mocks.getSiteDomainPostById.mockResolvedValue({ id: "post-1" });
+    mocks.listSiteDomainPostMeta.mockResolvedValue([
+      { key: "_plugin_tooty_story_teller_story_enabled", value: "1" },
+      { key: "_publish_at", value: "2026-03-10T00:00:00.000Z" },
+    ]);
+    mocks.getSession.mockResolvedValue({ user: { id: "user-1" } });
+    mocks.canUserManagePluginContentMeta.mockResolvedValue(true);
+
+    const api = createPluginExtensionApi("tooty-story-teller", {
+      siteId: "site-1",
+      permissions: { contentMeta: { requested: true, suggestedRoles: ["administrator"] } },
+    });
+
+    await expect(api.core.content.hiddenMeta.read("site-1", "post", "post-1")).resolves.toEqual([
+      { key: "_plugin_tooty_story_teller_story_enabled", value: "1" },
+    ]);
+    await expect(
+      api.core.content.hiddenMeta.set(
+        "site-1",
+        "post",
+        "post-1",
+        "_plugin_tooty_story_teller_story_enabled",
+        "1",
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("denies plugin hidden meta writes outside the plugin namespace", async () => {
+    mocks.getSiteDomainPostById.mockResolvedValue({ id: "post-1" });
+    mocks.getSession.mockResolvedValue({ user: { id: "user-1" } });
+    mocks.canUserManagePluginContentMeta.mockResolvedValue(true);
+
+    const api = createPluginExtensionApi("tooty-story-teller", {
+      siteId: "site-1",
+      permissions: { contentMeta: { requested: true, suggestedRoles: ["administrator"] } },
+    });
+
+    await expect(api.core.content.hiddenMeta.set("site-1", "post", "post-1", "_publish_at", "bad")).rejects.toThrow(
+      /hidden article meta key must stay within/i,
+    );
+  });
 });

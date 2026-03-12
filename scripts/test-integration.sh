@@ -6,6 +6,7 @@ TEST_TSCONFIG_PATH=""
 ROOT_TSCONFIG_BACKUP=""
 TEST_DIST_DIR=""
 TEST_SLOT_LOCK=""
+TEST_SERVER_LOG=""
 SERVER_PID=""
 
 wait_for_pid_exit() {
@@ -80,6 +81,7 @@ acquire_test_slot() {
       TEST_TSCONFIG_PATH=".tsconfig.next-test-${TEST_PORT}.json"
       ROOT_TSCONFIG_BACKUP=".tsconfig.root-backup-${TEST_PORT}.json"
       TEST_SLOT_LOCK="${candidate_lock}"
+      TEST_SERVER_LOG="${candidate_dist_dir}/server.log"
       export TEST_PORT
       return 0
     fi
@@ -210,20 +212,20 @@ NODE
 bash "./scripts/bootstrap-test-db.sh"
 copy_if_distinct "tsconfig.json" "${ROOT_TSCONFIG_BACKUP}"
 cleanup() {
-  if [[ -n "${TEST_SLOT_LOCK:-}" ]]; then
-    rm -f "${TEST_SLOT_LOCK}"
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    terminate_pid "${SERVER_PID}"
   fi
+
+  terminate_port_processes "${TEST_PORT}"
 
   if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
     copy_if_distinct "${ROOT_TSCONFIG_BACKUP}" "tsconfig.json"
     rm -f "${ROOT_TSCONFIG_BACKUP}"
   fi
 
-  if [[ -n "${SERVER_PID:-}" ]]; then
-    terminate_pid "${SERVER_PID}"
+  if [[ -n "${TEST_SLOT_LOCK:-}" ]]; then
+    rm -f "${TEST_SLOT_LOCK}"
   fi
-
-  terminate_port_processes "${TEST_PORT}"
 }
 
 trap cleanup EXIT
@@ -238,7 +240,8 @@ if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
   rm -f "${ROOT_TSCONFIG_BACKUP}"
 fi
 
-NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" &
+: > "${TEST_SERVER_LOG}"
+NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" >>"${TEST_SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
 node <<'NODE'
