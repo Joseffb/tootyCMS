@@ -1,4 +1,4 @@
-export const CORE_VERSION = "0.4.11";
+export const CORE_VERSION = "0.4.12";
 export const CORE_VERSION_SERIES = "0.4.x";
 
 type SemverTuple = [number, number, number];

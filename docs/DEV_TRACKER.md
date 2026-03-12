@@ -114,7 +114,7 @@ Current tree status:
 - Validation:
   - docs-only change
 
-### 1. Article editor persistence lifecycle
+### 1. Article editor persistence lifecycle and direct taxonomy persistence
 
 - Status: `verified`
 - Area:
@@ -122,29 +122,14 @@ Current tree status:
   - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/actions.ts`
   - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/domain-post-save-action.test.ts`
   - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/e2e/site-lifecycle.spec.ts`
-- Symptom:
-  - reopening a newly created article editor in WebKit can hydrate with a blank/default draft payload
-  - title, slug, and content are lost in the reopened editor even after initial save
-- Latest failing assertion:
-  - `tests/e2e/site-lifecycle.spec.ts`
-  - article editor lifecycle
-  - expected title input to equal the saved draft title
-  - actual value was empty string
-- Current understanding:
-  - route normalization is fixed
-  - taxonomy helper flakiness was fixed
-  - the original blank-save failure was resolved by editor field-state/reconciliation hardening
-  - the remaining page-title/permalink persistence failure was caused by `updateDomainPost(...)` falling through a duplicate-id placeholder recovery path and returning the existing row without applying the requested patch
-  - mutation authorization now receives the requested site hint up front
-  - duplicate-id recovery now applies the pending update instead of returning stale data
 - Result:
-  - targeted browser lifecycle repros pass
-  - the full `site-lifecycle` spec passes across the 4-browser matrix
-  - full `npm run test` and `npm run test:integration` are green on the current tree
-- Required validation after fix:
-  1. `bash ./scripts/test-integration.sh tests/e2e/site-lifecycle.spec.ts --project=webkit`
-  2. `npm run test`
-  3. `npm run test:integration`
+  - taxonomy changes now persist through the direct editor save path instead of waiting on the general draft autosave queue
+  - temp and permanent article state now share the same taxonomy persistence behavior
+  - the article editor lifecycle is green across the full browser matrix, including title/permalink persistence, taxonomy persistence, scheduling, publish, and public verification
+- Affected surfaces:
+  - editor taxonomy chips and taxonomy add/select UI
+  - lifecycle E2E article edit flow
+  - temp-draft and permanent post edit parity
 
 ### 2. Scheduler ownership refactor
 

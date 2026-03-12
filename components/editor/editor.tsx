@@ -160,7 +160,7 @@ type TaxonomyTerm = {
 };
 
 type EditorSessionCacheEntry = {
-  version: 1;
+  version: 2;
   savedAt: number;
   signature: string;
   payload: {
@@ -169,6 +169,7 @@ type EditorSessionCacheEntry = {
     description: string;
     slug: string;
     content: string;
+    published: boolean;
     password: string;
     usePassword: boolean;
     layout: string | null;
@@ -185,7 +186,7 @@ const DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS: TaxonomyOverviewRow[] = [
   { taxonomy: "category", label: "Category", termCount: 0 },
   { taxonomy: "tag", label: "Tags", termCount: 0 },
 ];
-const EDITOR_SESSION_CACHE_VERSION = 1;
+const EDITOR_SESSION_CACHE_VERSION = 2;
 const EDITOR_SESSION_CACHE_TTL_MS = 10 * 60 * 1000;
 const EDITOR_SESSION_CACHE_CONSISTENCY_SKEW_MS = 2 * 60 * 1000;
 const EDITOR_SESSION_CACHE_KEY_PREFIX = "tooty.editor.snapshot.v1:";
@@ -270,7 +271,35 @@ function getAllSelectedTaxonomyIds(selected: Record<string, number[]>) {
         .flat()
         .filter((id): id is number => Number.isFinite(id)),
     ),
-  );
+  ).sort((left, right) => left - right);
+}
+
+function normalizeSelectedTermsByTaxonomy(selected: Record<string, number[]>) {
+  const entries = Object.entries(selected)
+    .map(
+      ([taxonomy, ids]) =>
+        [
+          taxonomy,
+          Array.from(new Set((Array.isArray(ids) ? ids : []).filter((id): id is number => Number.isFinite(id)))).sort(
+            (left, right) => left - right,
+          ),
+        ] as const,
+    )
+    .sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(entries);
+}
+
+function normalizeMetaEntriesForPersistence(metaEntries: PostMetaEntry[]) {
+  return [...metaEntries]
+    .map((entry) => ({
+      key: String(entry.key || ""),
+      value: String(entry.value || ""),
+    }))
+    .sort((left, right) => {
+      const keyComparison = left.key.localeCompare(right.key);
+      if (keyComparison !== 0) return keyComparison;
+      return left.value.localeCompare(right.value);
+    });
 }
 
 function buildEditorStateSignature(input: {
@@ -280,19 +309,22 @@ function buildEditorStateSignature(input: {
   metaEntries: PostMetaEntry[];
 }) {
   const { post, content, selectedTermsByTaxonomy, metaEntries } = input;
+  const normalizedSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(selectedTermsByTaxonomy);
+  const normalizedMetaEntries = normalizeMetaEntriesForPersistence(metaEntries);
   return JSON.stringify({
     id: post.id,
     title: post.title ?? "",
     description: post.description ?? "",
     slug: post.slug ?? "",
     content: JSON.stringify(content),
+    published: Boolean(post.published),
     password: post.password ?? "",
     usePassword: Boolean(post.usePassword),
     layout: post.layout ?? null,
-    categoryIds: selectedTermsByTaxonomy.category ?? [],
-    tagIds: selectedTermsByTaxonomy.tag ?? [],
-    taxonomyIds: getAllSelectedTaxonomyIds(selectedTermsByTaxonomy),
-    metaEntries,
+    categoryIds: normalizedSelectedTermsByTaxonomy.category ?? [],
+    tagIds: normalizedSelectedTermsByTaxonomy.tag ?? [],
+    taxonomyIds: getAllSelectedTaxonomyIds(normalizedSelectedTermsByTaxonomy),
+    metaEntries: normalizedMetaEntries,
   });
 }
 
@@ -516,6 +548,7 @@ function getInitialEditorClientState(post: PostWithSite) {
         description: cachedEditorState!.payload.description,
         slug: cachedEditorState!.payload.slug,
         content: cachedEditorState!.payload.content,
+        published: cachedEditorState!.payload.published,
         [POST_PASSWORD_KEY]: cachedEditorState!.payload.password,
         usePassword: cachedEditorState!.payload.usePassword,
         layout: cachedEditorState!.payload.layout,
@@ -662,6 +695,7 @@ export default function Editor({
   const [initialContent, setInitialContent] = useState<JSONContent | null>(() => initialClientState.content);
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveRevision, setSaveRevision] = useState(0);
   const [showPostPassword, setShowPostPassword] = useState(false);
   const [charsCount, setCharsCount] = useState<number>();
   const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>(
@@ -811,8 +845,7 @@ export default function Editor({
     lastObservedEditorContentSignatureRef.current = JSON.stringify(effectiveContent);
     setSelectedTermsByTaxonomy(effectiveSelectedTermsByTaxonomy);
     selectedTermsByTaxonomyRef.current = effectiveSelectedTermsByTaxonomy;
-    setTermNameById((prev) => ({ ...prev, ...effectiveTermNameById }));
-    termNameByIdRef.current = { ...termNameByIdRef.current, ...effectiveTermNameById };
+    applyTermNameByIdUpdate((prev) => ({ ...prev, ...effectiveTermNameById }));
     setMetaEntries(effectiveMetaEntries);
     metaEntriesRef.current = effectiveMetaEntries;
     lastImageCountRef.current = countImageNodes(effectiveContent);
@@ -836,12 +869,24 @@ export default function Editor({
     setData(next);
   };
 
+  const applyTermNameByIdUpdate = (
+    updater:
+      | Record<number, string>
+      | ((prev: Record<number, string>) => Record<number, string>),
+  ) => {
+    const current = termNameByIdRef.current;
+    const next =
+      typeof updater === "function"
+        ? (updater as (prev: Record<number, string>) => Record<number, string>)(current)
+        : updater;
+    termNameByIdRef.current = next;
+    setTermNameById(next);
+    return next;
+  };
+
   useEffect(() => {
     selectedTermsByTaxonomyRef.current = selectedTermsByTaxonomy;
   }, [selectedTermsByTaxonomy]);
-  useEffect(() => {
-    termNameByIdRef.current = termNameById;
-  }, [termNameById]);
   useEffect(() => {
     taxonomyInputByKeyRef.current = taxonomyInputByKey;
   }, [taxonomyInputByKey]);
@@ -912,7 +957,7 @@ export default function Editor({
   const refreshTaxonomyTerms = async (taxonomy: string) => {
     const rows = await loadTaxonomyTermsWithRetry(taxonomy);
     setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: rows }));
-    setTermNameById((prev) => {
+    applyTermNameByIdUpdate((prev) => {
       const next = { ...prev };
       for (const term of rows) next[term.id] = term.name;
       return next;
@@ -937,7 +982,7 @@ export default function Editor({
               ...prev,
               [row.taxonomy]: preview,
             }));
-            setTermNameById((prev) => {
+            applyTermNameByIdUpdate((prev) => {
               const next = { ...prev };
               for (const term of preview) {
                 next[term.id] = term.name;
@@ -1150,14 +1195,16 @@ export default function Editor({
               : slugValueRef.current || currentLocalPost.slug || payload.slug || String((result as any)?.slug || "").trim(),
           );
           const currentLocalTermNameById = termNameByIdRef.current;
-          const nextMetaEntries = Array.isArray((result as any)?.meta)
-            ? ((result as any).meta as Array<{ key?: string; value?: string }>).map((entry) => ({
-                key: String(entry?.key || ""),
-                value: String(entry?.value || ""),
-              }))
-            : preserveNewerLocalDraft
-              ? currentLocalMetaEntries
-              : payload.metaEntries;
+          const nextMetaEntries = normalizeMetaEntriesForPersistence(
+            Array.isArray((result as any)?.meta)
+              ? ((result as any).meta as Array<{ key?: string; value?: string }>).map((entry) => ({
+                  key: String(entry?.key || ""),
+                  value: String(entry?.value || ""),
+                }))
+              : preserveNewerLocalDraft
+                ? currentLocalMetaEntries
+                : payload.metaEntries,
+          );
           const nextPost: PostWithSite = {
             ...currentLocalPost,
             ...(result && typeof result === "object" ? result : {}),
@@ -1188,9 +1235,9 @@ export default function Editor({
           };
           const nextPasswordValue = nextPost[passwordFieldKey] ?? "";
           const derivedTaxonomyState = deriveSelectedTermsByTaxonomy(nextPost);
-          const nextSelectedTermsByTaxonomy = preserveNewerLocalDraft
-            ? currentLocalSelectedTermsByTaxonomy
-            : payload.selectedTermsByTaxonomy;
+          const nextSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(
+            preserveNewerLocalDraft ? currentLocalSelectedTermsByTaxonomy : payload.selectedTermsByTaxonomy,
+          );
           const nextTermNameById = {
             ...currentLocalTermNameById,
             ...derivedTaxonomyState.nextTermNameById,
@@ -1201,6 +1248,7 @@ export default function Editor({
             description: nextPost.description ?? "",
             slug: String(nextPost.slug || "").trim(),
             content: nextPost.content ?? "",
+            published: Boolean(nextPost.published),
             postPassword: nextPasswordValue,
             usePassword: Boolean(nextPost.usePassword),
             layout: nextPost.layout ?? null,
@@ -1210,6 +1258,8 @@ export default function Editor({
             taxonomyIds: getAllSelectedTaxonomyIds(nextSelectedTermsByTaxonomy),
             metaEntries: nextMetaEntries,
           });
+          // Persisted state reconciliation should not immediately re-dirty the editor.
+          skipNextAutosaveRef.current = true;
           dataRef.current = nextPost;
           setData(nextPost);
           titleValueRef.current = nextPost.title ?? "";
@@ -1217,8 +1267,7 @@ export default function Editor({
           slugValueRef.current = String(nextPost.slug || "").trim();
           selectedTermsByTaxonomyRef.current = nextSelectedTermsByTaxonomy;
           setSelectedTermsByTaxonomy(nextSelectedTermsByTaxonomy);
-          termNameByIdRef.current = nextTermNameById;
-          setTermNameById(nextTermNameById);
+          applyTermNameByIdUpdate(nextTermNameById);
           metaEntriesRef.current = nextMetaEntries;
           setMetaEntries(nextMetaEntries);
           lastSavedSignatureRef.current = nextSignature;
@@ -1232,6 +1281,7 @@ export default function Editor({
               description: nextPost.description ?? "",
               slug: String(nextPost.slug || "").trim(),
               content: nextPost.content ?? "",
+              published: Boolean(nextPost.published),
               [POST_PASSWORD_KEY]: nextPost.password ?? "",
               usePassword: Boolean(nextPost.usePassword),
               layout: nextPost.layout ?? null,
@@ -1257,6 +1307,9 @@ export default function Editor({
         onStatus: ({ status, error }) => {
           setSaveStatus(status);
           setSaveError(error instanceof Error ? error.message : error ? String(error) : null);
+          if (status === "saved") {
+            setSaveRevision((revision) => revision + 1);
+          }
         },
       }),
     [onSave, router],
@@ -1302,8 +1355,10 @@ export default function Editor({
   const buildSaveSnapshot = (snapshot?: EditorSaveSnapshot) => {
     if (!canEdit) return;
     const latest = snapshot?.data ?? dataRef.current ?? data;
-    const selectedTerms = snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current;
-    const nextMetaEntries = snapshot?.metaEntries ?? metaEntriesRef.current;
+    const selectedTerms = normalizeSelectedTermsByTaxonomy(
+      snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current,
+    );
+    const nextMetaEntries = normalizeMetaEntriesForPersistence(snapshot?.metaEntries ?? metaEntriesRef.current);
     const hasMountedTitleField = titleInputRef.current != null;
     const hasMountedDescriptionField = descriptionInputRef.current != null;
     const hasMountedSlugField = slugInputRef.current != null;
@@ -1329,6 +1384,7 @@ export default function Editor({
       description: nextDescription,
       slug: nextSlug,
       content,
+      published: Boolean(latest.published),
       password: latest.password ?? "",
       usePassword: Boolean(latest.usePassword),
       layout: latest.layout ?? null,
@@ -1382,6 +1438,7 @@ export default function Editor({
         description: payload.description,
         slug: payload.slug,
         content: payload.content,
+        published: Boolean(dataRef.current.published),
         [POST_PASSWORD_KEY]: payload.password,
         usePassword: payload.usePassword,
         layout: payload.layout,
@@ -1397,18 +1454,54 @@ export default function Editor({
     saveQueue.enqueue(payload, { immediate: effectiveImmediate });
   };
 
+  const syncEditorSessionSnapshot = (nextPost: PostWithSite, nextMetaEntries: PostMetaEntry[]) => {
+    const nextSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(selectedTermsByTaxonomyRef.current);
+    const nextContent = getContentJSON();
+    const nextSignature = buildEditorStateSignature({
+      post: nextPost,
+      content: nextContent,
+      selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
+      metaEntries: nextMetaEntries,
+    });
+    writeEditorSessionCache(
+      nextPost.id,
+      {
+        id: nextPost.id,
+        title: nextPost.title ?? "",
+        description: nextPost.description ?? "",
+        slug: String(nextPost.slug || "").trim(),
+        content: JSON.stringify(nextContent),
+        published: Boolean(nextPost.published),
+        [POST_PASSWORD_KEY]: nextPost.password ?? "",
+        usePassword: Boolean(nextPost.usePassword),
+        layout: nextPost.layout ?? null,
+        selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
+        termNameById: termNameByIdRef.current,
+        categoryIds: nextSelectedTermsByTaxonomy.category ?? [],
+        tagIds: nextSelectedTermsByTaxonomy.tag ?? [],
+        taxonomyIds: getAllSelectedTaxonomyIds(nextSelectedTermsByTaxonomy),
+        metaEntries: nextMetaEntries,
+      },
+      nextSignature,
+    );
+  };
+
   const waitForPendingTaxonomyWrites = async () => {
     while (pendingTaxonomyTasksRef.current.size > 0) {
       await Promise.allSettled(Array.from(pendingTaxonomyTasksRef.current));
     }
   };
 
-  const saveNow = async () => {
+  const persistSnapshotNow = async (snapshot?: EditorSaveSnapshot) => {
     if (!canEdit) return false;
-    await waitForPendingTaxonomyWrites();
-    const built = buildSaveSnapshot();
+    const built = buildSaveSnapshot(snapshot);
     if (!built) return false;
     const { payload, signature } = built;
+    if (signature === lastSavedSignatureRef.current) {
+      setSaveStatus("saved");
+      setSaveError(null);
+      return true;
+    }
     const previousCachedEditorState = readEditorSessionCache(payload.id);
 
     lastQueuedSignatureRef.current = signature;
@@ -1423,6 +1516,7 @@ export default function Editor({
         description: payload.description,
         slug: payload.slug,
         content: payload.content,
+        published: Boolean(dataRef.current.published),
         [POST_PASSWORD_KEY]: payload.password,
         usePassword: payload.usePassword,
         layout: payload.layout,
@@ -1451,6 +1545,12 @@ export default function Editor({
       }
       return false;
     }
+  };
+
+  const saveNow = async () => {
+    if (!canEdit) return false;
+    await waitForPendingTaxonomyWrites();
+    return persistSnapshotNow();
   };
 
   const markLocalDirty = () => {
@@ -1493,22 +1593,29 @@ export default function Editor({
       | ((prev: Record<string, number[]>) => Record<string, number[]>),
   ) => {
     const prev = selectedTermsByTaxonomyRef.current;
-    const next = typeof updater === "function" ? updater(prev) : updater;
+    const next = normalizeSelectedTermsByTaxonomy(typeof updater === "function" ? updater(prev) : updater);
     selectedTermsByTaxonomyRef.current = next;
     markLocalDirty();
     setSelectedTermsByTaxonomy(next);
     return next;
   };
 
+  const persistSelectedTermsByTaxonomy = (nextSelectedTermsByTaxonomy: Record<string, number[]>) => {
+    // Taxonomy writes should persist directly onto the current article record,
+    // regardless of whether the item is still a temporary draft shell.
+    void persistSnapshotNow({ selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy });
+  };
+
   const toggleTaxonomyTerm = (taxonomy: string, termId: number) => {
     if (!canEdit) return;
-    updateSelectedTermsByTaxonomy((prev) => {
+    const nextSelectedTermsByTaxonomy = updateSelectedTermsByTaxonomy((prev) => {
       const current = prev[taxonomy] ?? [];
       const next = current.includes(termId)
         ? current.filter((id) => id !== termId)
         : [...current, termId];
       return { ...prev, [taxonomy]: next };
     });
+    persistSelectedTermsByTaxonomy(nextSelectedTermsByTaxonomy);
   };
 
   const loadAllTermsForTaxonomy = async (taxonomy: string) => {
@@ -1518,7 +1625,7 @@ export default function Editor({
       const rows = await getTaxonomyTerms(post.siteId || "", taxonomy);
       const normalized = rows.map((term) => ({ id: term.id, name: term.name }));
       setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: normalized }));
-      setTermNameById((prev) => {
+      applyTermNameByIdUpdate((prev) => {
         const next = { ...prev };
         for (const term of normalized) next[term.id] = term.name;
         return next;
@@ -1545,6 +1652,9 @@ export default function Editor({
           (term) => term.name.toLowerCase() === trimmed.toLowerCase(),
         );
         let termId: number | null = existing?.id ?? null;
+        if (existing && !termNameByIdRef.current[existing.id]) {
+          applyTermNameByIdUpdate((prev) => ({ ...prev, [existing.id]: existing.name }));
+        }
         if (termId === null) {
           const created = await createTaxonomyTerm({ siteId, taxonomy, label: trimmed });
           if ((created as any)?.error) {
@@ -1562,17 +1672,18 @@ export default function Editor({
               const next = [...current, { id: resolvedTermId, name: termName }].sort((a, b) => a.name.localeCompare(b.name));
               return { ...prev, [taxonomy]: next };
             });
-            setTermNameById((prev) => ({ ...prev, [resolvedTermId]: termName }));
+            applyTermNameByIdUpdate((prev) => ({ ...prev, [resolvedTermId]: termName }));
           }
         }
         if (termId === null) return;
         const selectedTermId = termId;
-        updateSelectedTermsByTaxonomy((prev) => {
+        const nextSelectedTermsByTaxonomy = updateSelectedTermsByTaxonomy((prev) => {
           const current = prev[taxonomy] ?? [];
           if (current.includes(selectedTermId)) return prev;
           return { ...prev, [taxonomy]: [...current, selectedTermId] };
         });
         setTaxonomyInputValue(taxonomy, "");
+        persistSelectedTermsByTaxonomy(nextSelectedTermsByTaxonomy);
       } finally {
         pendingTaxonomyRequestKeysRef.current.delete(requestKey);
         setPendingTaxonomyWrites((prev) => {
@@ -1591,7 +1702,9 @@ export default function Editor({
     if (!canEdit) return;
     const nextKey = key.trim();
     if (!nextKey) return;
-    const nextMetaEntries = upsertEditorMetaEntry(metaEntriesRef.current, nextKey, value);
+    const nextMetaEntries = normalizeMetaEntriesForPersistence(
+      upsertEditorMetaEntry(metaEntriesRef.current, nextKey, value),
+    );
     metaEntriesRef.current = nextMetaEntries;
     setMetaEntries(nextMetaEntries);
     setMetaKeySuggestions((prev) => (prev.includes(nextKey) ? prev : [...prev, nextKey].sort((a, b) => a.localeCompare(b))));
@@ -1601,9 +1714,10 @@ export default function Editor({
   };
 
   const applyMetaEntriesUpdate = (nextMetaEntries: PostMetaEntry[], immediate = true) => {
-    metaEntriesRef.current = nextMetaEntries;
-    setMetaEntries(nextMetaEntries);
-    enqueueSave(immediate, { metaEntries: nextMetaEntries });
+    const normalizedEntries = normalizeMetaEntriesForPersistence(nextMetaEntries);
+    metaEntriesRef.current = normalizedEntries;
+    setMetaEntries(normalizedEntries);
+    enqueueSave(immediate, { metaEntries: normalizedEntries });
   };
 
   const visibleMetaEntries = useMemo(() => filterVisibleEditorMetaEntries(metaEntries), [metaEntries]);
@@ -1655,7 +1769,16 @@ export default function Editor({
   const publishButtonLabel = data.published ? "Unpublish" : "Publish";
   const scheduleButtonLabel = formatScheduledPublishLabel(scheduledPublishAt);
   const scheduleButtonAriaLabel = scheduleButtonLabel.replace(/^Publish:/, "Schedule publish:");
-  const isEditorMutationPending = saveStatus === "saving" || isPendingPublishAction || isPendingPublishSchedule;
+  const selectedTermsDigest = useMemo(
+    () => JSON.stringify(normalizeSelectedTermsByTaxonomy(selectedTermsByTaxonomy)),
+    [selectedTermsByTaxonomy],
+  );
+  const metaEntriesDigest = useMemo(
+    () => JSON.stringify(normalizeMetaEntriesForPersistence(metaEntries)),
+    [metaEntries],
+  );
+  const isExplicitEditorActionPending =
+    isPendingPublishAction || isPendingPublishSchedule || isPendingThumbnail || isPendingDelete;
 
   const setUseComments = (enabled: boolean) => {
     if (!canEdit) return;
@@ -1684,7 +1807,7 @@ export default function Editor({
     }
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.title, data.description, data.slug, data.password, data.usePassword, data.layout, selectedTermsByTaxonomy, metaEntries]);
+  }, [data.title, data.description, data.slug, data.password, data.usePassword, data.layout, selectedTermsDigest, metaEntriesDigest]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1756,7 +1879,9 @@ export default function Editor({
         skipNextAutosaveRef.current = true;
         metaEntriesRef.current = nextMetaEntries;
         setMetaEntries(nextMetaEntries);
-        applyDataUpdate((prev) => ({ ...prev, published: nextPublished }));
+        const nextPost = { ...dataRef.current, published: nextPublished };
+        applyDataUpdate(nextPost);
+        syncEditorSessionSnapshot(nextPost, nextMetaEntries);
         toast.success(normalized ? "Scheduled publish time updated." : "Scheduled publish cleared.");
       } catch (error) {
         skipNextAutosaveRef.current = true;
@@ -1858,7 +1983,11 @@ export default function Editor({
               </a>
             )}
             {canEdit ? (
-              <div className="rounded-lg bg-accent px-2 py-1 text-sm text-muted-foreground">
+              <div
+                className="rounded-lg bg-accent px-2 py-1 text-sm text-muted-foreground"
+                data-editor-save-status={saveStatus}
+                data-editor-save-revision={saveRevision}
+              >
                 {formatSaveLabel(saveStatus, saveError)}
               </div>
             ) : null}
@@ -1908,10 +2037,10 @@ export default function Editor({
                     type="button"
                     className={cn(
                       "rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700 hover:bg-stone-100",
-                      isEditorMutationPending ? "cursor-not-allowed opacity-60" : "",
+                      isExplicitEditorActionPending ? "cursor-not-allowed opacity-60" : "",
                     )}
                     aria-label={scheduleButtonAriaLabel}
-                    disabled={isEditorMutationPending}
+                    disabled={isExplicitEditorActionPending}
                     onClick={() => {
                       setPublishScheduleDraft(toDateTimeLocalInputValue(scheduledPublishAt));
                     }}
@@ -1993,7 +2122,6 @@ export default function Editor({
                       typeof (response as any)?.publishAt === "string" && String((response as any).publishAt).trim()
                         ? String((response as any).publishAt).trim()
                         : null;
-                      applyDataUpdate((prev) => ({ ...prev, published: nextPublished }));
                     const nextMetaEntries = (() => {
                       const filtered = metaEntriesRef.current.filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY);
                       return nextPublishAt
@@ -2002,6 +2130,12 @@ export default function Editor({
                     })();
                     metaEntriesRef.current = nextMetaEntries;
                     setMetaEntries(nextMetaEntries);
+                    const nextPost = {
+                      ...dataRef.current,
+                      published: nextPublished,
+                    };
+                    applyDataUpdate(nextPost);
+                    syncEditorSessionSnapshot(nextPost, nextMetaEntries);
                     if ((response as any)?.scheduled) {
                       toast.success(`Scheduled for ${formatScheduledPublishLabel(nextPublishAt).replace(/^Publish: /, "")}.`);
                     } else {
@@ -2014,11 +2148,11 @@ export default function Editor({
               }}
               className={cn(
                 "flex h-7 w-24 items-center justify-center space-x-2 rounded-lg border text-sm transition-all focus:outline-none",
-                isEditorMutationPending || !canPublish
+                isExplicitEditorActionPending || !canPublish
                   ? "cursor-not-allowed border-muted bg-muted text-muted-foreground"
                   : "border border-black bg-white text-black hover:bg-gray-800 hover:text-white active:bg-muted dark:border-stone-700",
               )}
-              disabled={isEditorMutationPending || !canPublish}
+              disabled={isExplicitEditorActionPending || !canPublish}
               aria-label={publishButtonLabel}
             >
               {isPendingPublishAction || isPendingPublishSchedule ? (
@@ -2192,15 +2326,15 @@ export default function Editor({
             <button
               type="button"
               onClick={() => void saveNow()}
-              disabled={isEditorMutationPending}
+              disabled={isExplicitEditorActionPending}
               className={cn(
                 "rounded-md px-4 py-2 text-sm font-semibold transition-colors",
-                isEditorMutationPending
+                isExplicitEditorActionPending
                   ? "cursor-not-allowed bg-stone-300 text-stone-600"
                   : "bg-black text-white hover:bg-stone-800",
               )}
             >
-              {isEditorMutationPending ? "Saving..." : "Save Changes"}
+              {isExplicitEditorActionPending ? "Saving..." : "Save Changes"}
             </button>
           </div>
         )}
@@ -2226,14 +2360,14 @@ export default function Editor({
                 type="button"
                 className={cn(
                   "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
-                  isEditorMutationPending
+                  isExplicitEditorActionPending
                     ? "cursor-not-allowed bg-stone-300 text-stone-600"
                     : "bg-black text-white hover:bg-stone-800",
                 )}
                 onClick={() => void saveNow()}
-                disabled={isEditorMutationPending}
+                disabled={isExplicitEditorActionPending}
               >
-                {isEditorMutationPending ? "Saving..." : "Save Changes"}
+                {isExplicitEditorActionPending ? "Saving..." : "Save Changes"}
               </button>
               )}
               {canEdit && (
@@ -2534,7 +2668,7 @@ export default function Editor({
                   </datalist>
                   <div className="flex flex-wrap gap-1">
                     {selectedTermIds.map((id) => {
-                      const label = termNameById[id];
+                      const label = termNameById[id] ?? sectionTerms.find((term) => term.id === id)?.name;
                       if (!label) return null;
                       return (
                         <button

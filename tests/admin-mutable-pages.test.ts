@@ -248,6 +248,17 @@ describe("mutable admin pages", () => {
     expect(source).toContain("lastSavedSignatureRef.current = cachedEditorState!.signature;");
   });
 
+  it("keeps selected taxonomy chip labels visible even when a late save resolves before React state effects catch up", () => {
+    const source = readSource("components/editor/editor.tsx");
+
+    expect(source).toContain("const applyTermNameByIdUpdate = (");
+    expect(source).toContain("const current = termNameByIdRef.current;");
+    expect(source).toContain("termNameByIdRef.current = next;");
+    expect(source).toContain("setTermNameById(next);");
+    expect(source).toContain("applyTermNameByIdUpdate((prev) => ({ ...prev, [resolvedTermId]: termName }));");
+    expect(source).toContain("const label = termNameById[id] ?? sectionTerms.find((term) => term.id === id)?.name;");
+  });
+
   it("preserves newer local slug, content, and taxonomy state when an older temp-draft save resolves late", () => {
     const source = readSource("components/editor/editor.tsx");
 
@@ -266,9 +277,8 @@ describe("mutable admin pages", () => {
     expect(source).toContain("(liveTitleValue || titleValueRef.current || currentLocalPost.title || payload.title)");
     expect(source).toContain("preserveNewerLocalDraft || hasMountedSlugField");
     expect(source).toContain("slug:");
-    expect(source).toContain("const nextSelectedTermsByTaxonomy = preserveNewerLocalDraft");
-    expect(source).toContain("? currentLocalSelectedTermsByTaxonomy");
-    expect(source).toContain(": payload.selectedTermsByTaxonomy;");
+    expect(source).toContain("const nextSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(");
+    expect(source).toContain("preserveNewerLocalDraft ? currentLocalSelectedTermsByTaxonomy : payload.selectedTermsByTaxonomy");
   });
 
   it("builds explicit save snapshots from live mounted title, description, and slug fields before falling back to cached refs", () => {

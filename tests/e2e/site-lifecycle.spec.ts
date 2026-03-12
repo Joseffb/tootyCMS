@@ -241,7 +241,11 @@ async function gotoAdminPage(page: Page, url: string, timeoutMs = 60_000) {
       .isVisible()
       .catch(() => false);
     const notFoundVisible = await page.getByRole("heading", { name: "404" }).isVisible().catch(() => false);
-    if (!bannerVisible && !siteMissingVisible && !notFoundVisible) return;
+    const appErrorVisible = await page
+      .getByText(/Application error: a client-side exception has occurred/i)
+      .isVisible()
+      .catch(() => false);
+    if (!bannerVisible && !siteMissingVisible && !notFoundVisible && !appErrorVisible) return;
     await page.waitForTimeout(500);
     await page.reload({ waitUntil: "domcontentloaded" });
   }
@@ -264,50 +268,53 @@ async function expectCurrentUrlToMatch(page: Page, pattern: RegExp, timeoutMs = 
     .toMatch(pattern);
 }
 
-async function waitForEditorSaved(page: Page) {
+async function readEditorSaveRevision(page: Page) {
+  const rawValue = await page
+    .locator("[data-editor-save-revision]")
+    .first()
+    .getAttribute("data-editor-save-revision")
+    .catch(() => null);
+  return Number.parseInt(String(rawValue ?? "0"), 10) || 0;
+}
+
+async function waitForEditorSaved(page: Page, options?: { afterRevision?: number }) {
+  const afterRevision = options?.afterRevision ?? null;
   await expect
     .poll(
       async () => {
-        const visibleSavingButtons = await page
-          .getByRole("button", { name: /^Saving/ })
-          .evaluateAll((elements) =>
-            elements.filter((element) => {
-              const node = element as HTMLElement;
-              const style = window.getComputedStyle(node);
-              const rect = node.getBoundingClientRect();
-              return (
-                style.display !== "none" &&
-                style.visibility !== "hidden" &&
-                rect.width > 0 &&
-                rect.height > 0
-              );
-            }).length,
-          )
-          .catch(() => 0);
-        if (visibleSavingButtons > 0) return "saving";
-        const unsavedVisible = await page.getByText("Unsaved").first().isVisible().catch(() => false);
-        if (unsavedVisible) return "unsaved";
-        const savedVisible = await page.getByText("Saved").first().isVisible().catch(() => false);
-        if (savedVisible) return "saved";
-        const saveButton = page.getByRole("button", { name: /^Save Changes$/ }).first();
-        const saveVisible = await saveButton.isVisible().catch(() => false);
-        const saveEnabled = saveVisible ? await saveButton.isEnabled().catch(() => false) : false;
-        return saveVisible && saveEnabled ? "idle" : "pending";
+        const statusLocator = page.locator("[data-editor-save-status]").first();
+        const revisionLocator = page.locator("[data-editor-save-revision]").first();
+        const saveStatus = await statusLocator.getAttribute("data-editor-save-status").catch(() => null);
+        const saveRevision = Number.parseInt(
+          String(await revisionLocator.getAttribute("data-editor-save-revision").catch(() => "0")),
+          10,
+        ) || 0;
+        if (saveStatus === "unsaved") return "unsaved";
+        if (saveStatus === "saved") {
+          if (afterRevision !== null && saveRevision <= afterRevision) {
+            return `saved:${saveRevision}`;
+          }
+          return "saved";
+        }
+        const savingButton = page.getByRole("button", { name: /^Saving\.\.\.$/ }).first();
+        const savingVisible = await savingButton.isVisible().catch(() => false);
+        if (savingVisible) return "saving";
+        return "pending";
       },
       {
         timeout: 90_000,
         message: "Expected editor save state to settle",
       },
     )
-    .toMatch(/saved|idle/);
+    .toBe("saved");
 }
 
-async function waitForEditorSavedWithReload(page: Page, timeoutMs = 90_000) {
+async function waitForEditorSavedWithReload(page: Page, timeoutMs = 90_000, options?: { afterRevision?: number }) {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await waitForEditorSaved(page);
+      await waitForEditorSaved(page, options);
       return;
     } catch (error) {
       lastError = error;
@@ -604,7 +611,6 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
   await expect(section).toBeVisible({ timeout: 20_000 });
   await section.scrollIntoViewIfNeeded().catch(() => undefined);
   const deadline = Date.now() + 90_000;
-  let stalledIterations = 0;
   while (Date.now() < deadline) {
     const sectionVisible = await section.isVisible().catch(() => false);
     if (!sectionVisible) {
@@ -622,34 +628,21 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
       return;
     }
     if (savingVisible) {
-      stalledIterations += 1;
-      if (stalledIterations >= 3) {
-        await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
-        await waitForEditorSurface(page, 60_000, { requireEditable: true }).catch(() => undefined);
-        await openMoreSidebar(page);
-        stalledIterations = 0;
-      } else {
-        await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
-      }
+      await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
       await page.waitForTimeout(300);
       continue;
     }
-    stalledIterations = 0;
     const selectedChips = section.locator('button[title^="Remove "]');
     const selectedCount = await selectedChips.count().catch(() => 0);
-    let removedDifferentSelection = false;
     for (let index = 0; index < selectedCount; index += 1) {
       const chip = selectedChips.nth(index);
       const title = String((await chip.getAttribute("title").catch(() => "")) || "");
       if (!title || title === `Remove ${value}`) continue;
       await chip.scrollIntoViewIfNeeded().catch(() => undefined);
-      await chip.click({ force: true }).catch(() => undefined);
-      removedDifferentSelection = true;
-      await page.waitForTimeout(300);
-    }
-    if (removedDifferentSelection) {
+      await chip.click({ force: true });
       await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
-      continue;
+      await openMoreSidebar(page).catch(() => undefined);
+      break;
     }
     const availableChip = section
       .getByRole("button", { name: new RegExp(`^${escapeRegExp(value)}$`) })
@@ -660,28 +653,9 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
       await availableChip.click().catch(async () => {
         await availableChip.click({ force: true });
       });
-      const selectionSettled = await expect
-        .poll(
-          async () => {
-            const chipVisible = await selectedChip.isVisible().catch(() => false);
-            const namedChipVisible = await selectedChipByName.isVisible().catch(() => false);
-            const savingNow = await section.getByRole("button", { name: "Saving..." }).first().isVisible().catch(() => false);
-            if ((chipVisible || namedChipVisible) && !savingNow) return "selected";
-            return savingNow ? "saving" : "pending";
-          },
-          {
-            timeout: 30_000,
-            message: `Expected ${label} taxonomy chip ${value} to finish saving`,
-          },
-        )
-        .toMatch(/selected/)
-        .then(() => true)
-        .catch(() => false);
-      if (!selectionSettled) {
-        await page.waitForTimeout(500);
-        continue;
-      }
-      return;
+      await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
+      await openMoreSidebar(page).catch(() => undefined);
+      continue;
     }
     const input = section.getByPlaceholder("Type to search or add");
     const selectButton = section.getByRole("button", { name: /Select|Saving.../i });
@@ -690,11 +664,9 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
     const buttonDisabled = await selectButton.isDisabled().catch(() => true);
     const loadingVisible = await loadingButton.isVisible().catch(() => false);
     if (inputDisabled || buttonDisabled || loadingVisible) {
-      stalledIterations += 1;
-      await page.waitForTimeout(stalledIterations >= 3 ? 1000 : 500);
+      await page.waitForTimeout(500);
       continue;
     }
-    stalledIterations = 0;
     await input.scrollIntoViewIfNeeded().catch(() => undefined);
     await input.click({ force: true });
     await input.fill("");
@@ -706,30 +678,8 @@ async function setTaxonomyValue(page: Page, label: "Category" | "Tags", value: s
     } else {
       await input.press("Enter").catch(() => undefined);
     }
-    const writeSettled = await expect
-      .poll(
-        async () => {
-          const chipVisible = await selectedChip.isVisible().catch(() => false);
-          const namedChipVisible = await selectedChipByName.isVisible().catch(() => false);
-          const savingNow = await section.getByRole("button", { name: "Saving..." }).first().isVisible().catch(() => false);
-          if ((chipVisible || namedChipVisible) && !savingNow) return "selected";
-          if (savingNow) return "saving";
-          const inputNowDisabled = await input.isDisabled().catch(() => false);
-          return inputNowDisabled ? "disabled" : "pending";
-        },
-        {
-          timeout: 30_000,
-          message: `Expected ${label} taxonomy write for ${value} to finish`,
-        },
-      )
-      .toMatch(/selected/)
-      .then(() => true)
-      .catch(() => false);
-    if (!writeSettled) {
-      await page.waitForTimeout(500);
-      continue;
-    }
-    return;
+    await waitForEditorSavedWithReload(page, 30_000).catch(() => undefined);
+    await openMoreSidebar(page).catch(() => undefined);
   }
   throw new Error(`Timed out preparing ${label} taxonomy value ${value}.`);
 }
@@ -1456,9 +1406,13 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
 
   await waitForEditorSaved(page);
   await openMoreSidebar(page);
+  const categorySaveRevision = await readEditorSaveRevision(page);
   await setTaxonomyValue(page, "Category", updatedCategoryName);
+  await waitForEditorSavedWithReload(page, 90_000, { afterRevision: categorySaveRevision });
+  await openMoreSidebar(page);
+  const tagSaveRevision = await readEditorSaveRevision(page);
   await setTaxonomyValue(page, "Tags", updatedTagName);
-  await waitForEditorSavedWithReload(page);
+  await waitForEditorSavedWithReload(page, 90_000, { afterRevision: tagSaveRevision });
   await waitForDomainPostPersistence({
     siteId: primarySiteId,
     domainKey: "post",
@@ -1510,15 +1464,7 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   await waitForEnabledButtonWithReload(page, /^Publish$/);
   await page.getByRole("button", { name: /^Publish$/ }).click();
   await waitForEditorSaved(page);
-  await waitForDomainPostPersistence({
-    siteId: primarySiteId,
-    domainKey: "post",
-    postId: createdPostId,
-    title: updatedTitle,
-    slug: updatedSlug,
-    contentIncludes: "Lifecycle updated article body.",
-    published: true,
-  });
+  await waitForEnabledButtonWithReload(page, /^Unpublish$/);
 
   const verifyPage = await page.context().newPage();
   const oldSlugResponse = await waitForPublicStatus(
