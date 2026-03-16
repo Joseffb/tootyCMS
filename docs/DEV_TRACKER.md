@@ -27,6 +27,22 @@ Current tree status:
 
 ## Active Items
 
+### 11. GitHub Core CI portability for `vercel:dev` wrapper tests
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/vercel-dev-script.test.ts`
+- Scope:
+  - keep wrapper tests portable across local machines and GitHub runners
+  - prevent local absolute paths from breaking CI
+- Affected surfaces:
+  - `Core CI` unit-test job
+  - local wrapper regression coverage
+- Current notes:
+  - GitHub failed on commit `3dcd641` because `tests/vercel-dev-script.test.ts` read `/Users/joseffbetancourt/.../scripts/vercel-dev.sh` directly
+  - fixed by resolving `scripts/vercel-dev.sh` from `process.cwd()` instead of a machine-specific absolute path
+  - revalidated with full `npm run test` and full `npm run test:integration`
+
 ### 9. Editor autosave loop under local `vercel dev`
 
 - Status: `verified`
