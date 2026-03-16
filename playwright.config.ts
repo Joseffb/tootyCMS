@@ -59,6 +59,11 @@ const edgeProjects = edgeExecutablePath
     ]
   : [];
 const projectCount = 3 + edgeProjects.length;
+const configuredWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS || "", 10);
+const resolvedWorkers =
+  Number.isFinite(configuredWorkers) && configuredWorkers > 0
+    ? configuredWorkers
+    : Math.min(2, projectCount);
 const useExternalServer = process.env.PLAYWRIGHT_EXTERNAL_SERVER === "1";
 
 process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL_TEST_OVERRIDE || browserOrigin;
@@ -72,7 +77,7 @@ export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
   fullyParallel: false,
-  workers: projectCount,
+  workers: resolvedWorkers,
   retries: 0,
   use: {
     baseURL: browserOrigin,

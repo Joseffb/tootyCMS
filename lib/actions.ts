@@ -86,6 +86,7 @@ import { normalizeProfileImageUrl } from "@/lib/profile-image";
 import { readCoreProfile, updateCoreProfile } from "@/lib/core-profile";
 import { resolvePrimaryAccessibleSiteIdForUser } from "@/lib/admin-site-selection";
 import { DEFAULT_CORE_DOMAIN_KEYS, ensureDefaultCoreDataDomains } from "@/lib/default-data-domains";
+import { findSiteDataDomainByKeyWithConsistency } from "@/lib/site-data-domain-consistency";
 import {
   dataDomainDescriptionSettingKey,
   dataDomainKeySettingKey,
@@ -105,8 +106,11 @@ import { getSettingsByKeys, listSettingsByLikePatterns, setSettingByKey } from "
 import { getCommentProviderWritingOptions, hasEnabledCommentProvider } from "@/lib/comments-spine";
 import { getAdminPathAlias } from "@/lib/admin-path";
 import {
+  persistDomainPostUpdateForUser,
+  type DomainPostUpdateInput,
+} from "@/lib/domain-post-persistence";
+import {
   deleteSiteDataDomainById,
-  findSiteDataDomainByKey,
   findSiteDataDomainById,
   listSiteDataDomains,
   setSiteDataDomainActivation,
@@ -699,8 +703,7 @@ export const getAllDataDomains = async (
 };
 
 export const getSiteDataDomainByKey = async (siteId: string, domainKey: string) => {
-  await ensureDefaultCoreDataDomains(siteId);
-  const row = await findSiteDataDomainByKey(siteId, domainKey);
+  const row = await findSiteDataDomainByKeyWithConsistency(siteId, domainKey);
   if (!row) return null;
   if (DEFAULT_CORE_DOMAIN_KEYS.includes(row.key as (typeof DEFAULT_CORE_DOMAIN_KEYS)[number])) {
     return { ...row, isActive: true };
@@ -1902,310 +1905,15 @@ export const createDomainPost = withSiteAuth(
   "site.content.create",
 );
 
-export const updateDomainPost = async (
-  data: {
-    id: string;
-    siteId?: string | null;
-    dataDomainKey?: string | null;
-    title?: string | null;
-    description?: string | null;
-    slug?: string;
-    content?: string | null;
-    password?: string | null;
-    usePassword?: boolean | null;
-    layout?: string | null;
-    categoryIds?: Array<number | string>;
-    tagIds?: Array<number | string>;
-    taxonomyIds?: Array<number | string>;
-    selectedTermsByTaxonomy?: Record<string, Array<number | string>>;
-    metaEntries?: Array<{ key: string; value: string }>;
-  },
-) => {
+export const updateDomainPost = async (data: DomainPostUpdateInput) => {
   const session = await getSession();
   if (!session?.user.id) {
     return { error: "Not authenticated" };
   }
-
-  const requestedSiteId = normalizeSiteScope(String(data.siteId || ""));
-  const requestedDomainKey = String(data.dataDomainKey || "")
-    .trim()
-    .toLowerCase();
-  const mutation = await canUserMutateDomainPost(
-    session.user.id,
-    data.id,
-    "edit",
-    requestedSiteId || null,
-  );
-  const existingPost = mutation.post;
-  const existing =
-    existingPost ||
-    (requestedSiteId && requestedDomainKey
-      ? {
-          id: data.id,
-          siteId: requestedSiteId,
-          dataDomainKey: requestedDomainKey,
-          slug: "",
-        }
-      : null);
-  if (!existing) {
-    return { error: "Post not found or not authorized" };
-  }
-
-  const canCreatePlaceholder =
-    !existingPost &&
-    requestedSiteId.length > 0 &&
-    requestedDomainKey.length > 0 &&
-    (await userCan("site.content.create", session.user.id, { siteId: requestedSiteId }));
-
-  if (!mutation.allowed && !canCreatePlaceholder) {
-    return { error: "Post not found or not authorized" };
-  }
-
-  try {
-    let createdFresh = false;
-    const normalizeTaxonomyIds = (...sources: Array<Array<number | string> | undefined>) =>
-      Array.from(
-        new Set(
-          sources
-            .flatMap((source) => source ?? [])
-            .map((value) => (typeof value === "number" ? value : Number(String(value).trim())))
-            .filter((value): value is number => Number.isFinite(value)),
-        ),
-      );
-
-    const requestedTaxonomyIds = Array.from(
-      new Set(
-        normalizeTaxonomyIds(
-          Array.isArray(data.taxonomyIds) ? data.taxonomyIds : undefined,
-          Array.isArray(data.categoryIds) ? data.categoryIds : undefined,
-          Array.isArray(data.tagIds) ? data.tagIds : undefined,
-          ...Object.values(data.selectedTermsByTaxonomy ?? {}),
-        ),
-      ),
-    );
-
-    const validRequestedTaxonomyIds =
-      requestedTaxonomyIds.length > 0
-        ? await resolveValidSiteTaxonomyIdsWithRetry(existing.siteId, requestedTaxonomyIds)
-        : [];
-    if (requestedTaxonomyIds.length > 0 && validRequestedTaxonomyIds.length !== requestedTaxonomyIds.length) {
-      return { error: "One or more taxonomy terms are invalid for this site." };
-    }
-
-    const rawSlugInput = typeof data.slug === "string" ? data.slug.trim() : "";
-    const normalizedSlugInput = rawSlugInput ? toSeoSlug(rawSlugInput) : "";
-    const fallbackCreateSlug =
-      normalizedSlugInput ||
-      toSeoSlug(String(data.title || "").trim()) ||
-      toSeoSlug(`${existing.dataDomainKey}-${data.id}`) ||
-      `${existing.dataDomainKey}-${data.id}`;
-    const updatePatch = {
-      title: data.title,
-      description: data.description,
-      ...(rawSlugInput ? { slug: normalizedSlugInput } : {}),
-      content: data.content,
-      password: data.password ?? "",
-      ...(typeof data.usePassword === "boolean" ? { usePassword: data.usePassword } : {}),
-      layout: data.layout ?? null,
-    };
-    const recoveryPatch = {
-      ...updatePatch,
-      slug: rawSlugInput ? normalizedSlugInput : fallbackCreateSlug,
-    };
-
-    let postRecord = null;
-    if (existingPost) {
-      postRecord = await updateSiteDomainPostById({
-        siteId: existing.siteId,
-        postId: data.id,
-        dataDomainKey: existing.dataDomainKey,
-        patch: updatePatch,
-      });
-    } else {
-      const domain = await getSiteDataDomainByKey(existing.siteId, existing.dataDomainKey);
-      if (!domain) {
-        return { error: "Data domain not found for site." };
-      }
-      try {
-        postRecord = await createSiteScopedDomainPost({
-          siteId: existing.siteId,
-          userId: session.user.id,
-          dataDomainId: domain.id,
-          dataDomainKey: domain.key,
-          id: data.id,
-          title: data.title ?? "",
-          description: data.description ?? "",
-          content: data.content ?? "",
-          password: data.password ?? "",
-          usePassword: typeof data.usePassword === "boolean" ? data.usePassword : false,
-          layout: data.layout ?? null,
-          slug: fallbackCreateSlug,
-          published: false,
-        });
-        createdFresh = true;
-      } catch (error: any) {
-        if (error?.code !== "23505") throw error;
-        postRecord = await getSiteDomainPostByIdWithRetry({
-          siteId: existing.siteId,
-          postId: data.id,
-          dataDomainKey: existing.dataDomainKey,
-        });
-        if (postRecord) {
-          postRecord = await updateSiteDomainPostById({
-            siteId: existing.siteId,
-            postId: data.id,
-            dataDomainKey: existing.dataDomainKey,
-            patch: recoveryPatch,
-          });
-        }
-      }
-    }
-    if (!postRecord) {
-      return { error: "Post not found or not authorized" };
-    }
-
-    await withRetryableSiteWrite(() =>
-      withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) => {
-        await db.transaction(async (tx) => {
-          // Site taxonomy relationship writes share one physical table per site.
-          // Serialize them site-wide to avoid deadlocks under concurrent editor saves.
-          const advisoryKey = `${existing.siteId}:domain-post-taxonomies`;
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${advisoryKey}))`);
-          await tx.delete(termRelationshipsTable).where(eq(termRelationshipsTable.objectId, data.id));
-          if (validRequestedTaxonomyIds.length > 0) {
-            await tx
-              .insert(termRelationshipsTable)
-              .values(
-                validRequestedTaxonomyIds.map((termTaxonomyId) => ({
-                  objectId: data.id,
-                  termTaxonomyId,
-                })),
-              )
-              .onConflictDoNothing();
-          }
-        });
-      }),
-    );
-
-    if (Array.isArray(data.metaEntries)) {
-      const normalizedMeta = data.metaEntries
-        .map((entry) => ({
-          key: entry.key.trim(),
-          value: entry.value.trim(),
-        }))
-        .filter((entry) => entry.key.length > 0);
-      const scheduledPublishAtEntry = normalizedMeta.find((entry) => entry.key === HIDDEN_PUBLISH_AT_META_KEY);
-      const normalizedScheduledPublishAt = scheduledPublishAtEntry
-        ? normalizeScheduledPublishAt(scheduledPublishAtEntry.value)
-        : { ok: true as const, value: null as string | null };
-      if (!normalizedScheduledPublishAt.ok) {
-        return { error: normalizedScheduledPublishAt.error };
-      }
-      const persistedMeta = normalizedMeta
-        .filter((entry) => entry.key !== HIDDEN_PUBLISH_AT_META_KEY)
-        .concat(
-          normalizedScheduledPublishAt.value
-            ? [{ key: HIDDEN_PUBLISH_AT_META_KEY, value: normalizedScheduledPublishAt.value }]
-            : [],
-        );
-      await replaceSiteDomainPostMeta({
-        siteId: existing.siteId,
-        dataDomainKey: existing.dataDomainKey,
-        postId: data.id,
-        entries: persistedMeta,
-      });
-      await syncContentPublishScheduleForPost({
-        post: {
-          id: postRecord.id,
-          siteId: postRecord.siteId || existing.siteId,
-          title:
-            typeof data.title === "string" && data.title.trim().length > 0
-              ? data.title
-              : existingPost?.title ?? null,
-        },
-        publishAt: normalizedScheduledPublishAt.value,
-        createIfMissing: true,
-      });
-    }
-
-    const taxonomyRows = await withResolvedSiteTaxonomyTables(existing.siteId, async ({ termRelationshipsTable, termTaxonomiesTable }) =>
-      db
-        .select({
-          id: termTaxonomiesTable.id,
-          taxonomy: termTaxonomiesTable.taxonomy,
-        })
-        .from(termRelationshipsTable)
-        .innerJoin(termTaxonomiesTable, eq(termRelationshipsTable.termTaxonomyId, termTaxonomiesTable.id))
-        .where(eq(termRelationshipsTable.objectId, data.id)),
-    );
-
-    const cats = taxonomyRows
-      .filter((row) => row.taxonomy === "category")
-      .map((row) => ({ categoryId: row.id }));
-    const tagRows = taxonomyRows
-      .filter((row) => row.taxonomy === "tag")
-      .map((row) => ({ tagId: row.id }));
-
-    const metaRows = await listSiteDomainPostMeta({
-      siteId: existing.siteId,
-      dataDomainKey: existing.dataDomainKey,
-      postId: data.id,
-    });
-
-    if (createdFresh) {
-      await emitCmsLifecycleEvent({
-        name: "custom_event",
-        siteId: existing.siteId,
-        payload: {
-          event: "content_created",
-          contentType: existing.dataDomainKey,
-          contentId: postRecord.id,
-        },
-      });
-    }
-
-    const siteId = postRecord.siteId || existing.siteId;
-    const previousSlug = String(existingPost?.slug || "").trim();
-    const nextSlug = String(postRecord.slug || fallbackCreateSlug).trim();
-    if (siteId) {
-      const siteRow = await db.query.sites.findFirst({
-        where: eq(sites.id, siteId),
-        columns: { subdomain: true, customDomain: true },
-      });
-      const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost";
-      if (siteRow?.subdomain) {
-        const domain = `${siteRow.subdomain}.${rootDomain}`;
-        revalidateTag(`${domain}-posts`, "max");
-        if (previousSlug) {
-          revalidateTag(`${domain}-${previousSlug}`, "max");
-        }
-        if (nextSlug) {
-          revalidateTag(`${domain}-${nextSlug}`, "max");
-        }
-      }
-      if (siteRow?.customDomain) {
-        revalidateTag(`${siteRow.customDomain}-posts`, "max");
-        if (previousSlug) {
-          revalidateTag(`${siteRow.customDomain}-${previousSlug}`, "max");
-        }
-        if (nextSlug) {
-          revalidateTag(`${siteRow.customDomain}-${nextSlug}`, "max");
-        }
-      }
-    }
-    revalidatePublicContentCache();
-
-    return {
-      ...postRecord,
-      categories: cats,
-      tags: tagRows,
-      meta: metaRows,
-      created: createdFresh,
-    };
-  } catch (error: any) {
-    console.error("updateDomainPost error:", error);
-    return { error: error.message };
-  }
+  return persistDomainPostUpdateForUser({
+    userId: session.user.id,
+    data,
+  });
 };
 
 export const updateDomainPostMetadata = async (

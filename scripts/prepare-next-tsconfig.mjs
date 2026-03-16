@@ -13,11 +13,11 @@ const basePath = path.resolve(repoRoot, baseArg || "tsconfig.json");
 function sanitizeIncludes(include) {
   return include.filter((entry) => {
     const normalized = String(entry || "");
-    return (
-      !normalized.startsWith(".next-test-") &&
-      !normalized.startsWith(".next-playwright-harness-") &&
-      !normalized.startsWith(".next-vercel-dev")
-    );
+    if (!normalized.startsWith(".next")) {
+      return true;
+    }
+
+    return false;
   });
 }
 
@@ -51,15 +51,12 @@ function createManagedTsconfig(baseConfig, distDir = "") {
     ),
   };
 
-  if (distDir) {
-    nextConfig.include = Array.from(
-      new Set([
-        ...nextConfig.include,
-        `${distDir}/types/**/*.ts`,
-        `${distDir}/dev/types/**/*.ts`,
-      ]),
-    );
-  }
+  const resolvedDistDir = String(distDir || "").trim();
+  const nextTypeIncludes = resolvedDistDir
+    ? [`${resolvedDistDir}/types/**/*.ts`, `${resolvedDistDir}/dev/types/**/*.ts`]
+    : [".next/types/**/*.ts", ".next/dev/types/**/*.ts"];
+
+  nextConfig.include = Array.from(new Set([...nextConfig.include, ...nextTypeIncludes]));
 
   return nextConfig;
 }

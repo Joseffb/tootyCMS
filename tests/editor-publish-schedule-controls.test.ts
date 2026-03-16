@@ -62,6 +62,10 @@ describe("editor publish schedule controls", () => {
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
+    const textInputSource = readFileSync(
+      path.join(process.cwd(), "lib/editor-text-input.ts"),
+      "utf8",
+    );
 
     expect(source).toContain("function isPlaceholderServerDraft(input: {");
     expect(source).toContain("const effectivePost = shouldUseCachedEditorState");
@@ -73,31 +77,43 @@ describe("editor publish schedule controls", () => {
     expect(source).toContain("isPlaceholderServerDraft({");
     expect(source).toContain("cachedCompletenessScore > serverCompletenessScore &&");
     expect(source).toContain("setData(effectivePost);");
-    expect(source).toContain("const applyDataUpdate = (updater: SetStateAction<PostWithSite>) => {");
-    expect(source).toContain("const handleTitleInput = (value: string) => {");
-    expect(source).toContain('if ((current.title ?? "") === value && titleValueRef.current === value) {');
+    expect(source).toContain("type ApplyDataUpdateOptions = {");
+    expect(source).toContain("const applyDataUpdate = (");
+    expect(textInputSource).toContain("export function shouldAcceptEditorTextFieldMutation");
+    expect(textInputSource).toContain("export function shouldAcceptEditorTextFieldCommit");
+    expect(source).toContain("const markTextFieldGesture = (field: \"title\" | \"description\" | \"slug\" | \"password\") => {");
+    expect(source).toContain("const handleTitleInput = (value: string, nativeEvent?: Event | null) => {");
+    expect(source).toContain("shouldAcceptEditorTextFieldMutation({");
+    expect(source).toContain("recentGestureAt: lastFieldGestureAtRef.current.title,");
     expect(source).toContain("titleValueRef.current = value;");
     expect(source).toContain("const current = dataRef.current;");
     expect(source).toContain("const nextData = { ...current, title: value };");
-    expect(source).toContain("applyDataUpdate(nextData);");
-    expect(source).toContain("const handleDescriptionInput = (value: string) => {");
+    expect(source).toContain('applyDataUpdate(nextData, { markDirty: true, reason: "field:title", userMutation: true });');
+    expect(source).toContain("const handleDescriptionInput = (value: string, nativeEvent?: Event | null) => {");
     expect(source).toContain("descriptionValueRef.current = value;");
-    expect(source).toContain("applyDataUpdate((prev) => ({ ...prev, description: value }));");
-    expect(source).toContain("const handleSlugDraftInput = (value: string) => {");
+    expect(source).toContain("recentGestureAt: lastFieldGestureAtRef.current.description,");
+    expect(source).toContain('reason: "field:description",');
+    expect(source).toContain("const handleSlugDraftInput = (value: string, nativeEvent?: Event | null) => {");
     expect(source).toContain("const nextSlugDraft = normalizeSlugDraft(value);");
     expect(source).toContain("slugValueRef.current = nextSlugDraft;");
-    expect(source).toContain("applyDataUpdate((prev) => ({ ...prev, slug: nextSlugDraft }));");
-    expect(source).toContain("const handleSlugCommit = (value: string) => {");
+    expect(source).toContain("recentGestureAt: lastFieldGestureAtRef.current.slug,");
+    expect(source).toContain('reason: "field:slug:draft",');
+    expect(source).toContain("const handleSlugCommit = (value: string, nativeEvent?: Event | null) => {");
     expect(source).toContain("const nextSlug = normalizeSeoSlug(value);");
-    expect(source).toContain("slugValueRef.current = nextSlug;");
-    expect(source).toContain("applyDataUpdate((current) => ({ ...current, slug: nextSlug }));");
-    expect(source).toContain('onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value)}');
-    expect(source).toContain("onChange={(e) => handleTitleInput(e.currentTarget.value)}");
-    expect(source).toContain("onChange={(e) => handleDescriptionInput(e.currentTarget.value)}");
-    expect(source).toContain("onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}");
-    expect(source).not.toContain('onInput={(e) => handleDescriptionInput((e.target as HTMLTextAreaElement).value)}');
-    expect(source).not.toContain('onInput={(e) => handleSlugDraftInput((e.target as HTMLInputElement).value)}');
-    expect(source).toContain("onBlur={(e) => handleSlugCommit(e.currentTarget.value)}");
+    expect(source).toContain("shouldAcceptEditorTextFieldCommit({");
+    expect(source).toContain('reason: "field:slug:commit",');
+    expect(source).toContain('onPointerDown={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onKeyDown={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onPaste={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value, e.nativeEvent)}');
+    expect(source).not.toContain("onChange={(e) => handleTitleInput(e.currentTarget.value)}");
+    expect(source).toContain('onPointerDown={() => markTextFieldGesture("description")}');
+    expect(source).toContain('onInput={(e) => handleDescriptionInput(e.currentTarget.value, e.nativeEvent)}');
+    expect(source).not.toContain("onChange={(e) => handleDescriptionInput(e.currentTarget.value)}");
+    expect(source).toContain('onPointerDown={() => markTextFieldGesture("slug")}');
+    expect(source).toContain('onInput={(e) => handleSlugDraftInput(e.currentTarget.value, e.nativeEvent)}');
+    expect(source).not.toContain("onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}");
+    expect(source).toContain("onBlur={(e) => handleSlugCommit(e.currentTarget.value, e.nativeEvent)}");
   });
 
   it("persists scheduled publish through the dedicated hidden-meta action instead of the generic autosave queue", () => {
@@ -133,13 +149,14 @@ describe("editor publish schedule controls", () => {
       "utf8",
     );
 
-    expect(source).toContain("const EDITOR_SESSION_CACHE_VERSION = 2;");
+    expect(source).toContain("const EDITOR_SESSION_CACHE_VERSION = 5;");
+    expect(source).toContain("window.sessionStorage.removeItem(cacheKey);");
+    expect(source).toContain("if (parsed.dirty !== true) {");
     expect(source).toContain("published: boolean;");
     expect(source).toContain("function buildEditorStateSignature(input: {");
     expect(source).toContain("published: Boolean(post.published),");
     expect(source).toContain("const syncEditorSessionSnapshot = (nextPost: PostWithSite, nextMetaEntries: PostMetaEntry[]) => {");
-    expect(source).toContain("content: JSON.stringify(nextContent),");
-    expect(source).toContain("published: Boolean(nextPost.published),");
+    expect(source).toContain("clearEditorSessionCache(nextPost.id);");
     expect(source).toContain("syncEditorSessionSnapshot(nextPost, nextMetaEntries);");
   });
 
@@ -251,18 +268,16 @@ describe("editor publish schedule controls", () => {
     expect(source).toContain("const selectedTerms = normalizeSelectedTermsByTaxonomy(");
     expect(source).toContain("snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current");
     expect(source).toContain("const nextMetaEntries = normalizeMetaEntriesForPersistence(snapshot?.metaEntries ?? metaEntriesRef.current);");
-    expect(source).toContain("const hasMountedTitleField = titleInputRef.current != null;");
-    expect(source).toContain("const hasMountedDescriptionField = descriptionInputRef.current != null;");
-    expect(source).toContain("const hasMountedSlugField = slugInputRef.current != null;");
-    expect(source).toContain("const liveTitleValue = titleInputRef.current?.value ?? \"\";");
-    expect(source).toContain("const liveDescriptionValue = descriptionInputRef.current?.value ?? \"\";");
-    expect(source).toContain("const liveSlugValue = slugInputRef.current?.value ?? \"\";");
-    expect(source).toContain("const nextTitle = hasMountedTitleField ? liveTitleValue : titleValueRef.current || latest.title || \"\";");
-    expect(source).toContain("const nextDescription = hasMountedDescriptionField");
-    expect(source).toContain("? liveDescriptionValue");
-    expect(source).toContain(": descriptionValueRef.current || latest.description || \"\";");
+    expect(source).not.toContain("const hasMountedTitleField = titleInputRef.current != null;");
+    expect(source).not.toContain("const hasMountedDescriptionField = descriptionInputRef.current != null;");
+    expect(source).not.toContain("const hasMountedSlugField = slugInputRef.current != null;");
+    expect(source).not.toContain("const liveTitleValue = titleInputRef.current?.value ?? \"\";");
+    expect(source).not.toContain("const liveDescriptionValue = descriptionInputRef.current?.value ?? \"\";");
+    expect(source).not.toContain("const liveSlugValue = slugInputRef.current?.value ?? \"\";");
+    expect(source).toContain("const nextTitle = titleValueRef.current;");
+    expect(source).toContain("const nextDescription = descriptionValueRef.current;");
     expect(source).toContain("const nextSlug = normalizeSeoSlug(");
-    expect(source).toContain("hasMountedSlugField ? liveSlugValue : slugValueRef.current || latest.slug || \"\",");
+    expect(source).toContain('const nextSlug = normalizeSeoSlug(slugValueRef.current || latest.slug || "");');
   });
 
   it("canonicalizes taxonomy and meta payloads before autosave signatures so save loops do not re-trigger on order churn", () => {
@@ -330,17 +345,31 @@ describe("editor publish schedule controls", () => {
     expect(source).toContain("const created = await createTaxonomyTerm({ siteId, taxonomy, label: trimmed });");
   });
 
-  it("eager-loads full core editorial taxonomy lists for categories and tags instead of relying on preview pagination", () => {
+  it("trusts server-seeded core editorial taxonomy lists and does not background-refetch them on persisted item pages", () => {
     const source = readFileSync(
       path.join(process.cwd(), "components/editor/editor.tsx"),
       "utf8",
     );
+    const referenceSource = readFileSync(
+      path.join(process.cwd(), "lib/editor-reference-data.ts"),
+      "utf8",
+    );
+    const taxonomyLoadingSource = readFileSync(
+      path.join(process.cwd(), "lib/editor-taxonomy-loading.ts"),
+      "utf8",
+    );
 
-    expect(source).toContain('const shouldEagerLoadTaxonomyTerms = (taxonomy: string) => taxonomy === "category" || taxonomy === "tag";');
-    expect(source).toContain("const loadTaxonomyTermsWithRetry = async (taxonomy: string) => {");
-    expect(source).toContain("const attempts = shouldEagerLoadTaxonomyTerms(taxonomy) ? 18 : 4;");
-    expect(source).toContain("const preview = await loadTaxonomyTermsWithRetry(row.taxonomy);");
-    expect(source).toContain("setTaxonomyExpanded((prev) => ({ ...prev, [row.taxonomy]: true }));");
+    expect(source).toContain('import {');
+    expect(source).toContain('isEagerEditorTaxonomy,');
+    expect(referenceSource).toContain("taxonomyTermsByKey[row.taxonomy] = [];");
+    expect(source).toContain("editorReferenceSeededFromServer");
+    expect(source).toContain("Persisted item editors already receive eager taxonomy terms from the server.");
+    expect(source).not.toContain("resolveEditorTaxonomyRetryAttempts(");
+    expect(source).toContain("persistedItemEagerTaxonomiesSettled");
+    expect(source).not.toContain("fetchEditorReferenceData(siteId)");
+    expect(source).not.toContain("editorReferenceBootstrapStateRef");
+    expect(taxonomyLoadingSource).toContain("buildEditorTaxonomyAutoloadState");
+    expect(taxonomyLoadingSource).toContain("getEditorTaxonomiesNeedingAutoload");
   });
 
   it("keeps selected taxonomy terms out of the generic option list so selection clicks cannot toggle the same term off again", () => {

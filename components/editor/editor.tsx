@@ -23,10 +23,6 @@ import { getSuggestionItems, setCurrentPost, setPluginSuggestionItems, slashComm
 import {
   createTaxonomyTerm,
   deleteDomainPost,
-  getAllMetaKeys,
-  getTaxonomyOverview,
-  getTaxonomyTerms,
-  getTaxonomyTermsPreview,
   updateDomainPost,
   updateDomainPostMetadata,
 } from "@/lib/actions";
@@ -67,8 +63,44 @@ import {
   upsertEditorMetaEntry,
   updateEditorMetaEntryValue,
 } from "@/lib/editor-meta";
+import {
+  computeEditorConvergence,
+  shouldMarkEditorStateDirty,
+} from "@/lib/editor-convergence";
+import { shouldPreserveNewerLocalDraft } from "@/lib/editor-save-reconciliation";
 import { sortEditorPluginTabs } from "@/lib/editor-plugin-tabs";
 import { normalizeSeoSlug, normalizeSlugDraft } from "@/lib/slug";
+import { buildEditorSaveSignature } from "@/lib/editor-save-signature";
+import {
+  readEditorTextInputMeta,
+  shouldAcceptEditorFieldMutation,
+  shouldAcceptEditorTextFieldCommit,
+  shouldAcceptEditorTextFieldMutation,
+} from "@/lib/editor-text-input";
+import { resolveDomainPostEditorAutosavePath } from "@/lib/editor-autosave-route";
+import {
+  DEFAULT_EDITOR_REFERENCE_DATA,
+  DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS,
+  isEagerEditorTaxonomy,
+  normalizeEditorReferenceData,
+  shouldAllowManualEditorTaxonomyExpansion,
+  type EditorReferenceData,
+  type EditorReferenceTaxonomyRow,
+  type EditorReferenceTaxonomyTerm,
+} from "@/lib/editor-reference-data";
+import {
+  buildEditorTaxonomyAutoloadState,
+  buildEditorTaxonomyLoadState,
+  shouldFetchEditorTaxonomyTermsFromNetwork,
+  type EditorAutoloadContext,
+  type EditorTaxonomyAutoloadStatus,
+  type EditorTaxonomyLoadStatus,
+} from "@/lib/editor-taxonomy-loading";
+import {
+  primeEditorTaxonomyReferenceCache,
+  readEditorTaxonomyReferenceCache,
+  runWithEditorTaxonomyReferenceCache,
+} from "@/lib/editor-taxonomy-reference-cache";
 import { useParams, useRouter } from "next/navigation";
 
 type EditorMode = "html-css-first" | "rich-text";
@@ -95,6 +127,14 @@ type EditorFooterPanel = {
   title: string;
   content: string;
 };
+type EditorFieldGestureKey =
+  | "title"
+  | "description"
+  | "slug"
+  | "password"
+  | "layout"
+  | "usePassword"
+  | "useComments";
 type PostMetaEntry = { key: string; value: string };
 type MediaItem = {
   id: number;
@@ -148,20 +188,14 @@ type PostWithSite = {
   meta?: PostMetaEntry[];
 };
 
-type TaxonomyOverviewRow = {
-  taxonomy: string;
-  label: string;
-  termCount: number;
-};
+type TaxonomyOverviewRow = EditorReferenceTaxonomyRow;
 
-type TaxonomyTerm = {
-  id: number;
-  name: string;
-};
+type TaxonomyTerm = EditorReferenceTaxonomyTerm;
 
 type EditorSessionCacheEntry = {
-  version: 2;
+  version: 5;
   savedAt: number;
+  dirty: boolean;
   signature: string;
   payload: {
     id: string;
@@ -182,22 +216,14 @@ type EditorSessionCacheEntry = {
   };
 };
 
-const DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS: TaxonomyOverviewRow[] = [
-  { taxonomy: "category", label: "Category", termCount: 0 },
-  { taxonomy: "tag", label: "Tags", termCount: 0 },
-];
-const EDITOR_SESSION_CACHE_VERSION = 2;
+const EDITOR_SESSION_CACHE_VERSION = 5;
 const EDITOR_SESSION_CACHE_TTL_MS = 10 * 60 * 1000;
 const EDITOR_SESSION_CACHE_CONSISTENCY_SKEW_MS = 2 * 60 * 1000;
 const EDITOR_SESSION_CACHE_KEY_PREFIX = "tooty.editor.snapshot.v1:";
 const EDITOR_SIDEBAR_TAB_KEY_PREFIX = "tooty.editor.sidebar-tab.v1:";
-
-function mergeTaxonomyOverviewRows(rows: TaxonomyOverviewRow[]) {
-  const merged = new Map<string, TaxonomyOverviewRow>();
-  for (const row of DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS) merged.set(row.taxonomy, row);
-  for (const row of rows) merged.set(row.taxonomy, row);
-  return Array.from(merged.values()).sort((a, b) => a.taxonomy.localeCompare(b.taxonomy));
-}
+const EDITOR_RUNTIME_VERSION = "2026-03-13.3";
+const EDITOR_RUNTIME_VERSION_KEY = "tooty.editor.runtime.version";
+const EDITOR_USER_INTENT_WINDOW_MS = 5_000;
 
 type SavePostAction = (data: {
   id: string;
@@ -223,13 +249,30 @@ type EditorSaveSnapshot = {
   selectedTermsByTaxonomy?: Record<string, number[]>;
   metaEntries?: PostMetaEntry[];
   content?: string;
+  userMutationSequence?: number;
 };
+
+type ApplyDataUpdateOptions = {
+  markDirty?: boolean;
+  reason?: string;
+  userMutation?: boolean;
+};
+
+function normalizeEditorJsonContent(input: JSONContent | null | undefined): JSONContent {
+  if (!input || input.type !== "doc") {
+    return defaultEditorContent as JSONContent;
+  }
+  return {
+    ...input,
+    content: Array.isArray(input.content) ? input.content : [],
+  } as JSONContent;
+}
 
 function parseInitialContent(raw: string | null | undefined): JSONContent {
   if (!raw) return defaultEditorContent as JSONContent;
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.type === "doc") return parsed as JSONContent;
+    if (parsed && parsed.type === "doc") return normalizeEditorJsonContent(parsed as JSONContent);
   } catch {
     // ignore malformed stored content and fall back
   }
@@ -309,18 +352,20 @@ function buildEditorStateSignature(input: {
   metaEntries: PostMetaEntry[];
 }) {
   const { post, content, selectedTermsByTaxonomy, metaEntries } = input;
+  const normalizedContent = normalizeEditorJsonContent(content);
   const normalizedSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(selectedTermsByTaxonomy);
   const normalizedMetaEntries = normalizeMetaEntriesForPersistence(metaEntries);
-  return JSON.stringify({
+  return buildEditorSaveSignature({
     id: post.id,
     title: post.title ?? "",
     description: post.description ?? "",
     slug: post.slug ?? "",
-    content: JSON.stringify(content),
+    content: JSON.stringify(normalizedContent),
     published: Boolean(post.published),
     password: post.password ?? "",
     usePassword: Boolean(post.usePassword),
     layout: post.layout ?? null,
+    selectedTermsByTaxonomy: normalizedSelectedTermsByTaxonomy,
     categoryIds: normalizedSelectedTermsByTaxonomy.category ?? [],
     tagIds: normalizedSelectedTermsByTaxonomy.tag ?? [],
     taxonomyIds: getAllSelectedTaxonomyIds(normalizedSelectedTermsByTaxonomy),
@@ -339,8 +384,15 @@ function readEditorSessionCache(postId: string): EditorSessionCacheEntry | null 
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<EditorSessionCacheEntry>;
-    if (parsed.version !== EDITOR_SESSION_CACHE_VERSION) return null;
+    if (parsed.version !== EDITOR_SESSION_CACHE_VERSION) {
+      window.sessionStorage.removeItem(cacheKey);
+      return null;
+    }
     if (!parsed.savedAt || Date.now() - parsed.savedAt > EDITOR_SESSION_CACHE_TTL_MS) {
+      window.sessionStorage.removeItem(cacheKey);
+      return null;
+    }
+    if (parsed.dirty !== true) {
       window.sessionStorage.removeItem(cacheKey);
       return null;
     }
@@ -356,12 +408,14 @@ function writeEditorSessionCache(
   postId: string,
   payload: EditorSessionCacheEntry["payload"],
   signature: string,
+  dirty = true,
 ) {
   if (typeof window === "undefined") return;
   const cacheKey = getEditorSessionCacheKey(postId);
   const entry: EditorSessionCacheEntry = {
     version: EDITOR_SESSION_CACHE_VERSION,
     savedAt: Date.now(),
+    dirty,
     signature,
     payload,
   };
@@ -371,6 +425,21 @@ function writeEditorSessionCache(
 function clearEditorSessionCache(postId: string) {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(getEditorSessionCacheKey(postId));
+}
+
+function clearAllEditorSessionState() {
+  if (typeof window === "undefined") return;
+  const keysToRemove: string[] = [];
+  for (let index = 0; index < window.sessionStorage.length; index += 1) {
+    const key = window.sessionStorage.key(index);
+    if (!key) continue;
+    if (key.startsWith(EDITOR_SESSION_CACHE_KEY_PREFIX) || key.startsWith(EDITOR_SIDEBAR_TAB_KEY_PREFIX)) {
+      keysToRemove.push(key);
+    }
+  }
+  for (const key of keysToRemove) {
+    window.sessionStorage.removeItem(key);
+  }
 }
 
 function readEditorSidebarTab(postId: string): string | null {
@@ -462,7 +531,13 @@ function isPlaceholderServerDraft(input: {
   );
 }
 
-function getInitialEditorClientState(post: PostWithSite) {
+function getInitialEditorClientState(
+  post: PostWithSite,
+  options?: {
+    allowCachedDraftRecovery?: boolean;
+  },
+) {
+  const allowCachedDraftRecovery = options?.allowCachedDraftRecovery === true;
   const content = parseInitialContent(post.content);
   const { selected, nextTermNameById } = deriveSelectedTermsByTaxonomy(post);
   const nextMeta = (post.meta ?? []).map((entry) => ({ key: entry.key, value: entry.value }));
@@ -498,6 +573,7 @@ function getInitialEditorClientState(post: PostWithSite) {
       })
     : 0;
   const shouldPreferCachedDraftOverPlaceholderServer =
+    allowCachedDraftRecovery &&
     Boolean(cachedEditorState) &&
     cachedCompletenessScore > serverCompletenessScore &&
     isPlaceholderServerDraft({
@@ -516,17 +592,20 @@ function getInitialEditorClientState(post: PostWithSite) {
   const serverVisibleMetaCount = nextMeta.length;
   const cachedVisibleMetaCount = cachedEditorState?.payload.metaEntries.length ?? 0;
   const cacheIsFreshEnoughForIncompleteServer =
+    allowCachedDraftRecovery &&
     Boolean(cachedEditorState) &&
     (incomingServerUpdatedAt <= 0 ||
       cachedEditorState!.savedAt + EDITOR_SESSION_CACHE_CONSISTENCY_SKEW_MS >=
         incomingServerUpdatedAt);
   const shouldPreferCachedEditorStateForIncompleteServer =
+    allowCachedDraftRecovery &&
     Boolean(cachedEditorState) &&
     cacheIsFreshEnoughForIncompleteServer &&
     cachedCompletenessScore > serverCompletenessScore &&
     (cachedSelectedTermCount > serverSelectedTermCount ||
       cachedVisibleMetaCount > serverVisibleMetaCount);
   const shouldUseCachedEditorState =
+    allowCachedDraftRecovery &&
     Boolean(cachedEditorState) &&
     cachedEditorState!.signature !== incomingServerSignature &&
     ((cachedCompletenessScore >= serverCompletenessScore &&
@@ -664,44 +743,146 @@ function formatScheduledPublishLabel(value: string | null) {
   }).format(parsed)}`;
 }
 
-async function pause(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+async function fetchTaxonomyTermsForEditor(input: {
+  siteId: string;
+  taxonomy: string;
+  limit?: number;
+}): Promise<TaxonomyTerm[]> {
+  const normalizedTaxonomy = String(input.taxonomy || "").trim();
+  if (isEagerEditorTaxonomy(normalizedTaxonomy)) {
+    // Persisted item editors already receive eager taxonomy terms from the server.
+    // If stale UI code asks again, fail closed to the local/cache snapshot instead
+    // of issuing another network request that can loop forever on empty results.
+    return (
+      readEditorTaxonomyReferenceCache({
+        siteId: input.siteId,
+        taxonomy: normalizedTaxonomy,
+        limit: input.limit,
+      }) ?? []
+    );
+  }
+  if (!shouldFetchEditorTaxonomyTermsFromNetwork({ taxonomy: normalizedTaxonomy })) {
+    return (
+      readEditorTaxonomyReferenceCache({
+        siteId: input.siteId,
+        taxonomy: normalizedTaxonomy,
+        limit: input.limit,
+      }) ?? []
+    );
+  }
+
+  const query = new URLSearchParams({
+    siteId: input.siteId,
+    taxonomy: normalizedTaxonomy,
+  });
+  if (typeof input.limit === "number") {
+    query.set("limit", String(input.limit));
+  }
+  const response = await fetch(`/api/editor/reference?${query.toString()}`, {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load taxonomy terms (${response.status})`);
+  }
+  const json = await response.json();
+  const normalized = normalizeEditorReferenceData({
+    taxonomyTermsByKey: {
+      [normalizedTaxonomy]: Array.isArray(json?.terms) ? json.terms : [],
+    },
+  });
+  return normalized.taxonomyTermsByKey[normalizedTaxonomy] || [];
+}
+
+function recordEditorDebugEvent(type: string, details: Record<string, unknown> = {}) {
+  if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
+  const target = window as typeof window & {
+    __TOOTY_EDITOR_DEBUG__?: Array<{
+      at: number;
+      type: string;
+      details: Record<string, unknown>;
+    }>;
+  };
+  const bucket = target.__TOOTY_EDITOR_DEBUG__ ?? [];
+  bucket.push({ at: Date.now(), type, details });
+  if (bucket.length > 200) {
+    bucket.splice(0, bucket.length - 200);
+  }
+  target.__TOOTY_EDITOR_DEBUG__ = bucket;
 }
 
 export default function Editor({
   post,
+  initialReferenceData = DEFAULT_EDITOR_REFERENCE_DATA,
   defaultEditorMode = "rich-text",
   defaultEnableComments = true,
   commentsPluginEnabled = true,
   onSave = updateDomainPost,
+  autosaveEndpoint = null,
   onUpdateMetadata = updateDomainPostMetadata,
   enableThumbnail = true,
   canEdit = true,
   canPublish = true,
   materializeDraftOnFirstSave = false,
+  allowCachedDraftRecovery = false,
+  editorAutoloadContext,
 }: {
   post: PostWithSite;
+  initialReferenceData?: EditorReferenceData;
   defaultEditorMode?: EditorMode;
   defaultEnableComments?: boolean;
   commentsPluginEnabled?: boolean;
   onSave?: SavePostAction;
+  autosaveEndpoint?: string | null;
   onUpdateMetadata?: UpdatePostMetadataAction;
   enableThumbnail?: boolean;
   canEdit?: boolean;
   canPublish?: boolean;
   materializeDraftOnFirstSave?: boolean;
+  allowCachedDraftRecovery?: boolean;
+  editorAutoloadContext?: EditorAutoloadContext;
 }) {
-  const initialClientState = useMemo(() => getInitialEditorClientState(post), [post]);
+  const resolvedEditorAutoloadContext: EditorAutoloadContext =
+    editorAutoloadContext ?? (materializeDraftOnFirstSave ? "draft-shell" : "persisted-item");
+  const initialClientState = useMemo(
+    () => getInitialEditorClientState(post, { allowCachedDraftRecovery }),
+    [allowCachedDraftRecovery, post],
+  );
+  const normalizedInitialReferenceData = useMemo(
+    () => normalizeEditorReferenceData(initialReferenceData),
+    [initialReferenceData],
+  );
   const [initialContent, setInitialContent] = useState<JSONContent | null>(() => initialClientState.content);
+  const [editorContentDigest, setEditorContentDigest] = useState<string>(
+    () => JSON.stringify(initialClientState.content),
+  );
   const [saveStatus, setSaveStatus] = useState<SaveQueueStatus>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveRevision, setSaveRevision] = useState(0);
+  const [dirtyRevision, setDirtyRevision] = useState(0);
   const [showPostPassword, setShowPostPassword] = useState(false);
   const [charsCount, setCharsCount] = useState<number>();
   const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>(
-    DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS,
+    normalizedInitialReferenceData.taxonomyOverviewRows,
   );
-  const [taxonomyTermsByKey, setTaxonomyTermsByKey] = useState<Record<string, TaxonomyTerm[]>>({});
+  const [taxonomyTermsByKey, setTaxonomyTermsByKey] = useState<Record<string, TaxonomyTerm[]>>(
+    normalizedInitialReferenceData.taxonomyTermsByKey,
+  );
+  const [taxonomyLoadStateByKey, setTaxonomyLoadStateByKey] = useState<Record<string, EditorTaxonomyLoadStatus>>(
+    () =>
+      buildEditorTaxonomyLoadState(
+        normalizedInitialReferenceData.taxonomyOverviewRows,
+        normalizedInitialReferenceData.taxonomyTermsByKey,
+      ),
+  );
+  const [taxonomyAutoloadStateByKey, setTaxonomyAutoloadStateByKey] = useState<
+    Record<string, EditorTaxonomyAutoloadStatus>
+  >(() =>
+    buildEditorTaxonomyAutoloadState(
+      normalizedInitialReferenceData.taxonomyOverviewRows,
+      normalizedInitialReferenceData.taxonomyTermsByKey,
+    ),
+  );
   const [taxonomyExpanded, setTaxonomyExpanded] = useState<Record<string, boolean>>({});
   const [taxonomyLoadingMore, setTaxonomyLoadingMore] = useState<Record<string, boolean>>({});
   const [pendingTaxonomyWrites, setPendingTaxonomyWrites] = useState<Record<string, number>>({});
@@ -710,7 +891,9 @@ export default function Editor({
   );
   const [termNameById, setTermNameById] = useState<Record<number, string>>(() => initialClientState.termNameById);
   const [metaEntries, setMetaEntries] = useState<PostMetaEntry[]>(() => initialClientState.metaEntries);
-  const [metaKeySuggestions, setMetaKeySuggestions] = useState<string[]>([]);
+  const [metaKeySuggestions, setMetaKeySuggestions] = useState<string[]>(
+    normalizedInitialReferenceData.metaKeySuggestions,
+  );
   const [taxonomyInputByKey, setTaxonomyInputByKey] = useState<Record<string, string>>({});
   const [metaKeyInput, setMetaKeyInput] = useState("");
   const [metaValueInput, setMetaValueInput] = useState("");
@@ -748,20 +931,63 @@ export default function Editor({
   const metaEntriesRef = useRef<PostMetaEntry[]>(initialClientState.metaEntries);
   const [data, setData] = useState<PostWithSite>(initialClientState.post);
   const dataRef = useRef<PostWithSite>(initialClientState.post);
-  const lastQueuedSignatureRef = useRef<string>(initialClientState.shouldUseCachedEditorState ? initialClientState.incomingSignature : "");
-  const lastSavedSignatureRef = useRef<string>(initialClientState.shouldUseCachedEditorState ? initialClientState.incomingSignature : "");
+  const lastQueuedSignatureRef = useRef<string>(initialClientState.incomingSignature);
+  const lastSavedSignatureRef = useRef<string>(initialClientState.incomingSignature);
   const lastImageCountRef = useRef<number>(countImageNodes(initialClientState.content));
   const lastObservedEditorContentSignatureRef = useRef<string>(JSON.stringify(initialClientState.content));
   const lastRecoveredCacheAtRef = useRef<number>(initialClientState.cachedEditorState?.savedAt ?? 0);
   const lastLocalMutationAtRef = useRef<number>(0);
+  const hasUserMutationSinceServerStateRef = useRef(false);
+  const nextUserMutationSequenceRef = useRef(0);
+  const latestUserMutationSequenceRef = useRef(0);
+  const lastPersistedUserMutationSequenceRef = useRef(0);
+  const lastUserIntentAtRef = useRef<number>(0);
+  const lastEditorGestureAtRef = useRef<number>(0);
+  const lastAutosaveRevisionRef = useRef(0);
+  const lastFieldGestureAtRef = useRef<Record<EditorFieldGestureKey, number>>({
+    title: 0,
+    description: 0,
+    slug: 0,
+    password: 0,
+    layout: 0,
+    usePassword: 0,
+    useComments: 0,
+  });
   const skipNextAutosaveRef = useRef(false);
   const draftShellMaterializedRef = useRef(!materializeDraftOnFirstSave);
+  const interactionArmedByUserRef = useRef(materializeDraftOnFirstSave);
   const sidebarTabListRef = useRef<HTMLDivElement | null>(null);
   const sidebarTabButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     draftShellMaterializedRef.current = !materializeDraftOnFirstSave;
+    interactionArmedByUserRef.current = materializeDraftOnFirstSave;
   }, [materializeDraftOnFirstSave, post.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const currentRuntimeVersion = window.sessionStorage.getItem(EDITOR_RUNTIME_VERSION_KEY);
+    if (currentRuntimeVersion === EDITOR_RUNTIME_VERSION) return;
+    clearAllEditorSessionState();
+    window.sessionStorage.setItem(EDITOR_RUNTIME_VERSION_KEY, EDITOR_RUNTIME_VERSION);
+    recordEditorDebugEvent("editorRuntimeVersionReset", {
+      previousVersion: currentRuntimeVersion,
+      nextVersion: EDITOR_RUNTIME_VERSION,
+    });
+  }, []);
+
+  const recordUserMutationSequence = () => {
+    const nextSequence = nextUserMutationSequenceRef.current + 1;
+    nextUserMutationSequenceRef.current = nextSequence;
+    latestUserMutationSequenceRef.current = nextSequence;
+    return nextSequence;
+  };
+
+  const resetUserMutationSequence = (persistedSequence = 0) => {
+    nextUserMutationSequenceRef.current = persistedSequence;
+    latestUserMutationSequenceRef.current = persistedSequence;
+    lastPersistedUserMutationSequenceRef.current = persistedSequence;
+  };
 
   useEffect(() => {
     const {
@@ -773,11 +999,7 @@ export default function Editor({
       incomingSignature,
       shouldUseCachedEditorState,
       cachedEditorState,
-    } = getInitialEditorClientState(post);
-    const preserveLocalDraft =
-      dataRef.current?.id === post.id &&
-      lastQueuedSignatureRef.current.length > 0 &&
-      lastQueuedSignatureRef.current !== lastSavedSignatureRef.current;
+    } = getInitialEditorClientState(post, { allowCachedDraftRecovery });
     const currentClientContent = (() => {
       const editor = editorRef.current;
       if (editor) {
@@ -789,14 +1011,11 @@ export default function Editor({
       }
       return dataRef.current?.content ?? "";
     })();
-    const mountedTitleValue = titleInputRef.current?.value;
-    const mountedDescriptionValue = descriptionInputRef.current?.value;
-    const mountedSlugValue = slugInputRef.current?.value;
     const currentClientPost: PostWithSite = {
       ...(dataRef.current ?? post),
-      title: mountedTitleValue ?? titleValueRef.current ?? dataRef.current?.title ?? "",
-      description: mountedDescriptionValue ?? descriptionValueRef.current ?? dataRef.current?.description ?? "",
-      slug: mountedSlugValue ?? slugValueRef.current ?? dataRef.current?.slug ?? "",
+      title: titleValueRef.current ?? dataRef.current?.title ?? "",
+      description: descriptionValueRef.current ?? dataRef.current?.description ?? "",
+      slug: slugValueRef.current ?? dataRef.current?.slug ?? "",
       content: currentClientContent,
       meta: metaEntriesRef.current,
     };
@@ -806,33 +1025,35 @@ export default function Editor({
       selectedTermsByTaxonomy: selectedTermsByTaxonomyRef.current,
       metaEntries: metaEntriesRef.current,
     });
-    const preserveRecentLocalDraft =
-      dataRef.current?.id === post.id &&
-      lastLocalMutationAtRef.current > 0 &&
-      Date.now() - lastLocalMutationAtRef.current < 30_000 &&
-      currentClientSignature !== incomingSignature;
-    const preserveAnyRecentLocalEdit =
-      dataRef.current?.id === post.id &&
-      lastLocalMutationAtRef.current > 0 &&
-      Date.now() - lastLocalMutationAtRef.current < 30_000;
-    const lastKnownEditorMutationAt = Math.max(
-      lastLocalMutationAtRef.current,
-      lastRecoveredCacheAtRef.current,
-    );
-    const preserveStaleIncomingPost =
-      dataRef.current?.id === post.id &&
-      lastSavedSignatureRef.current.length > 0 &&
-      Date.now() - lastKnownEditorMutationAt < 30_000 &&
-      incomingSignature !== lastSavedSignatureRef.current;
+    const convergence = computeEditorConvergence({
+      currentClientSignature,
+      lastQueuedSignature: lastQueuedSignatureRef.current,
+      lastSavedSignature: lastSavedSignatureRef.current,
+      incomingSignature,
+      samePost: dataRef.current?.id === post.id,
+      lastLocalMutationAt: lastLocalMutationAtRef.current,
+      lastRecoveredCacheAt: lastRecoveredCacheAtRef.current,
+      shouldUseCachedEditorState,
+    });
 
     setCurrentPost(effectivePost);
-    if (
-      preserveLocalDraft ||
-      preserveAnyRecentLocalEdit ||
-      preserveRecentLocalDraft ||
-      (preserveStaleIncomingPost && !shouldUseCachedEditorState)
-    ) {
-      return;
+    if (convergence.shouldPreserveLocalState) {
+      if (hasUserMutationSinceServerStateRef.current) {
+        recordEditorDebugEvent("postEffectPreservedLocalState", {
+          hasUnsavedLocalState: convergence.hasUnsavedLocalState,
+          preserveLocalDraft: convergence.preserveLocalDraft,
+          preserveRecentLocalDraft: convergence.preserveRecentLocalDraft,
+          preserveStaleIncomingPost: convergence.preserveStaleIncomingPost,
+          shouldUseCachedEditorState,
+        });
+        return;
+      }
+      recordEditorDebugEvent("postEffectDroppedNonUserLocalState", {
+        hasUnsavedLocalState: convergence.hasUnsavedLocalState,
+        preserveLocalDraft: convergence.preserveLocalDraft,
+        preserveRecentLocalDraft: convergence.preserveRecentLocalDraft,
+        preserveStaleIncomingPost: convergence.preserveStaleIncomingPost,
+      });
     }
 
     dataRef.current = effectivePost;
@@ -841,6 +1062,13 @@ export default function Editor({
     descriptionValueRef.current = effectivePost.description ?? "";
     slugValueRef.current = effectivePost.slug ?? "";
     setInitialContent(effectiveContent);
+    setEditorContentDigest(JSON.stringify(effectiveContent));
+    recordEditorDebugEvent("postEffectAppliedServerState", {
+      shouldUseCachedEditorState,
+      incomingSignatureLength: incomingSignature.length,
+      title: effectivePost.title ?? "",
+      slug: String(effectivePost.slug || ""),
+    });
     setPostImageUrls(Array.from(new Set(collectImageUrlsFromNode(effectiveContent))));
     lastObservedEditorContentSignatureRef.current = JSON.stringify(effectiveContent);
     setSelectedTermsByTaxonomy(effectiveSelectedTermsByTaxonomy);
@@ -849,24 +1077,50 @@ export default function Editor({
     setMetaEntries(effectiveMetaEntries);
     metaEntriesRef.current = effectiveMetaEntries;
     lastImageCountRef.current = countImageNodes(effectiveContent);
-    if (shouldUseCachedEditorState) {
-      lastSavedSignatureRef.current = cachedEditorState!.signature;
-      lastQueuedSignatureRef.current = cachedEditorState!.signature;
-      lastRecoveredCacheAtRef.current = cachedEditorState!.savedAt;
-    }
+    hasUserMutationSinceServerStateRef.current = false;
+    lastLocalMutationAtRef.current = 0;
+    lastUserIntentAtRef.current = 0;
+    lastEditorGestureAtRef.current = 0;
+    lastAutosaveRevisionRef.current = 0;
+    resetInteractionArm("postEffect:serverStateApplied");
+    resetUserMutationSequence();
+    lastFieldGestureAtRef.current = {
+      title: 0,
+      description: 0,
+      slug: 0,
+      password: 0,
+      layout: 0,
+      usePassword: 0,
+      useComments: 0,
+    };
+    setDirtyRevision(0);
+    setSaveError(null);
+    setSaveStatus("saved");
+    lastSavedSignatureRef.current = incomingSignature;
+    lastQueuedSignatureRef.current = incomingSignature;
+    lastRecoveredCacheAtRef.current = shouldUseCachedEditorState ? cachedEditorState!.savedAt : 0;
     setShowPostPassword(false);
-  }, [post]);
+  }, [allowCachedDraftRecovery, post]);
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
 
-  const applyDataUpdate = (updater: SetStateAction<PostWithSite>) => {
+  const applyDataUpdate = (
+    updater: SetStateAction<PostWithSite>,
+    options: ApplyDataUpdateOptions = {},
+  ) => {
     const current = dataRef.current;
     const next =
       typeof updater === "function" ? (updater as (value: PostWithSite) => PostWithSite)(current) : updater;
     dataRef.current = next;
-    markLocalDirty();
     setData(next);
+    if (options.markDirty) {
+      markLocalDirty(
+        options.reason || "applyDataUpdate",
+        { data: next },
+        { userMutation: options.userMutation === true },
+      );
+    }
   };
 
   const applyTermNameByIdUpdate = (
@@ -936,94 +1190,101 @@ export default function Editor({
     activeButton?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
   }, [sidebarTab]);
 
-  const shouldEagerLoadTaxonomyTerms = (taxonomy: string) => taxonomy === "category" || taxonomy === "tag";
-
-  const loadTaxonomyTermsWithRetry = async (taxonomy: string) => {
-    const attempts = shouldEagerLoadTaxonomyTerms(taxonomy) ? 18 : 4;
-    let lastRows: TaxonomyTerm[] = [];
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const rows = await (shouldEagerLoadTaxonomyTerms(taxonomy)
-        ? getTaxonomyTerms(post.siteId || "", taxonomy)
-        : getTaxonomyTermsPreview(post.siteId || "", taxonomy, 20));
-      lastRows = rows.map((term) => ({ id: term.id, name: term.name }));
-      if (lastRows.length > 0 || attempt === attempts) {
-        return lastRows;
-      }
-      await pause(Math.min(250 * attempt, 1_500));
-    }
-    return lastRows;
-  };
-
-  const refreshTaxonomyTerms = async (taxonomy: string) => {
-    const rows = await loadTaxonomyTermsWithRetry(taxonomy);
-    setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: rows }));
+  useEffect(() => {
+    const siteId = String(post.siteId || "").trim();
+    if (!siteId) return;
+    const seededReferenceData = normalizeEditorReferenceData(normalizedInitialReferenceData);
+    setTaxonomyOverviewRows(seededReferenceData.taxonomyOverviewRows);
+    setTaxonomyTermsByKey(seededReferenceData.taxonomyTermsByKey);
+    setTaxonomyLoadStateByKey(
+      buildEditorTaxonomyLoadState(
+        seededReferenceData.taxonomyOverviewRows,
+        seededReferenceData.taxonomyTermsByKey,
+      ),
+    );
+    setTaxonomyAutoloadStateByKey(
+      buildEditorTaxonomyAutoloadState(
+        seededReferenceData.taxonomyOverviewRows,
+        seededReferenceData.taxonomyTermsByKey,
+      ),
+    );
+    primeEditorTaxonomyReferenceCache({
+      siteId,
+      taxonomyTermsByKey: seededReferenceData.taxonomyTermsByKey,
+    });
+    setMetaKeySuggestions(seededReferenceData.metaKeySuggestions);
     applyTermNameByIdUpdate((prev) => {
       const next = { ...prev };
-      for (const term of rows) next[term.id] = term.name;
+      for (const rows of Object.values(seededReferenceData.taxonomyTermsByKey)) {
+        for (const term of rows) {
+          next[term.id] = term.name;
+        }
+      }
       return next;
     });
-    if (shouldEagerLoadTaxonomyTerms(taxonomy)) {
-      setTaxonomyExpanded((prev) => ({ ...prev, [taxonomy]: true }));
-    }
-  };
+    setTaxonomyExpanded((prev) => {
+      const next = { ...prev };
+      for (const taxonomy of seededReferenceData.taxonomyOverviewRows.map((row) => row.taxonomy)) {
+        if (
+          isEagerEditorTaxonomy(taxonomy) &&
+          Object.prototype.hasOwnProperty.call(seededReferenceData.taxonomyTermsByKey, taxonomy)
+        ) {
+          next[taxonomy] = true;
+        }
+        }
+      return next;
+    });
+    recordEditorDebugEvent("editorReferenceSeededFromServer", {
+      editorAutoloadContext: resolvedEditorAutoloadContext,
+      siteId,
+      taxonomyOverviewCount: seededReferenceData.taxonomyOverviewRows.length,
+      taxonomyKeyCount: Object.keys(seededReferenceData.taxonomyTermsByKey).length,
+      metaKeyCount: seededReferenceData.metaKeySuggestions.length,
+    });
+  }, [normalizedInitialReferenceData, post.siteId, resolvedEditorAutoloadContext]);
 
   useEffect(() => {
-    let mounted = true;
-    getTaxonomyOverview(post.siteId || "")
-      .then(async (rows) => {
-        if (!mounted) return;
-        const sorted = mergeTaxonomyOverviewRows(rows);
-        setTaxonomyOverviewRows(sorted);
-        await Promise.all(
-          sorted.map(async (row) => {
-            const preview = await loadTaxonomyTermsWithRetry(row.taxonomy);
-            if (!mounted) return;
-            setTaxonomyTermsByKey((prev) => ({
-              ...prev,
-              [row.taxonomy]: preview,
-            }));
-            applyTermNameByIdUpdate((prev) => {
-              const next = { ...prev };
-              for (const term of preview) {
-                next[term.id] = term.name;
-              }
-              return next;
-            });
-            if (shouldEagerLoadTaxonomyTerms(row.taxonomy)) {
-              setTaxonomyExpanded((prev) => ({ ...prev, [row.taxonomy]: true }));
-            }
-          }),
-        );
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setTaxonomyOverviewRows(DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS);
-      });
-    getAllMetaKeys().then((keys) => setMetaKeySuggestions(keys));
-    return () => {
-      mounted = false;
-    };
-  }, [post.siteId]);
+    if (resolvedEditorAutoloadContext !== "persisted-item") return;
 
-  useEffect(() => {
-    if (sidebarTab !== "plugins" || !post.siteId) return;
     const eagerTaxonomies = taxonomyOverviewRows
-      .map((row) => row.taxonomy)
-      .filter((taxonomy) => shouldEagerLoadTaxonomyTerms(taxonomy));
+      .map((row) => String(row?.taxonomy || "").trim())
+      .filter((taxonomy) => taxonomy && isEagerEditorTaxonomy(taxonomy))
+      .filter((taxonomy, index, rows) => rows.indexOf(taxonomy) === index);
+
     if (eagerTaxonomies.length === 0) return;
-    const needsRefresh = eagerTaxonomies.some((taxonomy) => (taxonomyTermsByKey[taxonomy] ?? []).length === 0);
-    if (!needsRefresh) return;
-    let cancelled = false;
-    void Promise.all(
-      eagerTaxonomies.map(async (taxonomy) => {
-        if (cancelled) return;
-        await refreshTaxonomyTerms(taxonomy).catch(() => undefined);
-      }),
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [sidebarTab, post.siteId, taxonomyOverviewRows, taxonomyTermsByKey]);
+
+    setTaxonomyLoadStateByKey((prev) => {
+      const next = { ...prev };
+      for (const taxonomy of eagerTaxonomies) {
+        next[taxonomy] = "loaded";
+      }
+      return next;
+    });
+    setTaxonomyAutoloadStateByKey((prev) => {
+      const next = { ...prev };
+      for (const taxonomy of eagerTaxonomies) {
+        next[taxonomy] = "settled";
+      }
+      return next;
+    });
+    setTaxonomyExpanded((prev) => {
+      const next = { ...prev };
+      for (const taxonomy of eagerTaxonomies) {
+        next[taxonomy] = true;
+      }
+      return next;
+    });
+    primeEditorTaxonomyReferenceCache({
+      siteId: String(post.siteId || ""),
+      taxonomyTermsByKey: Object.fromEntries(
+        eagerTaxonomies.map((taxonomy) => [taxonomy, taxonomyTermsByKey[taxonomy] ?? []] as const),
+      ),
+    });
+    recordEditorDebugEvent("persistedItemEagerTaxonomiesSettled", {
+      eagerTaxonomies,
+      siteId: String(post.siteId || ""),
+    });
+  }, [post.siteId, resolvedEditorAutoloadContext, taxonomyOverviewRows, taxonomyTermsByKey]);
 
   useEffect(() => {
     const query = new URLSearchParams();
@@ -1100,6 +1361,54 @@ export default function Editor({
       .finally(() => setMediaLoading(false));
   }, [post.siteId]);
 
+  const persistSavePayload = async (payload: {
+    id: string;
+    siteId: string | null;
+    dataDomainKey: string | null;
+    title: string;
+    description: string;
+    slug: string;
+    content: string;
+    password: string;
+    usePassword: boolean;
+    layout: string | null;
+    selectedTermsByTaxonomy: Record<string, number[]>;
+    categoryIds: number[];
+    tagIds: number[];
+    taxonomyIds: number[];
+    metaEntries: PostMetaEntry[];
+    signature: string;
+    userMutationSequence: number;
+  }) => {
+    const resolvedAutosaveEndpoint = resolveDomainPostEditorAutosavePath(payload.id, autosaveEndpoint);
+    if (resolvedAutosaveEndpoint) {
+      const response = await fetch(resolvedAutosaveEndpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({ error: "Autosave request failed." }));
+      if (!response.ok || (result && typeof result === "object" && "error" in result && result.error)) {
+        throw new Error(
+          typeof result?.error === "string" && result.error.trim().length > 0
+            ? result.error
+            : "Autosave request failed.",
+        );
+      }
+      return result;
+    }
+
+    if (typeof window !== "undefined") {
+      throw new Error("Editor autosave endpoint is missing for a browser-side save.");
+    }
+
+    return onSave(payload);
+  };
+
   const uploadFn = createUploadFn(post.siteId || "default", "post");
   const [isPendingPublishAction, startTransitionPublishAction] = useTransition();
   const [isPendingPublishSchedule, startTransitionPublishSchedule] = useTransition();
@@ -1108,6 +1417,10 @@ export default function Editor({
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const descriptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const slugInputRef = useRef<HTMLInputElement | null>(null);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
+  const layoutSelectRef = useRef<HTMLSelectElement | null>(null);
+  const usePasswordCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const useCommentsCheckboxRef = useRef<HTMLInputElement | null>(null);
   const taxonomyInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [publishScheduleDialogOpen, setPublishScheduleDialogOpen] = useState(false);
   const [publishScheduleDraft, setPublishScheduleDraft] = useState("");
@@ -1171,28 +1484,48 @@ export default function Editor({
         taxonomyIds: number[];
         metaEntries: PostMetaEntry[];
         signature: string;
+        userMutationSequence: number;
       }>({
         debounceMs: 600,
         save: async (payload) => {
-          const hasNewerQueuedDraft = () => lastQueuedSignatureRef.current !== payload.signature;
-          const result = await onSave(payload);
+          const result = await persistSavePayload(payload);
           if ((result as any)?.error) {
             throw new Error(String((result as any).error));
           }
-          const preserveNewerLocalDraft = hasNewerQueuedDraft();
           const currentLocalPost = dataRef.current;
           const currentLocalSelectedTermsByTaxonomy = selectedTermsByTaxonomyRef.current;
           const currentLocalMetaEntries = metaEntriesRef.current;
-          const hasMountedTitleField = titleInputRef.current != null;
-          const hasMountedDescriptionField = descriptionInputRef.current != null;
-          const hasMountedSlugField = slugInputRef.current != null;
-          const liveTitleValue = titleInputRef.current?.value ?? "";
-          const liveDescriptionValue = descriptionInputRef.current?.value ?? "";
-          const liveSlugValue = slugInputRef.current?.value ?? "";
+          const currentLocalTitle = titleValueRef.current;
+          const currentLocalDescription = descriptionValueRef.current;
+          const currentLocalContent = JSON.stringify(getContentJSON());
+          const currentLocalPasswordValue = currentLocalPost.password ?? "";
+          const currentLocalSignature = buildEditorSaveSignature({
+            id: currentLocalPost.id,
+            title: currentLocalTitle,
+            description: currentLocalDescription,
+            slug: normalizeSeoSlug(slugValueRef.current || currentLocalPost.slug || ""),
+            content: currentLocalContent,
+            published: Boolean(currentLocalPost.published),
+            [passwordFieldKey]: currentLocalPasswordValue,
+            usePassword: Boolean(currentLocalPost.usePassword),
+            layout: currentLocalPost.layout ?? null,
+            selectedTermsByTaxonomy: currentLocalSelectedTermsByTaxonomy,
+            categoryIds: currentLocalSelectedTermsByTaxonomy.category ?? [],
+            tagIds: currentLocalSelectedTermsByTaxonomy.tag ?? [],
+            taxonomyIds: getAllSelectedTaxonomyIds(currentLocalSelectedTermsByTaxonomy),
+            metaEntries: currentLocalMetaEntries,
+          });
+          const preserveNewerLocalDraft = shouldPreserveNewerLocalDraft({
+            latestUserMutationSequence: latestUserMutationSequenceRef.current,
+            payloadUserMutationSequence: payload.userMutationSequence,
+            currentClientSignature: currentLocalSignature,
+            payloadSignature: payload.signature,
+            lastSavedSignature: lastSavedSignatureRef.current,
+          });
           const currentLocalSlug = normalizeSeoSlug(
-            hasMountedSlugField
-              ? liveSlugValue
-              : slugValueRef.current || currentLocalPost.slug || payload.slug || String((result as any)?.slug || "").trim(),
+            preserveNewerLocalDraft
+              ? (slugValueRef.current || currentLocalPost.slug || payload.slug || String((result as any)?.slug || "").trim())
+              : String((result as any)?.slug || payload.slug || "").trim(),
           );
           const currentLocalTermNameById = termNameByIdRef.current;
           const nextMetaEntries = normalizeMetaEntriesForPersistence(
@@ -1212,19 +1545,11 @@ export default function Editor({
             dataDomainKey:
               String((result as any)?.dataDomainKey || payload.dataDomainKey || currentLocalPost.dataDomainKey || "").trim() ||
               null,
-            title:
-              preserveNewerLocalDraft || hasMountedTitleField
-                ? (liveTitleValue || titleValueRef.current || currentLocalPost.title || payload.title)
-                : payload.title,
+            title: preserveNewerLocalDraft ? currentLocalTitle : payload.title,
             description: preserveNewerLocalDraft
-              ? (liveDescriptionValue || descriptionValueRef.current || currentLocalPost.description || payload.description)
-              : hasMountedDescriptionField
-                ? (liveDescriptionValue || descriptionValueRef.current || currentLocalPost.description || payload.description)
+              ? currentLocalDescription
               : payload.description,
-            slug:
-              preserveNewerLocalDraft || hasMountedSlugField
-                ? currentLocalSlug
-                : (payload.slug || String((result as any)?.slug || "").trim()),
+            slug: currentLocalSlug,
             content: preserveNewerLocalDraft ? (currentLocalPost.content ?? payload.content) : payload.content,
             [passwordFieldKey]: preserveNewerLocalDraft
               ? (currentLocalPost.password ?? payload.password)
@@ -1242,14 +1567,14 @@ export default function Editor({
             ...currentLocalTermNameById,
             ...derivedTaxonomyState.nextTermNameById,
           };
-          const nextSignature = JSON.stringify({
+          const nextSignature = buildEditorSaveSignature({
             id: nextPost.id,
             title: nextPost.title ?? "",
             description: nextPost.description ?? "",
             slug: String(nextPost.slug || "").trim(),
             content: nextPost.content ?? "",
             published: Boolean(nextPost.published),
-            postPassword: nextPasswordValue,
+            [passwordFieldKey]: nextPasswordValue,
             usePassword: Boolean(nextPost.usePassword),
             layout: nextPost.layout ?? null,
             selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
@@ -1273,27 +1598,51 @@ export default function Editor({
           lastSavedSignatureRef.current = nextSignature;
           lastQueuedSignatureRef.current = nextSignature;
           draftShellMaterializedRef.current = true;
-          writeEditorSessionCache(
-            payload.id,
-            {
-              id: payload.id,
-              title: nextPost.title ?? "",
-              description: nextPost.description ?? "",
-              slug: String(nextPost.slug || "").trim(),
-              content: nextPost.content ?? "",
-              published: Boolean(nextPost.published),
-              [POST_PASSWORD_KEY]: nextPost.password ?? "",
-              usePassword: Boolean(nextPost.usePassword),
-              layout: nextPost.layout ?? null,
-              selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
-              termNameById: nextTermNameById,
-              categoryIds: nextSelectedTermsByTaxonomy.category ?? [],
-              tagIds: nextSelectedTermsByTaxonomy.tag ?? [],
-              taxonomyIds: getAllSelectedTaxonomyIds(nextSelectedTermsByTaxonomy),
-              metaEntries: nextMetaEntries,
-            },
-            nextSignature,
-          );
+          if (preserveNewerLocalDraft) {
+            hasUserMutationSinceServerStateRef.current = true;
+            writeEditorSessionCache(
+              payload.id,
+              {
+                id: payload.id,
+                title: nextPost.title ?? "",
+                description: nextPost.description ?? "",
+                slug: String(nextPost.slug || "").trim(),
+                content: nextPost.content ?? "",
+                published: Boolean(nextPost.published),
+                [POST_PASSWORD_KEY]: nextPost.password ?? "",
+                usePassword: Boolean(nextPost.usePassword),
+                layout: nextPost.layout ?? null,
+                selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
+                termNameById: nextTermNameById,
+                categoryIds: nextSelectedTermsByTaxonomy.category ?? [],
+                tagIds: nextSelectedTermsByTaxonomy.tag ?? [],
+                taxonomyIds: getAllSelectedTaxonomyIds(nextSelectedTermsByTaxonomy),
+                metaEntries: nextMetaEntries,
+              },
+              nextSignature,
+              true,
+            );
+          } else {
+            hasUserMutationSinceServerStateRef.current = false;
+            lastPersistedUserMutationSequenceRef.current = payload.userMutationSequence;
+            clearEditorSessionCache(payload.id);
+            lastLocalMutationAtRef.current = 0;
+            lastUserIntentAtRef.current = 0;
+            lastEditorGestureAtRef.current = 0;
+            lastAutosaveRevisionRef.current = 0;
+            resetInteractionArm("saveQueue:onSaved");
+            resetUserMutationSequence(payload.userMutationSequence);
+            lastFieldGestureAtRef.current = {
+              title: 0,
+              description: 0,
+              slug: 0,
+              password: 0,
+              layout: 0,
+              usePassword: 0,
+              useComments: 0,
+            };
+            setDirtyRevision(0);
+          }
           if (typeof window !== "undefined") {
             const currentUrl = new URL(window.location.href);
             if (currentUrl.searchParams.get("new") === "1") {
@@ -1305,6 +1654,10 @@ export default function Editor({
           return result;
         },
         onStatus: ({ status, error }) => {
+          recordEditorDebugEvent("saveQueueStatus", {
+            status,
+            error: error instanceof Error ? error.message : error ? String(error) : null,
+          });
           setSaveStatus(status);
           setSaveError(error instanceof Error ? error.message : error ? String(error) : null);
           if (status === "saved") {
@@ -1312,7 +1665,7 @@ export default function Editor({
           }
         },
       }),
-    [onSave, router],
+    [autosaveEndpoint, onSave],
   );
 
   useEffect(() => {
@@ -1342,14 +1695,14 @@ export default function Editor({
 
   const getContentJSON = () => {
     const editor = editorRef.current;
-    if (!editor) return parseInitialContent(dataRef.current.content);
+    if (!editor) return normalizeEditorJsonContent(parseInitialContent(dataRef.current.content));
 
     if (editorMode === "html-css-first" && htmlDirtyRef.current) {
       editor.commands.setContent(htmlDraftRef.current || "", false);
       htmlDirtyRef.current = false;
     }
 
-    return editor.getJSON();
+    return normalizeEditorJsonContent(editor.getJSON());
   };
 
   const buildSaveSnapshot = (snapshot?: EditorSaveSnapshot) => {
@@ -1359,26 +1712,16 @@ export default function Editor({
       snapshot?.selectedTermsByTaxonomy ?? selectedTermsByTaxonomyRef.current,
     );
     const nextMetaEntries = normalizeMetaEntriesForPersistence(snapshot?.metaEntries ?? metaEntriesRef.current);
-    const hasMountedTitleField = titleInputRef.current != null;
-    const hasMountedDescriptionField = descriptionInputRef.current != null;
-    const hasMountedSlugField = slugInputRef.current != null;
-    const liveTitleValue = titleInputRef.current?.value ?? "";
-    const liveDescriptionValue = descriptionInputRef.current?.value ?? "";
-    const liveSlugValue = slugInputRef.current?.value ?? "";
-    const nextTitle = hasMountedTitleField ? liveTitleValue : titleValueRef.current || latest.title || "";
-    const nextDescription = hasMountedDescriptionField
-      ? liveDescriptionValue
-      : descriptionValueRef.current || latest.description || "";
-    const nextSlug = normalizeSeoSlug(
-      hasMountedSlugField ? liveSlugValue : slugValueRef.current || latest.slug || "",
-    );
+    const nextTitle = titleValueRef.current;
+    const nextDescription = descriptionValueRef.current;
+    const nextSlug = normalizeSeoSlug(slugValueRef.current || latest.slug || "");
     const content =
       snapshot?.content ??
       (() => {
         const json = getContentJSON();
         return JSON.stringify(json);
       })();
-    const signature = JSON.stringify({
+      const signature = buildEditorSaveSignature({
       id: latest.id,
       title: nextTitle,
       description: nextDescription,
@@ -1413,6 +1756,7 @@ export default function Editor({
         taxonomyIds: getAllSelectedTaxonomyIds(selectedTerms),
         metaEntries: nextMetaEntries,
         signature,
+        userMutationSequence: snapshot?.userMutationSequence ?? latestUserMutationSequenceRef.current,
       },
       signature,
     };
@@ -1426,8 +1770,23 @@ export default function Editor({
     const effectiveImmediate =
       immediate || (materializeDraftOnFirstSave && !draftShellMaterializedRef.current);
 
-    if (!effectiveImmediate && signature === lastQueuedSignatureRef.current) return;
-    if (!effectiveImmediate && signature === lastSavedSignatureRef.current) return;
+    if (!effectiveImmediate && signature === lastQueuedSignatureRef.current) {
+      recordEditorDebugEvent("enqueueSaveSkipped", { reason: "matchesLastQueued", immediate: effectiveImmediate });
+      return;
+    }
+    if (!effectiveImmediate && signature === lastSavedSignatureRef.current) {
+      recordEditorDebugEvent("enqueueSaveSkipped", { reason: "matchesLastSaved", immediate: effectiveImmediate });
+      return;
+    }
+    recordEditorDebugEvent("enqueueSave", {
+      immediate: effectiveImmediate,
+      title: payload.title,
+      slug: payload.slug,
+      contentLength: payload.content.length,
+      metaCount: payload.metaEntries.length,
+      taxonomyIds: payload.taxonomyIds,
+      userMutationSequence: payload.userMutationSequence,
+    });
     lastQueuedSignatureRef.current = signature;
     lastLocalMutationAtRef.current = Date.now();
     writeEditorSessionCache(
@@ -1450,6 +1809,7 @@ export default function Editor({
         metaEntries: payload.metaEntries,
       },
       signature,
+      true,
     );
     saveQueue.enqueue(payload, { immediate: effectiveImmediate });
   };
@@ -1463,27 +1823,26 @@ export default function Editor({
       selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
       metaEntries: nextMetaEntries,
     });
-    writeEditorSessionCache(
-      nextPost.id,
-      {
-        id: nextPost.id,
-        title: nextPost.title ?? "",
-        description: nextPost.description ?? "",
-        slug: String(nextPost.slug || "").trim(),
-        content: JSON.stringify(nextContent),
-        published: Boolean(nextPost.published),
-        [POST_PASSWORD_KEY]: nextPost.password ?? "",
-        usePassword: Boolean(nextPost.usePassword),
-        layout: nextPost.layout ?? null,
-        selectedTermsByTaxonomy: nextSelectedTermsByTaxonomy,
-        termNameById: termNameByIdRef.current,
-        categoryIds: nextSelectedTermsByTaxonomy.category ?? [],
-        tagIds: nextSelectedTermsByTaxonomy.tag ?? [],
-        taxonomyIds: getAllSelectedTaxonomyIds(nextSelectedTermsByTaxonomy),
-        metaEntries: nextMetaEntries,
-      },
-      nextSignature,
-    );
+    clearEditorSessionCache(nextPost.id);
+    lastSavedSignatureRef.current = nextSignature;
+    lastQueuedSignatureRef.current = nextSignature;
+    hasUserMutationSinceServerStateRef.current = false;
+    lastLocalMutationAtRef.current = 0;
+    lastUserIntentAtRef.current = 0;
+    lastEditorGestureAtRef.current = 0;
+    lastAutosaveRevisionRef.current = 0;
+    resetInteractionArm("syncEditorSessionSnapshot");
+    resetUserMutationSequence();
+    lastFieldGestureAtRef.current = {
+      title: 0,
+      description: 0,
+      slug: 0,
+      password: 0,
+      layout: 0,
+      usePassword: 0,
+      useComments: 0,
+    };
+    setDirtyRevision(0);
   };
 
   const waitForPendingTaxonomyWrites = async () => {
@@ -1498,6 +1857,7 @@ export default function Editor({
     if (!built) return false;
     const { payload, signature } = built;
     if (signature === lastSavedSignatureRef.current) {
+      lastPersistedUserMutationSequenceRef.current = payload.userMutationSequence;
       setSaveStatus("saved");
       setSaveError(null);
       return true;
@@ -1528,6 +1888,7 @@ export default function Editor({
         metaEntries: payload.metaEntries,
       },
       signature,
+      true,
     );
     saveQueue.enqueue(payload, { immediate: true });
     try {
@@ -1553,16 +1914,101 @@ export default function Editor({
     return persistSnapshotNow();
   };
 
-  const markLocalDirty = () => {
+  const hasRecentUserIntent = (now = Date.now()) =>
+    lastUserIntentAtRef.current > 0 && now - lastUserIntentAtRef.current <= EDITOR_USER_INTENT_WINDOW_MS;
+
+  const resetInteractionArm = (reason = "unknown") => {
+    interactionArmedByUserRef.current = materializeDraftOnFirstSave;
+    recordEditorDebugEvent("editorInteractionReset", {
+      reason,
+      armed: interactionArmedByUserRef.current,
+      materializeDraftOnFirstSave,
+    });
+  };
+
+  const markUserIntent = () => {
+    lastUserIntentAtRef.current = Date.now();
+  };
+
+  const armInteractionForMutation = (reason = "unknown") => {
+    markUserIntent();
+    interactionArmedByUserRef.current = true;
+    recordEditorDebugEvent("editorInteractionArmed", {
+      reason,
+      materializeDraftOnFirstSave,
+    });
+  };
+
+  const markLocalDirty = (
+    reason = "unknown",
+    snapshot?: EditorSaveSnapshot,
+    options?: { requireRecentUserIntent?: boolean; userMutation?: boolean },
+  ) => {
     if (!canEdit) return;
+    const built = buildSaveSnapshot(snapshot);
+    if (!built) return;
+    const requireRecentUserIntent = options?.requireRecentUserIntent !== false;
+    if (
+      !shouldMarkEditorStateDirty({
+        nextSignature: built.signature,
+        lastSavedSignature: lastSavedSignatureRef.current,
+      })
+    ) {
+      setSaveError(null);
+      setSaveStatus("saved");
+      recordEditorDebugEvent("markLocalDirtySkipped", {
+        reason,
+        cause: "matchesLastSavedSignature",
+      });
+      return;
+    }
+    if (options?.userMutation === true && !materializeDraftOnFirstSave && !interactionArmedByUserRef.current) {
+      recordEditorDebugEvent("markLocalDirtySkipped", {
+        reason,
+        cause: "inactiveEditorSession",
+      });
+      return;
+    }
+    if (requireRecentUserIntent && !hasRecentUserIntent()) {
+      recordEditorDebugEvent("markLocalDirtySkipped", {
+        reason,
+        cause: "missingRecentUserIntent",
+      });
+      return;
+    }
+    let userMutationSequence = latestUserMutationSequenceRef.current;
+    if (options?.userMutation === true) {
+      hasUserMutationSinceServerStateRef.current = true;
+      userMutationSequence = recordUserMutationSequence();
+    }
     lastLocalMutationAtRef.current = Date.now();
     setSaveError(null);
     setSaveStatus("unsaved");
+    setDirtyRevision((revision) => revision + 1);
+    recordEditorDebugEvent("markLocalDirty", { reason, userMutationSequence });
   };
+
+  const markEditorGesture = () => {
+    armInteractionForMutation("editorGesture");
+    lastEditorGestureAtRef.current = Date.now();
+  };
+
+  const markFieldGesture = (field: EditorFieldGestureKey) => {
+    armInteractionForMutation(`fieldGesture:${field}`);
+    lastFieldGestureAtRef.current[field] = Date.now();
+  };
+
+  const markTextFieldGesture = (field: "title" | "description" | "slug" | "password") => {
+    markFieldGesture(field);
+  };
+
+  const fieldIsFocused = (element: Element | null) =>
+    typeof document !== "undefined" && Boolean(element) && document.activeElement === element;
 
   const exec = (fn: (editor: EditorInstance) => void) => {
     const editor = editorRef.current;
     if (!editor) return;
+    markEditorGesture();
     fn(editor);
     editor.commands.focus();
   };
@@ -1592,11 +2038,16 @@ export default function Editor({
       | Record<string, number[]>
       | ((prev: Record<string, number[]>) => Record<string, number[]>),
   ) => {
+    armInteractionForMutation("taxonomySelection");
     const prev = selectedTermsByTaxonomyRef.current;
     const next = normalizeSelectedTermsByTaxonomy(typeof updater === "function" ? updater(prev) : updater);
     selectedTermsByTaxonomyRef.current = next;
-    markLocalDirty();
     setSelectedTermsByTaxonomy(next);
+    markLocalDirty(
+      "updateSelectedTermsByTaxonomy",
+      { selectedTermsByTaxonomy: next },
+      { userMutation: true },
+    );
     return next;
   };
 
@@ -1620,17 +2071,39 @@ export default function Editor({
 
   const loadAllTermsForTaxonomy = async (taxonomy: string) => {
     if (taxonomyExpanded[taxonomy]) return;
+    const siteId = String(post.siteId || "").trim();
+    if (!siteId) return;
+    if (isEagerEditorTaxonomy(taxonomy)) {
+      setTaxonomyLoadStateByKey((prev) => ({ ...prev, [taxonomy]: "loaded" }));
+      setTaxonomyAutoloadStateByKey((prev) => ({ ...prev, [taxonomy]: "settled" }));
+      setTaxonomyExpanded((prev) => ({ ...prev, [taxonomy]: true }));
+      return;
+    }
+    setTaxonomyLoadStateByKey((prev) => ({ ...prev, [taxonomy]: "loading" }));
     setTaxonomyLoadingMore((prev) => ({ ...prev, [taxonomy]: true }));
     try {
-      const rows = await getTaxonomyTerms(post.siteId || "", taxonomy);
-      const normalized = rows.map((term) => ({ id: term.id, name: term.name }));
+      const normalized = await runWithEditorTaxonomyReferenceCache(
+        {
+          siteId,
+          taxonomy,
+        },
+        () =>
+          fetchTaxonomyTermsForEditor({
+            siteId,
+            taxonomy,
+          }),
+      );
       setTaxonomyTermsByKey((prev) => ({ ...prev, [taxonomy]: normalized }));
+      setTaxonomyLoadStateByKey((prev) => ({ ...prev, [taxonomy]: "loaded" }));
       applyTermNameByIdUpdate((prev) => {
         const next = { ...prev };
         for (const term of normalized) next[term.id] = term.name;
         return next;
       });
       setTaxonomyExpanded((prev) => ({ ...prev, [taxonomy]: true }));
+    } catch (error) {
+      setTaxonomyLoadStateByKey((prev) => ({ ...prev, [taxonomy]: "error" }));
+      throw error;
     } finally {
       setTaxonomyLoadingMore((prev) => ({ ...prev, [taxonomy]: false }));
     }
@@ -1702,6 +2175,7 @@ export default function Editor({
     if (!canEdit) return;
     const nextKey = key.trim();
     if (!nextKey) return;
+    armInteractionForMutation("meta:addOrUpdate");
     const nextMetaEntries = normalizeMetaEntriesForPersistence(
       upsertEditorMetaEntry(metaEntriesRef.current, nextKey, value),
     );
@@ -1714,6 +2188,7 @@ export default function Editor({
   };
 
   const applyMetaEntriesUpdate = (nextMetaEntries: PostMetaEntry[], immediate = true) => {
+    armInteractionForMutation("meta:apply");
     const normalizedEntries = normalizeMetaEntriesForPersistence(nextMetaEntries);
     metaEntriesRef.current = normalizedEntries;
     setMetaEntries(normalizedEntries);
@@ -1738,31 +2213,160 @@ export default function Editor({
     return typed === deleteConfirmationTarget;
   }, [deleteConfirmation, deleteConfirmationTarget]);
 
-  const handleTitleInput = (value: string) => {
+  const handleTitleInput = (value: string, nativeEvent?: Event | null) => {
     const current = dataRef.current;
-    if ((current.title ?? "") === value && titleValueRef.current === value) {
+    const currentValue = titleValueRef.current ?? current.title ?? "";
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorTextFieldMutation({
+        currentValue,
+        nextValue: value,
+        recentGestureAt: lastFieldGestureAtRef.current.title,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(titleInputRef.current),
+      })
+    ) {
       return;
     }
     titleValueRef.current = value;
     const nextData = { ...current, title: value };
-    applyDataUpdate(nextData);
+    applyDataUpdate(nextData, { markDirty: true, reason: "field:title", userMutation: true });
   };
 
-  const handleDescriptionInput = (value: string) => {
+  const handleDescriptionInput = (value: string, nativeEvent?: Event | null) => {
+    const current = dataRef.current;
+    const currentValue = descriptionValueRef.current ?? current.description ?? "";
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorTextFieldMutation({
+        currentValue,
+        nextValue: value,
+        recentGestureAt: lastFieldGestureAtRef.current.description,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(descriptionInputRef.current),
+      })
+    ) {
+      return;
+    }
     descriptionValueRef.current = value;
-    applyDataUpdate((prev) => ({ ...prev, description: value }));
+    applyDataUpdate((prev) => ({ ...prev, description: value }), {
+      markDirty: true,
+      reason: "field:description",
+      userMutation: true,
+    });
   };
 
-  const handleSlugDraftInput = (value: string) => {
+  const handleSlugDraftInput = (value: string, nativeEvent?: Event | null) => {
     const nextSlugDraft = normalizeSlugDraft(value);
+    const current = dataRef.current;
+    const currentValue = slugValueRef.current || current.slug || "";
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorTextFieldMutation({
+        currentValue,
+        nextValue: nextSlugDraft,
+        recentGestureAt: lastFieldGestureAtRef.current.slug,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(slugInputRef.current),
+      })
+    ) {
+      return;
+    }
     slugValueRef.current = nextSlugDraft;
-    applyDataUpdate((prev) => ({ ...prev, slug: nextSlugDraft }));
+    applyDataUpdate((prev) => ({ ...prev, slug: nextSlugDraft }), {
+      markDirty: true,
+      reason: "field:slug:draft",
+      userMutation: true,
+    });
   };
 
-  const handleSlugCommit = (value: string) => {
+  const handleSlugCommit = (value: string, nativeEvent?: Event | null) => {
     const nextSlug = normalizeSeoSlug(value);
+    const current = dataRef.current;
+    const currentValue = normalizeSeoSlug(slugValueRef.current || current.slug || "");
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorTextFieldCommit({
+        currentValue,
+        nextValue: nextSlug,
+        recentGestureAt: lastFieldGestureAtRef.current.slug,
+        trusted: meta.trusted,
+      })
+    ) {
+      return;
+    }
     slugValueRef.current = nextSlug;
-    applyDataUpdate((current) => ({ ...current, slug: nextSlug }));
+    applyDataUpdate((current) => ({ ...current, slug: nextSlug }), {
+      markDirty: true,
+      reason: "field:slug:commit",
+      userMutation: true,
+    });
+  };
+
+  const handlePasswordInput = (value: string, nativeEvent?: Event | null) => {
+    const currentValue = dataRef.current.password ?? "";
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorTextFieldMutation({
+        currentValue,
+        nextValue: value,
+        recentGestureAt: lastFieldGestureAtRef.current.password,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(passwordInputRef.current),
+      })
+    ) {
+      return;
+    }
+    applyDataUpdate((prev) => ({ ...prev, password: value }), {
+      markDirty: true,
+      reason: "field:password",
+      userMutation: true,
+    });
+  };
+
+  const handleLayoutChange = (value: string, nativeEvent?: Event | null) => {
+    const currentValue = dataRef.current.layout ?? "post";
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorFieldMutation({
+        currentValue,
+        nextValue: value,
+        recentGestureAt: lastFieldGestureAtRef.current.layout,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(layoutSelectRef.current),
+      })
+    ) {
+      return;
+    }
+    applyDataUpdate((prev) => ({ ...prev, layout: value }), {
+      markDirty: true,
+      reason: "field:layout",
+      userMutation: true,
+    });
+  };
+
+  const handleUsePasswordChange = (enabled: boolean, nativeEvent?: Event | null) => {
+    const currentValue = Boolean(dataRef.current.usePassword);
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorFieldMutation({
+        currentValue,
+        nextValue: enabled,
+        recentGestureAt: lastFieldGestureAtRef.current.usePassword,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(usePasswordCheckboxRef.current),
+      })
+    ) {
+      return;
+    }
+    applyDataUpdate((prev) => ({ ...prev, usePassword: enabled }), {
+      markDirty: true,
+      reason: "field:usePassword",
+      userMutation: true,
+    });
+    if (!enabled) {
+      setShowPostPassword(false);
+    }
   };
 
   const useComments = readMetaBoolean(metaEntries, "use_comments", defaultEnableComments);
@@ -1780,8 +2384,20 @@ export default function Editor({
   const isExplicitEditorActionPending =
     isPendingPublishAction || isPendingPublishSchedule || isPendingThumbnail || isPendingDelete;
 
-  const setUseComments = (enabled: boolean) => {
+  const setUseComments = (enabled: boolean, nativeEvent?: Event | null) => {
     if (!canEdit) return;
+    const meta = readEditorTextInputMeta(nativeEvent);
+    if (
+      !shouldAcceptEditorFieldMutation({
+        currentValue: useComments,
+        nextValue: enabled,
+        recentGestureAt: lastFieldGestureAtRef.current.useComments,
+        trusted: meta.trusted,
+        fieldFocused: fieldIsFocused(useCommentsCheckboxRef.current),
+      })
+    ) {
+      return;
+    }
     const nextValue = enabled ? "true" : "false";
     const nextMetaEntries = (() => {
       const next = [...metaEntriesRef.current];
@@ -1799,15 +2415,59 @@ export default function Editor({
 
   useEffect(() => {
     if (!canEdit) return;
-    if (!data?.id) return;
-    if (lastLocalMutationAtRef.current <= 0) return;
-    if (skipNextAutosaveRef.current) {
-      skipNextAutosaveRef.current = false;
+    if (dirtyRevision <= 0) return;
+    if (saveStatus !== "unsaved") return;
+    if (!materializeDraftOnFirstSave && !interactionArmedByUserRef.current) {
+      recordEditorDebugEvent("autosaveSkipped", { reason: "inactiveEditorSession" });
+      lastAutosaveRevisionRef.current = dirtyRevision;
+      setSaveError(null);
+      setSaveStatus("saved");
       return;
     }
+    if (latestUserMutationSequenceRef.current <= lastPersistedUserMutationSequenceRef.current) {
+      recordEditorDebugEvent("autosaveSkipped", {
+        reason: "noNewUserMutationSequence",
+        latestUserMutationSequence: latestUserMutationSequenceRef.current,
+        lastPersistedUserMutationSequence: lastPersistedUserMutationSequenceRef.current,
+      });
+      lastAutosaveRevisionRef.current = dirtyRevision;
+      setSaveError(null);
+      setSaveStatus("saved");
+      return;
+    }
+    if (!hasUserMutationSinceServerStateRef.current) {
+      recordEditorDebugEvent("autosaveSkipped", { reason: "missingUserMutationSinceServerState" });
+      lastAutosaveRevisionRef.current = dirtyRevision;
+      setSaveError(null);
+      setSaveStatus("saved");
+      return;
+    }
+    if (!hasRecentUserIntent()) {
+      recordEditorDebugEvent("autosaveSkipped", { reason: "missingRecentUserIntent" });
+      lastAutosaveRevisionRef.current = dirtyRevision;
+      setSaveError(null);
+      setSaveStatus("saved");
+      return;
+    }
+    if (skipNextAutosaveRef.current) {
+      recordEditorDebugEvent("autosaveSkipped", { reason: "skipNextAutosaveRef" });
+      skipNextAutosaveRef.current = false;
+      lastAutosaveRevisionRef.current = dirtyRevision;
+      return;
+    }
+    if (lastAutosaveRevisionRef.current === dirtyRevision) return;
+    recordEditorDebugEvent("autosaveEffect", {
+      dirtyRevision,
+      title: data.title,
+      slug: data.slug,
+      saveStatus,
+      latestUserMutationSequence: latestUserMutationSequenceRef.current,
+      lastPersistedUserMutationSequence: lastPersistedUserMutationSequenceRef.current,
+    });
+    lastAutosaveRevisionRef.current = dirtyRevision;
     enqueueSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.title, data.description, data.slug, data.password, data.usePassword, data.layout, selectedTermsDigest, metaEntriesDigest]);
+  }, [canEdit, dirtyRevision, saveStatus]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1968,7 +2628,9 @@ export default function Editor({
   if (!initialContent) return null;
 
   return (
-    <div className="grid w-full max-w-[1400px] gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div
+      className="grid w-full max-w-[1400px] gap-6 lg:grid-cols-[minmax(0,1fr)_320px]"
+    >
       <div className="relative">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -2172,18 +2834,25 @@ export default function Editor({
             type="text"
             placeholder="Title"
             value={data.title ?? ""}
-            autoFocus
+            autoFocus={materializeDraftOnFirstSave}
+            autoComplete="off"
             ref={titleInputRef}
-            onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value)}
-            onChange={(e) => handleTitleInput(e.currentTarget.value)}
+            onPointerDown={() => markTextFieldGesture("title")}
+            onKeyDown={() => markTextFieldGesture("title")}
+            onPaste={() => markTextFieldGesture("title")}
+            onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value, e.nativeEvent)}
             readOnly={!canEdit}
             className="border-none bg-background px-0 font-cal text-3xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
           <TextareaAutosize
             placeholder="Description"
             value={data.description ?? ""}
+            autoComplete="off"
             ref={descriptionInputRef}
-            onChange={(e) => handleDescriptionInput(e.currentTarget.value)}
+            onPointerDown={() => markTextFieldGesture("description")}
+            onKeyDown={() => markTextFieldGesture("description")}
+            onPaste={() => markTextFieldGesture("description")}
+            onInput={(e) => handleDescriptionInput(e.currentTarget.value, e.nativeEvent)}
             readOnly={!canEdit}
             className="w-full resize-none border-none bg-background px-0 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
           />
@@ -2197,9 +2866,13 @@ export default function Editor({
                 id="post-slug"
                 type="text"
                 value={data.slug ?? ""}
+                autoComplete="off"
                 ref={slugInputRef}
-                onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}
-                onBlur={(e) => handleSlugCommit(e.currentTarget.value)}
+                onPointerDown={() => markTextFieldGesture("slug")}
+                onKeyDown={() => markTextFieldGesture("slug")}
+                onPaste={() => markTextFieldGesture("slug")}
+                onInput={(e) => handleSlugDraftInput(e.currentTarget.value, e.nativeEvent)}
+                onBlur={(e) => handleSlugCommit(e.currentTarget.value, e.nativeEvent)}
                 placeholder="post-slug"
                 readOnly={!canEdit}
                 className="w-full border-none bg-transparent px-2 py-1.5 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
@@ -2222,51 +2895,57 @@ export default function Editor({
             </div>
 
             <EditorContent
+              immediatelyRender={false}
               initialContent={initialContent}
               extensions={extensions}
               className="min-h-[900px] w-full bg-background"
               editorProps={{
                 handleDOMEvents: {
-                  keydown: (_view, event) => handleCommandNavigation(event),
+                  keydown: (_view, event) => {
+                    markEditorGesture();
+                    return handleCommandNavigation(event);
+                  },
                 },
-                handlePaste: (view, event) => handleImagePaste(view, event, uploadFn),
-                handleDrop: (view, event, _slice, moved) => handleImageDrop(view, event, moved, uploadFn),
+                handlePaste: (view, event) => {
+                  markEditorGesture();
+                  return handleImagePaste(view, event, uploadFn);
+                },
+                handleDrop: (view, event, _slice, moved) => {
+                  markEditorGesture();
+                  return handleImageDrop(view, event, moved, uploadFn);
+                },
                 attributes: {
                   class:
                     "prose prose-lg max-w-full px-6 py-5 font-default text-black focus:outline-none prose-h1:text-black prose-h2:text-black prose-h3:text-black prose-headings:text-black prose-strong:text-black dark:prose-invert",
                 },
               }}
-              onUpdate={({ editor }) => {
+              onUpdate={({ editor, transaction }) => {
                 editorRef.current = editor;
                 setCharsCount(editor.storage.characterCount.words());
                 setCurrentBlockMode(getCurrentBlockMode(editor));
                 setCurrentTextAlign(getCurrentTextAlign(editor));
                 setToolbarTick((v) => v + 1);
-                const json = editor.getJSON();
+                const json = normalizeEditorJsonContent(editor.getJSON());
                 const contentSignature = JSON.stringify(json);
                 const hadLocalEditorMutation = contentSignature !== lastObservedEditorContentSignatureRef.current;
                 lastObservedEditorContentSignatureRef.current = contentSignature;
-                if (hadLocalEditorMutation) {
-                  markLocalDirty();
+                const shouldTreatUpdateAsUserEdit =
+                  hadLocalEditorMutation &&
+                  (Date.now() - lastEditorGestureAtRef.current < 1_500 ||
+                    Boolean(transaction?.getMeta?.("paste")) ||
+                    Boolean(transaction?.getMeta?.("drop")));
+                if (shouldTreatUpdateAsUserEdit) {
+                  markLocalDirty("editor:onUpdate", undefined, { userMutation: true });
+                  setEditorContentDigest(contentSignature);
+                  recordEditorDebugEvent("editorContentChanged", {
+                    reason: "editor:onUpdate",
+                    contentSignatureLength: contentSignature.length,
+                  });
                 }
                 const imageUrls = Array.from(new Set(collectImageUrlsFromNode(json)));
                 setPostImageUrls(imageUrls);
                 const imageCount = countImageNodes(json);
-                const imageCountChanged = imageCount !== lastImageCountRef.current;
                 lastImageCountRef.current = imageCount;
-                const shouldSuppressPlaceholderAutosave =
-                  canEdit &&
-                  lastLocalMutationAtRef.current <= 0 &&
-                  isPlaceholderServerDraft({
-                    id: dataRef.current.id,
-                    title: dataRef.current.title,
-                    description: dataRef.current.description,
-                    slug: dataRef.current.slug,
-                    content: contentSignature,
-                    selectedTermsByTaxonomy: selectedTermsByTaxonomyRef.current,
-                    metaEntries: metaEntriesRef.current,
-                  });
-                if (canEdit && !shouldSuppressPlaceholderAutosave) enqueueSave(imageCountChanged);
               }}
               onCreate={({ editor }) => {
                 editorRef.current = editor;
@@ -2274,6 +2953,7 @@ export default function Editor({
                 setCharsCount(editor.storage.characterCount.words());
                 setCurrentBlockMode(getCurrentBlockMode(editor));
                 setCurrentTextAlign(getCurrentTextAlign(editor));
+                setEditorContentDigest(JSON.stringify(normalizeEditorJsonContent(editor.getJSON())));
                 setHtmlDraft(editor.getHTML());
               }}
               onSelectionUpdate={({ editor }) => {
@@ -2551,8 +3231,11 @@ export default function Editor({
           <fieldset disabled={!canEdit} className="mt-4 min-w-0 max-w-full space-y-3 overflow-x-hidden">
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-stone-500">Post Settings</div>
             <select
+              ref={layoutSelectRef}
               value={data.layout ?? "post"}
-              onChange={(e) => applyDataUpdate((prev) => ({ ...prev, layout: e.target.value }))}
+              onPointerDown={() => markFieldGesture("layout")}
+              onKeyDown={() => markFieldGesture("layout")}
+              onChange={(e) => handleLayoutChange(e.target.value, e.nativeEvent)}
               className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-900"
             >
               <option value="post">Post Layout (default)</option>
@@ -2561,14 +3244,12 @@ export default function Editor({
             </select>
             <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2 py-2 text-xs text-stone-700">
               <input
+                ref={usePasswordCheckboxRef}
                 type="checkbox"
                 checked={Boolean(data.usePassword)}
-                onChange={(e) => {
-                  applyDataUpdate((prev) => ({ ...prev, usePassword: e.target.checked }));
-                  if (!e.target.checked) {
-                    setShowPostPassword(false);
-                  }
-                }}
+                onPointerDown={() => markFieldGesture("usePassword")}
+                onKeyDown={() => markFieldGesture("usePassword")}
+                onChange={(e) => handleUsePasswordChange(e.target.checked, e.nativeEvent)}
                 className="h-4 w-4 accent-black"
               />
               Password Protect
@@ -2580,9 +3261,13 @@ export default function Editor({
                 </span>
                 <div className="flex items-center gap-1">
                   <input
+                    ref={passwordInputRef}
                     type={showPostPassword ? "text" : "password"}
                     value={data.password ?? ""}
-                    onChange={(e) => applyDataUpdate((prev) => ({ ...prev, password: e.target.value }))}
+                    onPointerDown={() => markTextFieldGesture("password")}
+                    onKeyDown={() => markTextFieldGesture("password")}
+                    onPaste={() => markTextFieldGesture("password")}
+                    onInput={(e) => handlePasswordInput(e.currentTarget.value, e.nativeEvent)}
                     placeholder="Enter password"
                     className="w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-xs text-stone-900"
                   />
@@ -2601,9 +3286,12 @@ export default function Editor({
             {commentsPluginEnabled ? (
               <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2 py-2 text-xs text-stone-700">
                 <input
+                  ref={useCommentsCheckboxRef}
                   type="checkbox"
                   checked={useComments}
-                  onChange={(e) => setUseComments(e.target.checked)}
+                  onPointerDown={() => markFieldGesture("useComments")}
+                  onKeyDown={() => markFieldGesture("useComments")}
+                  onChange={(e) => setUseComments(e.target.checked, e.nativeEvent)}
                   className="h-4 w-4 accent-black"
                 />
                 Use comments
@@ -2626,7 +3314,14 @@ export default function Editor({
               const selectedTermIds = selectedTermsByTaxonomy[taxonomy] ?? [];
               const selectedTermIdSet = new Set(selectedTermIds);
               const availableTerms = sectionTerms.filter((term) => !selectedTermIdSet.has(term.id));
-              const hiddenCount = Math.max(0, taxonomyRow.termCount - sectionTerms.length);
+              const canLoadMoreTerms = shouldAllowManualEditorTaxonomyExpansion({
+                taxonomy,
+                termCount: taxonomyRow.termCount,
+                loadedTermsCount: sectionTerms.length,
+              });
+              const hiddenCount = canLoadMoreTerms
+                ? Math.max(0, taxonomyRow.termCount - sectionTerms.length)
+                : 0;
               const inputValue = taxonomyInputByKey[taxonomy] ?? "";
               const listId = `editor-taxonomy-${taxonomy}-suggestions`;
               return (
@@ -2649,7 +3344,7 @@ export default function Editor({
                         }
                       }}
                       placeholder="Type to search or add"
-                      className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
+                    className="min-w-0 w-full rounded border border-stone-300 bg-white px-2 py-1 text-xs"
                       disabled={Boolean(pendingTaxonomyWrites[taxonomy])}
                     />
                     <button

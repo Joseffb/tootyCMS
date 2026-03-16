@@ -34,6 +34,10 @@ import { getSiteDomainPostById } from "../../lib/site-domain-post-store";
 const runId = "e2e-site-lifecycle";
 const appOrigin = getAppOrigin();
 const appHostname = getAppHostname();
+const adminAlias = String(process.env.ADMIN_PATH || "cp")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9-]/g, "") || "cp";
 const secret = String(process.env.NEXTAUTH_SECRET || "").trim();
 
 let lifecycleScope = "shared";
@@ -212,9 +216,14 @@ async function authenticateAsAdmin(page: Page) {
   });
 }
 
-async function gotoAdminPage(page: Page, url: string, timeoutMs = 60_000) {
+async function gotoAdminPage(page: Page, url: string, timeoutMs = 60_000, options?: { allowPathChange?: boolean }) {
+  const normalizeAdminPathname = (value: string) =>
+    value.startsWith(`/app/${adminAlias}/`) ? `/app/${value.slice(`/app/${adminAlias}/`.length)}` : value;
+
   const target = new URL(url);
   target.searchParams.set("__e2e_nav", String(Date.now()));
+  const expectedOrigin = target.origin;
+  const expectedPathname = normalizeAdminPathname(target.pathname);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -245,11 +254,25 @@ async function gotoAdminPage(page: Page, url: string, timeoutMs = 60_000) {
       .getByText(/Application error: a client-side exception has occurred/i)
       .isVisible()
       .catch(() => false);
-    if (!bannerVisible && !siteMissingVisible && !notFoundVisible && !appErrorVisible) return;
+    let landedOnExpectedRoute = false;
+    try {
+      const current = new URL(page.url());
+      landedOnExpectedRoute =
+        current.origin === expectedOrigin && normalizeAdminPathname(current.pathname) === expectedPathname;
+    } catch {
+      landedOnExpectedRoute = false;
+    }
+    const navigationSettled =
+      !bannerVisible &&
+      !siteMissingVisible &&
+      !notFoundVisible &&
+      !appErrorVisible &&
+      (landedOnExpectedRoute || options?.allowPathChange === true);
+    if (navigationSettled) return;
     await page.waitForTimeout(500);
     await page.reload({ waitUntil: "domcontentloaded" });
   }
-  throw new Error(`Admin schema banner did not clear for ${url}`);
+  throw new Error(`Admin navigation did not settle on ${expectedPathname} for ${url}`);
 }
 
 async function expectPageStable(page: Page) {
@@ -473,15 +496,35 @@ async function waitForPublicStatus(
 }
 
 async function waitForEnabledButtonWithReload(page: Page, name: RegExp | string, timeoutMs = 45_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const isReady = async () => {
     const button = page.getByRole("button", { name }).first();
     const visible = await button.isVisible().catch(() => false);
     const enabled = visible ? await button.isEnabled().catch(() => false) : false;
+    return { button, visible, enabled };
+  };
+
+  const startedAt = Date.now();
+  const deadline = Date.now() + timeoutMs;
+  let lastReloadAt = 0;
+  const initialReloadGraceMs = 20_000;
+  while (Date.now() < deadline) {
+    const { visible, enabled } = await isReady();
     if (visible && enabled) return;
-    await page.reload();
-    await page.waitForTimeout(750);
+    await page.waitForTimeout(500);
+    const allowReload =
+      lastReloadAt === 0 ? Date.now() + 500 >= deadline || Date.now() - startedAt >= initialReloadGraceMs : true;
+    if (!allowReload || Date.now() - lastReloadAt < 5_000) {
+      continue;
+    }
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForEditorSurface(page, 20_000, { requireEditable: true });
+    lastReloadAt = Date.now();
   }
+  const finalState = await isReady();
+  if (finalState.visible && finalState.enabled) {
+    return;
+  }
+  await expect(finalState.button).toBeEnabled({ timeout: 2_000 });
   throw new Error(`Timed out waiting for enabled button ${String(name)} on ${page.url()}`);
 }
 
@@ -491,9 +534,7 @@ async function waitForMenuEditorState(
   expected: { location?: string; key?: string },
   timeoutMs = 45_000,
 ) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await gotoAdminPage(page, url);
+  const readState = async () => {
     const editMenuSection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "Edit Menu" }),
     });
@@ -502,8 +543,19 @@ async function waitForMenuEditorState(
     const currentKey = await editMenuSection.locator('input[name="key"]').inputValue().catch(() => "");
     const locationMatches = expected.location ? currentLocation === expected.location : true;
     const keyMatches = expected.key ? currentKey === expected.key : true;
+    return { editMenuSection, currentLocation, currentKey, locationMatches, keyMatches };
+  };
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await gotoAdminPage(page, url);
+    const { locationMatches, keyMatches } = await readState();
     if (locationMatches && keyMatches) return;
     await page.waitForTimeout(1000);
+  }
+  const finalState = await readState();
+  if (finalState.locationMatches && finalState.keyMatches) {
+    return;
   }
   throw new Error(`Timed out waiting for menu editor state on ${url}`);
 }
@@ -1321,7 +1373,9 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
     updatedTagName,
   } = await ensureLifecycleTaxonomySelection(primarySiteId, scope);
 
-  await gotoAdminPage(page, `${appOrigin}/app/site/${primarySiteId}/domain/post/create`);
+  await gotoAdminPage(page, `${appOrigin}/app/site/${primarySiteId}/domain/post/create`, 60_000, {
+    allowPathChange: true,
+  });
   console.log(`[lifecycle:${testInfo.project.name}] opened create route`);
 
   await expectCurrentUrlToMatch(
@@ -1565,6 +1619,7 @@ test("site lifecycle: menu location can move between footer and header", async (
   });
   await editMenuSection.locator('select[name="location"]').selectOption("header");
   await editMenuSection.getByRole("button", { name: "Save Menu" }).click();
+  await expect(editMenuSection.locator('select[name="location"]')).toHaveValue("header", { timeout: 60_000 });
 
   await gotoAdminPage(
     page,

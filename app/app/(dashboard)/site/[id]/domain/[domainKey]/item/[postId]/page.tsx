@@ -4,7 +4,13 @@ import {
 } from "@/components/admin/pending-admin-item-hydration";
 import Editor from "@/components/editor/editor";
 import { getSession } from "@/lib/auth";
-import { getSiteDataDomainByKey, updateDomainPost, updateDomainPostMetadata } from "@/lib/actions";
+import {
+  getAllMetaKeys,
+  getSiteDataDomainByKey,
+  getTaxonomyOverview,
+  getTaxonomyTerms,
+  updateDomainPostMetadata,
+} from "@/lib/actions";
 import db from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
@@ -19,8 +25,14 @@ import { getSiteDomainPostById, listSiteDomainPostMeta } from "@/lib/site-domain
 import { getSiteTaxonomyTables, withSiteTaxonomyTableRecovery } from "@/lib/site-taxonomy-tables";
 import { resolveAuthorizedSiteForAnyCapability } from "@/lib/admin-site-selection";
 import { getDomainPostAdminItemPath } from "@/lib/domain-post-admin-routes";
+import {
+  isEagerEditorTaxonomy,
+  normalizeEditorReferenceData,
+  type EditorReferenceData,
+} from "@/lib/editor-reference-data";
 import { unstable_noStore as noStore } from "next/cache";
 import { defaultEditorContent } from "@/lib/content";
+import { getDomainPostEditorAutosavePath } from "@/lib/editor-autosave-route";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -147,6 +159,31 @@ async function getDomainPostMetaWithRetry(input: {
   return [];
 }
 
+async function getInitialEditorReferenceData(siteId: string): Promise<EditorReferenceData> {
+  const [taxonomyOverviewRows, metaKeySuggestions] = await Promise.all([
+    getTaxonomyOverview(siteId),
+    getAllMetaKeys(),
+  ]);
+  const eagerTaxonomies = taxonomyOverviewRows
+    .map((row) => row.taxonomy)
+    .filter((taxonomy) => isEagerEditorTaxonomy(taxonomy));
+  const eagerTermPairs = await Promise.all(
+    eagerTaxonomies.map(async (taxonomy) => [
+      taxonomy,
+      (await getTaxonomyTerms(siteId, taxonomy)).map((row) => ({
+        id: row.id,
+        name: row.name,
+      })),
+    ] as const),
+  );
+
+  return normalizeEditorReferenceData({
+    taxonomyOverviewRows,
+    taxonomyTermsByKey: Object.fromEntries(eagerTermPairs),
+    metaKeySuggestions,
+  });
+}
+
 export default async function DomainPostItemPage({ params, searchParams }: Props) {
   noStore();
   const session = await getSession();
@@ -201,11 +238,12 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
   }
 
   if (!data && isNewDraft) {
-    const [canCreate, canPublish, writingSettings, commentsPluginEnabled] = await Promise.all([
+    const [canCreate, canPublish, writingSettings, commentsPluginEnabled, initialReferenceData] = await Promise.all([
       userCan("site.content.create", session.user.id, { siteId: effectiveSiteId }),
       userCan("site.content.publish", session.user.id, { siteId: effectiveSiteId }),
       getSiteWritingSettings(effectiveSiteId),
       hasEnabledCommentProvider(effectiveSiteId),
+      getInitialEditorReferenceData(effectiveSiteId),
     ]);
     if (!canCreate) {
       notFound();
@@ -240,14 +278,16 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
             subdomain: site.subdomain ?? null,
           },
         }}
+        initialReferenceData={initialReferenceData}
         defaultEditorMode="rich-text"
         defaultEnableComments={commentsGateEnabled}
         commentsPluginEnabled={commentsGateEnabled}
-        onSave={updateDomainPost}
+        autosaveEndpoint={getDomainPostEditorAutosavePath(resolvedPostId)}
         onUpdateMetadata={updateDomainPostMetadata}
         canEdit
         canPublish={canPublish}
         materializeDraftOnFirstSave
+        editorAutoloadContext="draft-shell"
       />
     );
   }
@@ -264,7 +304,7 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
   const shouldFastPathHydration = isFreshDraft;
   const pendingReadRetryAttempts = isPendingHydration && !isFreshDraft ? 36 : 1;
   const canEditPromise = canUserMutateDomainPost(session.user.id, resolvedPostId, "edit", effectiveSiteId);
-  const [canRead, canPublish, taxonomyRows, metaRows, writingSettings, commentsPluginEnabled, canEdit] = await Promise.all([
+  const [canRead, canPublish, taxonomyRows, metaRows, writingSettings, commentsPluginEnabled, canEdit, initialReferenceData] = await Promise.all([
     data.siteId ? userCan("site.content.read", session.user.id, { siteId: data.siteId }) : Promise.resolve(false),
     data.siteId ? userCan("site.content.publish", session.user.id, { siteId: data.siteId }) : Promise.resolve(false),
     shouldFastPathHydration
@@ -289,6 +329,7 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
     getSiteWritingSettings(effectiveSiteId),
     hasEnabledCommentProvider(effectiveSiteId),
     canEditPromise,
+    getInitialEditorReferenceData(effectiveSiteId),
   ]);
 
   const allowOwnerFreshDraftEdit = canUserOpenFreshDraftEditorShell({
@@ -325,13 +366,15 @@ export default async function DomainPostItemPage({ params, searchParams }: Props
       {isPendingHydration ? <ReplaceAdminItemUrlInPlace canonicalPath={canonicalPath} waitForEditorReady /> : null}
       <Editor
         post={hydratedPost}
+        initialReferenceData={initialReferenceData}
         defaultEditorMode="rich-text"
         defaultEnableComments={commentsGateEnabled}
         commentsPluginEnabled={commentsGateEnabled}
-        onSave={updateDomainPost}
+        autosaveEndpoint={getDomainPostEditorAutosavePath(resolvedPostId)}
         onUpdateMetadata={updateDomainPostMetadata}
         canEdit={canEdit.allowed || allowOwnerFreshDraftEdit}
         canPublish={canPublish}
+        editorAutoloadContext="persisted-item"
       />
     </>
   );

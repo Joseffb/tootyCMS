@@ -51,6 +51,78 @@ terminate_port_processes() {
   done < <(echo "${pids}" | tr ' ' '\n' | sort -u)
 }
 
+stop_test_server() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    terminate_pid "${SERVER_PID}"
+    SERVER_PID=""
+  fi
+  terminate_port_processes "${TEST_PORT}"
+}
+
+wait_for_test_server() {
+  node <<'NODE'
+const http = require("node:http");
+
+const port = Number(process.env.TEST_PORT || "3123");
+const timeoutMs = 120_000;
+const deadline = Date.now() + timeoutMs;
+
+function check() {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/icon.svg",
+      },
+      (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          resolve();
+          return;
+        }
+        reject(new Error(`Unexpected status ${res.statusCode}`));
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(2_000, () => req.destroy(new Error("timeout")));
+  });
+}
+
+(async () => {
+  while (Date.now() < deadline) {
+    try {
+      await check();
+      return;
+    } catch (_error) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("Timed out waiting for integration web server.");
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+}
+
+start_test_server() {
+  stop_test_server
+  : > "${TEST_SERVER_LOG}"
+  NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" >>"${TEST_SERVER_LOG}" 2>&1 &
+  SERVER_PID=$!
+  wait_for_test_server
+}
+
+resolve_playwright_projects() {
+  if [[ -n "${PLAYWRIGHT_INTEGRATION_PROJECTS:-}" ]]; then
+    echo "${PLAYWRIGHT_INTEGRATION_PROJECTS}" | tr ',' '\n' | sed '/^[[:space:]]*$/d'
+    return 0
+  fi
+
+  node "./scripts/list-playwright-projects.mjs" "$@"
+}
+
 copy_if_distinct() {
   local source_file="${1:-}"
   local target_file="${2:-}"
@@ -212,11 +284,7 @@ NODE
 bash "./scripts/bootstrap-test-db.sh"
 copy_if_distinct "tsconfig.json" "${ROOT_TSCONFIG_BACKUP}"
 cleanup() {
-  if [[ -n "${SERVER_PID:-}" ]]; then
-    terminate_pid "${SERVER_PID}"
-  fi
-
-  terminate_port_processes "${TEST_PORT}"
+  stop_test_server
 
   if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
     copy_if_distinct "${ROOT_TSCONFIG_BACKUP}" "tsconfig.json"
@@ -241,55 +309,8 @@ if [[ -f "${ROOT_TSCONFIG_BACKUP}" ]]; then
 fi
 
 : > "${TEST_SERVER_LOG}"
-NEXT_DIST_DIR="${TEST_DIST_DIR}" NEXT_TSCONFIG_PATH="${TEST_TSCONFIG_PATH}" TRACE_PROFILE=Test node "./node_modules/next/dist/bin/next" start --port "${TEST_PORT}" >>"${TEST_SERVER_LOG}" 2>&1 &
-SERVER_PID=$!
-
-node <<'NODE'
-const http = require("node:http");
-
-const port = Number(process.env.TEST_PORT || "3123");
-const timeoutMs = 120_000;
-const deadline = Date.now() + timeoutMs;
-
-function check() {
-  return new Promise((resolve, reject) => {
-    const req = http.get(
-      {
-        hostname: "127.0.0.1",
-        port,
-        path: "/icon.svg",
-      },
-      (res) => {
-        res.resume();
-        if (res.statusCode === 200) {
-          resolve();
-          return;
-        }
-        reject(new Error(`Unexpected status ${res.statusCode}`));
-      },
-    );
-    req.on("error", reject);
-    req.setTimeout(2_000, () => req.destroy(new Error("timeout")));
-  });
-}
-
-(async () => {
-  while (Date.now() < deadline) {
-    try {
-      await check();
-      return;
-    } catch (_error) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  throw new Error("Timed out waiting for integration web server.");
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
-NODE
-
 PLAYWRIGHT_REPORTER="${PLAYWRIGHT_REPORTER:-line}"
+PLAYWRIGHT_DEFAULT_WORKERS="${PLAYWRIGHT_INTEGRATION_WORKERS:-1}"
 
 run_playwright() {
   CI=1 NO_COLOR=1 pnpm exec playwright test --reporter="${PLAYWRIGHT_REPORTER}" "$@"
@@ -321,17 +342,35 @@ has_explicit_workers_arg() {
 
 set +e
 if has_explicit_project_arg "$@"; then
-  run_playwright "$@"
-  PLAYWRIGHT_STATUS=$?
-else
+  start_test_server
   if has_explicit_workers_arg "$@"; then
     run_playwright "$@"
-  elif [[ -n "${PLAYWRIGHT_INTEGRATION_WORKERS:-}" ]]; then
-    run_playwright --workers="${PLAYWRIGHT_INTEGRATION_WORKERS}" "$@"
   else
-    run_playwright "$@"
+    run_playwright --workers="${PLAYWRIGHT_DEFAULT_WORKERS}" "$@"
   fi
   PLAYWRIGHT_STATUS=$?
+else
+  PLAYWRIGHT_PROJECTS=()
+  while IFS= read -r PLAYWRIGHT_PROJECT; do
+    [[ -n "${PLAYWRIGHT_PROJECT}" ]] || continue
+    PLAYWRIGHT_PROJECTS+=("${PLAYWRIGHT_PROJECT}")
+  done < <(resolve_playwright_projects "$@")
+  PLAYWRIGHT_STATUS=0
+  for PLAYWRIGHT_PROJECT in "${PLAYWRIGHT_PROJECTS[@]}"; do
+    [[ -n "${PLAYWRIGHT_PROJECT}" ]] || continue
+    echo "Running Playwright project on fresh server: ${PLAYWRIGHT_PROJECT}"
+    start_test_server
+    if has_explicit_workers_arg "$@"; then
+      run_playwright --project="${PLAYWRIGHT_PROJECT}" "$@"
+    else
+      run_playwright --project="${PLAYWRIGHT_PROJECT}" --workers="${PLAYWRIGHT_DEFAULT_WORKERS}" "$@"
+    fi
+    PLAYWRIGHT_STATUS=$?
+    stop_test_server
+    if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
+      break
+    fi
+  done
 fi
 set -e
 

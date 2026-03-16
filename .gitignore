@@ -13,9 +13,7 @@
 
 # next.js
 /.next/
-/.next-vercel-*/
-/.next-test-*/
-/.next-playwright-harness-*/
+/.next-*/
 /.tsconfig.next-test-*.json
 /.tsconfig.playwright-harness-*.json
 /.tsconfig.root-backup-*.json
@@ -27,12 +25,15 @@
 # misc
 .DS_Store
 *.pem
+.tmp
 
 # debug
+.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+logs/
 logs/traces/
 
 # local env files

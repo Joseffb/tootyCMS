@@ -5,6 +5,7 @@ export default defineConfig([
   ...nextVitals,
   globalIgnores([
     ".next/**",
+    ".next-*/**",
     ".next-test-*/**",
     ".next-playwright-harness-*/**",
     ".next-vercel-dev*/**",

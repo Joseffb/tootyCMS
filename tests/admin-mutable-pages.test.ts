@@ -39,6 +39,7 @@ describe("mutable admin pages", () => {
   it("renders a blank editor shell for /item/{id}?new=1 instead of 404ing missing rows", () => {
     const source = readSource("app/app/(dashboard)/site/[id]/domain/[domainKey]/item/[postId]/page.tsx");
     const editorSource = readSource("components/editor/editor.tsx");
+    const autosaveRouteSource = readSource("lib/editor-autosave-route.ts");
 
     expect(source).toContain('new?: string;');
     expect(source).toContain('const isNewDraft = String(resolvedSearchParams.new || "").trim() === "1";');
@@ -51,6 +52,9 @@ describe("mutable admin pages", () => {
     expect(source).toContain("meta: [],");
     expect(source).toContain("canEdit");
     expect(source).toContain("materializeDraftOnFirstSave");
+    expect(source).toContain("autosaveEndpoint={getDomainPostEditorAutosavePath(resolvedPostId)}");
+    expect(autosaveRouteSource).toContain("export function getDomainPostEditorAutosavePath(postId: string)");
+    expect(autosaveRouteSource).toContain('return `/api/editor/domain-posts/${encodeURIComponent(String(postId || "").trim())}/autosave`;');
     expect(editorSource).toContain("materializeDraftOnFirstSave = false");
     expect(editorSource).toContain("draftShellMaterializedRef");
   });
@@ -58,11 +62,111 @@ describe("mutable admin pages", () => {
   it("marks fresh editor mutations unsaved immediately so first draft autosaves cannot look idle before enqueue", () => {
     const source = readSource("components/editor/editor.tsx");
 
-    expect(source).toContain("const markLocalDirty = () => {");
+    expect(source).toContain('const markLocalDirty = (');
+    expect(source).toContain("type ApplyDataUpdateOptions = {");
+    expect(source).toContain("userMutation?: boolean;");
+    expect(source).toContain("const markEditorGesture = () => {");
     expect(source).toContain('setSaveStatus("unsaved");');
-    expect(source).toContain("markLocalDirty();\n    setData(next);");
-    expect(source).toContain("markLocalDirty();\n    setSelectedTermsByTaxonomy(next);");
-    expect(source).toContain("if (hadLocalEditorMutation) {\n                  markLocalDirty();\n                }");
+    expect(source).toContain("if (options.markDirty) {");
+    expect(source).toContain('{ userMutation: options.userMutation === true }');
+    expect(source).toContain('applyDataUpdate(nextData, { markDirty: true, reason: "field:title", userMutation: true });');
+    expect(source).toContain('reason: "field:description",');
+    expect(source).toContain('reason: "field:slug:draft",');
+    expect(source).toContain('reason: "field:slug:commit",');
+    expect(source).toContain('{ userMutation: true },');
+    expect(source).toContain("const shouldTreatUpdateAsUserEdit =");
+    expect(source).toContain("Date.now() - lastEditorGestureAtRef.current < 1_500 ||");
+    expect(source).toContain('Boolean(transaction?.getMeta?.("paste"))');
+    expect(source).toContain('Boolean(transaction?.getMeta?.("drop"))');
+    expect(source).toContain('markLocalDirty("editor:onUpdate", undefined, { userMutation: true });');
+    expect(source).toContain("markEditorGesture();\n    fn(editor);");
+    expect(source).toContain("markEditorGesture();\n                    return handleCommandNavigation(event);");
+  });
+
+  it("requires recent explicit user intent before persisted editor state can be marked dirty", () => {
+    const source = readSource("components/editor/editor.tsx");
+
+    expect(source).toContain("const EDITOR_USER_INTENT_WINDOW_MS = 5_000;");
+    expect(source).toContain("const hasUserMutationSinceServerStateRef = useRef(false);");
+    expect(source).toContain("const interactionArmedByUserRef = useRef(materializeDraftOnFirstSave);");
+    expect(source).toContain("const lastUserIntentAtRef = useRef<number>(0);");
+    expect(source).toContain("const hasRecentUserIntent = (now = Date.now()) =>");
+    expect(source).toContain("const resetInteractionArm = (reason = \"unknown\") => {");
+    expect(source).toContain("const armInteractionForMutation = (reason = \"unknown\") => {");
+    expect(source).toContain("cause: \"inactiveEditorSession\"");
+    expect(source).toContain("reason: \"inactiveEditorSession\"");
+    expect(source).toContain("cause: \"missingRecentUserIntent\"");
+    expect(source).toContain("reason: \"missingUserMutationSinceServerState\"");
+    expect(source).toContain("postEffectDroppedNonUserLocalState");
+    expect(source).toContain("armInteractionForMutation(\"editorGesture\");");
+    expect(source).toContain("armInteractionForMutation(`fieldGesture:${field}`);");
+    expect(source).toContain("resetInteractionArm(\"postEffect:serverStateApplied\");");
+    expect(source).toContain("resetInteractionArm(\"saveQueue:onSaved\");");
+    expect(source).toContain("resetInteractionArm(\"syncEditorSessionSnapshot\");");
+    expect(source).toContain("const markUserIntent = () => {");
+    expect(source).toContain("markUserIntent();\n    interactionArmedByUserRef.current = true;");
+    expect(source).toContain("lastUserIntentAtRef.current = 0;");
+  });
+
+  it("uses a single autosave coordinator for editor document changes instead of saving directly from onUpdate", () => {
+    const source = readSource("components/editor/editor.tsx");
+
+    expect(source).toContain("function normalizeEditorJsonContent(input: JSONContent | null | undefined): JSONContent {");
+    expect(source).toContain("content: Array.isArray(input.content) ? input.content : [],");
+    expect(source).toContain("const [editorContentDigest, setEditorContentDigest] = useState<string>(");
+    expect(source).toContain("setEditorContentDigest(JSON.stringify(effectiveContent));");
+    expect(source).toContain("setEditorContentDigest(JSON.stringify(normalizeEditorJsonContent(editor.getJSON())));");
+    expect(source).toContain('if (saveStatus !== "unsaved") return;');
+    expect(source).toContain("if (!hasUserMutationSinceServerStateRef.current) {");
+    expect(source).toContain("editorContentDigest,");
+    expect(source).toContain("saveStatus,");
+    expect(source).not.toContain("enqueueSave(imageCountChanged);");
+    expect(source).toContain("autosaveEndpoint = null");
+    expect(source).toContain("const persistSavePayload = async (payload:");
+    expect(source).toContain("const resolvedAutosaveEndpoint = resolveDomainPostEditorAutosavePath(payload.id, autosaveEndpoint);");
+    expect(source).toContain('if (resolvedAutosaveEndpoint) {');
+    expect(source).toContain('const response = await fetch(resolvedAutosaveEndpoint, {');
+    expect(source).toContain('method: "POST",');
+    expect(source).toContain('credentials: "same-origin",');
+    expect(source).toContain('cache: "no-store",');
+    expect(source).toContain('body: JSON.stringify(payload),');
+    expect(source).toContain("const result = await persistSavePayload(payload);");
+  });
+
+  it("treats server-seeded category and tag reference data as authoritative so persisted item pages do not background-refetch empty eager taxonomies", () => {
+    const source = readSource("components/editor/editor.tsx");
+    const taxonomyLoadingSource = readSource("lib/editor-taxonomy-loading.ts");
+    const referenceCacheSource = readSource("lib/editor-taxonomy-reference-cache.ts");
+    const referenceDataSource = readSource("lib/editor-reference-data.ts");
+
+    expect(taxonomyLoadingSource).toContain("export function buildEditorTaxonomyLoadState(");
+    expect(taxonomyLoadingSource).toContain("export function buildEditorTaxonomyAutoloadState(");
+    expect(taxonomyLoadingSource).toContain("export function hasSeededEditorTaxonomyReferenceData(");
+    expect(taxonomyLoadingSource).toContain("export function getEditorTaxonomiesNeedingAutoload(");
+    expect(taxonomyLoadingSource).toContain("Object.prototype.hasOwnProperty.call(taxonomyTermsByKey, taxonomy)");
+    expect(referenceCacheSource).toContain("if (cachedRows !== null) {");
+    expect(referenceDataSource).toContain("export function shouldAllowManualEditorTaxonomyExpansion");
+    expect(referenceDataSource).toContain("if (isEagerEditorTaxonomy(taxonomy)) return false;");
+    expect(taxonomyLoadingSource).toContain("export function shouldFetchEditorTaxonomyTermsFromNetwork");
+    expect(taxonomyLoadingSource).toContain("if (isEagerEditorTaxonomy(taxonomy)) {");
+    expect(source).toContain("const [taxonomyLoadStateByKey, setTaxonomyLoadStateByKey] = useState");
+    expect(source).toContain("const [taxonomyAutoloadStateByKey, setTaxonomyAutoloadStateByKey] = useState");
+    expect(source).toContain("shouldFetchEditorTaxonomyTermsFromNetwork({ taxonomy: normalizedTaxonomy })");
+    expect(source).toContain("readEditorTaxonomyReferenceCache({");
+    expect(source).toContain("Persisted item editors already receive eager taxonomy terms from the server.");
+    expect(source).toContain("editorReferenceSeededFromServer");
+    expect(source).toContain("Object.prototype.hasOwnProperty.call(seededReferenceData.taxonomyTermsByKey, taxonomy)");
+    expect(source).toContain('const EDITOR_RUNTIME_VERSION = "2026-03-13.3";');
+    expect(source).toContain('const EDITOR_RUNTIME_VERSION_KEY = "tooty.editor.runtime.version";');
+    expect(source).toContain("function clearAllEditorSessionState()");
+    expect(source).toContain('recordEditorDebugEvent("editorRuntimeVersionReset"');
+    expect(source).toContain("if (resolvedEditorAutoloadContext !== \"persisted-item\") return;");
+    expect(source).toContain('recordEditorDebugEvent("persistedItemEagerTaxonomiesSettled"');
+    expect(source).toContain("if (isEagerEditorTaxonomy(taxonomy)) {");
+    expect(source).toContain("const canLoadMoreTerms = shouldAllowManualEditorTaxonomyExpansion({");
+    expect(source).not.toContain("fetchEditorReferenceData(siteId)");
+    expect(source).not.toContain("editorReferenceBootstrapStateRef");
+    expect(source).not.toContain("const needsRefresh = eagerTaxonomies.some((taxonomy) => (taxonomyTermsByKey[taxonomy] ?? []).length === 0);");
   });
 
   it("marks the domain item page as no-store and retries first-read misses after create redirects", () => {
@@ -183,19 +287,30 @@ describe("mutable admin pages", () => {
   });
 
   it("keeps Category and Tags visible in the editor even before taxonomy overview hydration completes", () => {
-    const source = readSource("components/editor/editor.tsx");
+    const editorSource = readSource("components/editor/editor.tsx");
+    const referenceSource = readSource("lib/editor-reference-data.ts");
+    const taxonomyLoadingSource = readSource("lib/editor-taxonomy-loading.ts");
 
-    expect(source).toContain("const DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS: TaxonomyOverviewRow[] = [");
-    expect(source).toContain('{ taxonomy: "category", label: "Category", termCount: 0 }');
-    expect(source).toContain('{ taxonomy: "tag", label: "Tags", termCount: 0 }');
-    expect(source).toContain("const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>(");
-    expect(source).toContain("DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS");
-    expect(source).toContain("const sorted = mergeTaxonomyOverviewRows(rows);");
-    expect(source).toContain("setTaxonomyOverviewRows(DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS);");
+    expect(referenceSource).toContain("export const DEFAULT_EDITOR_TAXONOMY_OVERVIEW_ROWS");
+    expect(referenceSource).toContain('{ taxonomy: "category", label: "Category", termCount: 0 }');
+    expect(referenceSource).toContain('{ taxonomy: "tag", label: "Tags", termCount: 0 }');
+    expect(referenceSource).toContain("taxonomyTermsByKey[row.taxonomy] = [];");
+    expect(editorSource).toContain("const [taxonomyOverviewRows, setTaxonomyOverviewRows] = useState<TaxonomyOverviewRow[]>(");
+    expect(editorSource).toContain("normalizedInitialReferenceData.taxonomyOverviewRows");
+    expect(editorSource).toContain("const seededReferenceData = normalizeEditorReferenceData(normalizedInitialReferenceData);");
+    expect(editorSource).toContain("editorReferenceSeededFromServer");
+    expect(editorSource).toContain("const [taxonomyAutoloadStateByKey, setTaxonomyAutoloadStateByKey] = useState");
+    expect(editorSource).toContain("persistedItemEagerTaxonomiesSettled");
+    expect(editorSource).not.toContain("fetchEditorReferenceData(siteId)");
+    expect(editorSource).not.toContain("editorReferenceBootstrapStateRef");
+    expect(taxonomyLoadingSource).toContain("hasSeededEditorTaxonomyReferenceData");
+    expect(taxonomyLoadingSource).toContain("buildEditorTaxonomyAutoloadState");
+    expect(taxonomyLoadingSource).toContain("getEditorTaxonomiesNeedingAutoload");
   });
 
   it("ignores stale pooled post payloads for recently mutated editor state so taxonomy and slug edits do not regress", () => {
     const source = readSource("components/editor/editor.tsx");
+    const convergenceSource = readSource("lib/editor-convergence.ts");
 
     expect(source).toContain(
       "const lastRecoveredCacheAtRef = useRef<number>(initialClientState.cachedEditorState?.savedAt ?? 0);",
@@ -204,38 +319,50 @@ describe("mutable admin pages", () => {
     expect(source).toContain(
       "const termNameByIdRef = useRef<Record<number, string>>(initialClientState.termNameById);",
     );
-    expect(source).toContain("const lastKnownEditorMutationAt = Math.max(");
     expect(source).toContain("const incomingServerSignature = buildEditorStateSignature({");
     expect(source).toContain("const incomingSignature = shouldUseCachedEditorState ? cachedEditorState!.signature : incomingServerSignature;");
-    expect(source).toContain("const mountedTitleValue = titleInputRef.current?.value;");
-    expect(source).toContain("const mountedDescriptionValue = descriptionInputRef.current?.value;");
-    expect(source).toContain("const mountedSlugValue = slugInputRef.current?.value;");
     expect(source).toContain("const currentClientSignature = buildEditorStateSignature({");
-    expect(source).toContain("const preserveStaleIncomingPost =");
-    expect(source).toContain("const preserveRecentLocalDraft =");
-    expect(source).toContain("const preserveAnyRecentLocalEdit =");
-    expect(source).toContain("Date.now() - lastKnownEditorMutationAt < 30_000");
-    expect(source).toContain("incomingSignature !== lastSavedSignatureRef.current");
-    expect(source).toContain("Date.now() - lastLocalMutationAtRef.current < 30_000");
-    expect(source).toContain("currentClientSignature !== incomingSignature");
-    expect(source).toContain("title: mountedTitleValue ?? titleValueRef.current ?? dataRef.current?.title ?? \"\",");
-    expect(source).toContain("description: mountedDescriptionValue ?? descriptionValueRef.current ?? dataRef.current?.description ?? \"\",");
-    expect(source).toContain("slug: mountedSlugValue ?? slugValueRef.current ?? dataRef.current?.slug ?? \"\",");
-    expect(source).toContain("preserveAnyRecentLocalEdit ||");
-    expect(source).toContain("(preserveStaleIncomingPost && !shouldUseCachedEditorState)");
+    expect(source).toContain("const convergence = computeEditorConvergence({");
+    expect(source).toContain("title: titleValueRef.current ?? dataRef.current?.title ?? \"\",");
+    expect(source).toContain("description: descriptionValueRef.current ?? dataRef.current?.description ?? \"\",");
+    expect(source).toContain("slug: slugValueRef.current ?? dataRef.current?.slug ?? \"\",");
+    expect(source).not.toContain("const mountedTitleValue = titleInputRef.current?.value;");
+    expect(source).not.toContain("const mountedDescriptionValue = descriptionInputRef.current?.value;");
+    expect(source).not.toContain("const mountedSlugValue = slugInputRef.current?.value;");
     expect(source).toContain("lastLocalMutationAtRef.current = Date.now();");
-    expect(source).toContain("lastRecoveredCacheAtRef.current = cachedEditorState!.savedAt;");
+    expect(source).toContain("lastRecoveredCacheAtRef.current = shouldUseCachedEditorState ? cachedEditorState!.savedAt : 0;");
     expect(source).toContain("dataRef.current = next;");
     expect(source).toContain("selectedTermsByTaxonomyRef.current = next;");
     expect(source).toContain("lastLocalMutationAtRef.current = Date.now();");
+    expect(convergenceSource).toContain("const lastKnownEditorMutationAt = Math.max(");
+    expect(convergenceSource).toContain("const preserveStaleIncomingPost =");
+    expect(convergenceSource).toContain("const preserveRecentLocalDraft =");
+    expect(convergenceSource).toContain("now - lastKnownEditorMutationAt < EDITOR_CONVERGENCE_WINDOW_MS");
+    expect(convergenceSource).toContain("input.incomingSignature !== input.lastSavedSignature");
+    expect(convergenceSource).toContain("now - input.lastLocalMutationAt < EDITOR_CONVERGENCE_WINDOW_MS");
+    expect(convergenceSource).toContain("input.currentClientSignature !== input.incomingSignature");
+    expect(convergenceSource).toContain("(preserveStaleIncomingPost && !input.shouldUseCachedEditorState)");
   });
 
-  it("persists recent saved editor state in session storage so remounted item routes can recover taxonomy chips under pooled lag", () => {
+  it("uses one canonical signature for persisted item reconciliation and save queue state", () => {
+    const source = readSource("components/editor/editor.tsx");
+
+    expect(source).toContain("return buildEditorSaveSignature({");
+    expect(source).toContain("selectedTermsByTaxonomy: normalizedSelectedTermsByTaxonomy,");
+    expect(source).toContain("const lastQueuedSignatureRef = useRef<string>(initialClientState.incomingSignature);");
+    expect(source).toContain("const lastSavedSignatureRef = useRef<string>(initialClientState.incomingSignature);");
+    expect(source).toContain("lastSavedSignatureRef.current = incomingSignature;");
+    expect(source).toContain("lastQueuedSignatureRef.current = incomingSignature;");
+  });
+
+  it("uses session storage only for unsaved local editor work so saved routes do not resurrect stale drafts", () => {
     const source = readSource("components/editor/editor.tsx");
 
     expect(source).toContain('const EDITOR_SESSION_CACHE_KEY_PREFIX = "tooty.editor.snapshot.v1:";');
     expect(source).toContain("function readEditorSessionCache(postId: string)");
     expect(source).toContain("function writeEditorSessionCache(");
+    expect(source).toContain("dirty: boolean;");
+    expect(source).toContain("if (parsed.dirty !== true) {");
     expect(source).toContain("const enqueueSave = (immediate = false, snapshot?: EditorSaveSnapshot) => {");
     expect(source).toContain("writeEditorSessionCache(");
     expect(source).toContain("const cachedEditorState = readEditorSessionCache(post.id);");
@@ -244,8 +371,8 @@ describe("mutable admin pages", () => {
     expect(source).toContain("const shouldUseCachedEditorState =");
     expect(source).toContain("selectedTermsByTaxonomy: payload.selectedTermsByTaxonomy");
     expect(source).toContain("termNameById: termNameByIdRef.current");
-    expect(source).toContain("setInitialContent(effectiveContent);");
-    expect(source).toContain("lastSavedSignatureRef.current = cachedEditorState!.signature;");
+    expect(source).toContain("clearEditorSessionCache(payload.id);");
+    expect(source).toContain("clearEditorSessionCache(nextPost.id);");
   });
 
   it("keeps selected taxonomy chip labels visible even when a late save resolves before React state effects catch up", () => {
@@ -262,40 +389,28 @@ describe("mutable admin pages", () => {
   it("preserves newer local slug, content, and taxonomy state when an older temp-draft save resolves late", () => {
     const source = readSource("components/editor/editor.tsx");
 
-    expect(source).toContain("const preserveNewerLocalDraft = hasNewerQueuedDraft();");
+    expect(source).toContain("const preserveNewerLocalDraft = shouldPreserveNewerLocalDraft({");
     expect(source).toContain("const currentLocalPost = dataRef.current;");
     expect(source).toContain("const currentLocalSelectedTermsByTaxonomy = selectedTermsByTaxonomyRef.current;");
     expect(source).toContain("const currentLocalMetaEntries = metaEntriesRef.current;");
-    expect(source).toContain("const hasMountedTitleField = titleInputRef.current != null;");
-    expect(source).toContain("const hasMountedDescriptionField = descriptionInputRef.current != null;");
-    expect(source).toContain("const hasMountedSlugField = slugInputRef.current != null;");
-    expect(source).toContain('const liveTitleValue = titleInputRef.current?.value ?? "";');
-    expect(source).toContain('const liveDescriptionValue = descriptionInputRef.current?.value ?? "";');
-    expect(source).toContain('const liveSlugValue = slugInputRef.current?.value ?? "";');
-    expect(source).toContain("title:");
-    expect(source).toContain("preserveNewerLocalDraft || hasMountedTitleField");
-    expect(source).toContain("(liveTitleValue || titleValueRef.current || currentLocalPost.title || payload.title)");
-    expect(source).toContain("preserveNewerLocalDraft || hasMountedSlugField");
-    expect(source).toContain("slug:");
+    expect(source).toContain("const currentLocalTitle = titleValueRef.current;");
+    expect(source).toContain("const currentLocalDescription = descriptionValueRef.current;");
+    expect(source).toContain("title: preserveNewerLocalDraft ? currentLocalTitle : payload.title,");
+    expect(source).toContain("slug: currentLocalSlug,");
+    expect(source).not.toContain("const hasMountedTitleField = titleInputRef.current != null;");
+    expect(source).not.toContain('const liveTitleValue = titleInputRef.current?.value ?? "";');
     expect(source).toContain("const nextSelectedTermsByTaxonomy = normalizeSelectedTermsByTaxonomy(");
     expect(source).toContain("preserveNewerLocalDraft ? currentLocalSelectedTermsByTaxonomy : payload.selectedTermsByTaxonomy");
   });
 
-  it("builds explicit save snapshots from live mounted title, description, and slug fields before falling back to cached refs", () => {
+  it("builds explicit save snapshots from controlled refs instead of mounted DOM fields", () => {
     const source = readSource("components/editor/editor.tsx");
 
-    expect(source).toContain("const hasMountedTitleField = titleInputRef.current != null;");
-    expect(source).toContain("const hasMountedDescriptionField = descriptionInputRef.current != null;");
-    expect(source).toContain("const hasMountedSlugField = slugInputRef.current != null;");
-    expect(source).toContain('const liveTitleValue = titleInputRef.current?.value ?? "";');
-    expect(source).toContain('const liveDescriptionValue = descriptionInputRef.current?.value ?? "";');
-    expect(source).toContain('const liveSlugValue = slugInputRef.current?.value ?? "";');
-    expect(source).toContain('const nextTitle = hasMountedTitleField ? liveTitleValue : titleValueRef.current || latest.title || "";');
-    expect(source).toContain("const nextDescription = hasMountedDescriptionField");
-    expect(source).toContain("? liveDescriptionValue");
-    expect(source).toContain(": descriptionValueRef.current || latest.description || \"\";");
-    expect(source).toContain("const nextSlug = normalizeSeoSlug(");
-    expect(source).toContain("hasMountedSlugField ? liveSlugValue : slugValueRef.current || latest.slug || \"\",");
+    expect(source).toContain("const nextTitle = titleValueRef.current;");
+    expect(source).toContain("const nextDescription = descriptionValueRef.current;");
+    expect(source).toContain("const nextSlug = normalizeSeoSlug(slugValueRef.current || latest.slug || \"\");");
+    expect(source).not.toContain("const hasMountedTitleField = titleInputRef.current != null;");
+    expect(source).not.toContain('const liveTitleValue = titleInputRef.current?.value ?? "";');
   });
 
   it("uses the normal autosave queue for first temp-draft materialization instead of forcing an immediate title-only save", () => {
@@ -303,21 +418,31 @@ describe("mutable admin pages", () => {
 
     expect(source).not.toContain("const shouldCreateImmediateDraft =");
     expect(source).not.toContain("enqueueSave(true, { data: nextData });");
-    expect(source).toContain("const handleTitleInput = (value: string) => {");
-    expect(source).toContain('if ((current.title ?? "") === value && titleValueRef.current === value) {');
+    expect(source).toContain("const handleTitleInput = (value: string, nativeEvent?: Event | null) => {");
+    expect(source).toContain("shouldAcceptEditorTextFieldMutation({");
     expect(source).toContain("const nextData = { ...current, title: value };");
-    expect(source).toContain("applyDataUpdate(nextData);");
+    expect(source).toContain('applyDataUpdate(nextData, { markDirty: true, reason: "field:title", userMutation: true });');
   });
 
-  it("keeps the title input responsive in WebKit while using idempotent handlers to avoid duplicate metadata churn", () => {
+  it("gates text-field dirtying behind real user input so restored field state cannot re-arm autosave", () => {
     const source = readSource("components/editor/editor.tsx");
+    const helperSource = readSource("lib/editor-text-input.ts");
 
-    expect(source).toContain('onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value)}');
-    expect(source).toContain('onChange={(e) => handleTitleInput(e.currentTarget.value)}');
-    expect(source).toContain('onChange={(e) => handleDescriptionInput(e.currentTarget.value)}');
-    expect(source).toContain('onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}');
-    expect(source).not.toContain('onInput={(e) => handleDescriptionInput((e.target as HTMLTextAreaElement).value)}');
-    expect(source).not.toContain('onInput={(e) => handleSlugDraftInput((e.target as HTMLInputElement).value)}');
+    expect(helperSource).toContain("export function shouldAcceptEditorTextFieldMutation");
+    expect(helperSource).toContain("export function shouldAcceptEditorTextFieldCommit");
+    expect(helperSource).not.toContain("const trusted = input.trusted !== false;");
+    expect(helperSource).not.toContain("const inputType = String(input.inputType || \"\").trim();");
+    expect(helperSource).not.toContain("if (trusted && inputType) return true;");
+    expect(source).toContain("const markTextFieldGesture = (field: \"title\" | \"description\" | \"slug\" | \"password\") => {");
+    expect(source).toContain('onPointerDown={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onKeyDown={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onPaste={() => markTextFieldGesture("title")}');
+    expect(source).toContain('onInput={(e) => handleTitleInput((e.currentTarget as HTMLInputElement).value, e.nativeEvent)}');
+    expect(source).not.toContain('onChange={(e) => handleTitleInput(e.currentTarget.value)}');
+    expect(source).toContain('onInput={(e) => handleDescriptionInput(e.currentTarget.value, e.nativeEvent)}');
+    expect(source).not.toContain('onChange={(e) => handleDescriptionInput(e.currentTarget.value)}');
+    expect(source).toContain('onInput={(e) => handleSlugDraftInput(e.currentTarget.value, e.nativeEvent)}');
+    expect(source).not.toContain('onChange={(e) => handleSlugDraftInput(e.currentTarget.value)}');
   });
 
   it("eagerly initializes editor content on first mount so fresh draft item routes do not render a blank shell while waiting for client effects", () => {

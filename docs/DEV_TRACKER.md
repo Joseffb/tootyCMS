@@ -27,6 +27,52 @@ Current tree status:
 
 ## Active Items
 
+### 9. Editor autosave loop under local `vercel dev`
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/editor/editor.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/admin-mutable-pages.test.ts`
+- Scope:
+  - stop the article editor from re-queuing saves indefinitely while idle under `pnpm vercel:dev`
+  - keep one autosave coordinator for content, taxonomy, and meta state
+- Affected surfaces:
+  - article editor content autosave
+  - local `vercel dev` authoring workflow
+  - save-status settling after server-action refreshes
+- Current notes:
+  - root cause on persisted `/domain/{domainKey}/item/{postId}` pages was a split autosave model plus overly permissive local session recovery, which allowed server-action reconciliation and browser-restored field state to re-arm autosave while the page was idle
+  - fixed by:
+    - keeping one autosave coordinator
+    - making persisted item sessions passive until a fresh user interaction re-arms mutation handling
+    - clearing saved-session cache state after successful persistence so persisted items no longer bootstrap from stale local drafts
+  - verified with focused Vitest coverage and a dedicated Playwright regression that leaves an existing persisted item page idle and asserts there are no background autosave POSTs
+
+### 10. Editor taxonomy reference eager-load loop on persisted item pages
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/editor/editor.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/editor-taxonomy-loading.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/editor-taxonomy-loading.test.ts`
+- Scope:
+  - stop repeated `/api/editor/reference?...taxonomy=category|tag` GET loops on persisted item pages
+  - make eager taxonomy loading distinguish `loaded and empty` from `not loaded yet`
+- Affected surfaces:
+  - category/tag reference loading in the editor
+  - local `vercel dev` persisted item authoring flow
+  - eager taxonomy hydration under pooled and dev-mode rerenders
+- Current notes:
+  - root cause was leftover client bootstrap/fallback logic on persisted item pages even though the route already server-seeded category and tag reference data
+  - fixed by:
+    - removing the client-side persisted-item fallback fetch path for editor reference data
+    - making eager `category` and `tag` loads fail closed to seeded/cache state on persisted item pages
+    - treating loaded-empty eager taxonomies as settled instead of “not loaded yet”
+    - making `/api/editor/reference?taxonomy=category|tag` fail closed so persisted item editors cannot silently fall back to a deprecated eager-taxonomy compatibility read path
+    - normalizing taxonomy keys before the fail-closed route check so stale or mixed-case clients cannot bypass the eager-taxonomy guard
+    - forcing `vercel:dev` to start from a clean `.next-vercel-dev` tree so local stale bundles cannot preserve deprecated eager-taxonomy fetch behavior across restarts
+  - verified with focused source-level tests plus a dedicated Playwright regression that opens `More` on an existing persisted item page and asserts there is no repeated `/api/editor/reference?...taxonomy=category|tag` loop
+
 ### 8. Local `vercel dev` isolation and lock clarity
 
 - Status: `verified`
@@ -46,6 +92,7 @@ Current tree status:
   - `vercel:dev` now disables the upgrade prompt via `NO_UPDATE_NOTIFIER=1`
   - it generates and uses a managed Vercel-only tsconfig
   - it aborts clearly when another Vercel dev session already owns the lock, instead of surfacing a confusing proxy 404
+  - it now also aborts when any repo-local `next dev` or `vercel dev` process is already running for `tooty-cms`, because split local runtimes were able to revive stale route bundles and produce editor-only behavior that no longer matched current source
 
 ### 7. Integration harness slot-lock cleanup race
 

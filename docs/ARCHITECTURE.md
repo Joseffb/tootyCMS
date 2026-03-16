@@ -82,6 +82,21 @@ Canonical primaries include:
    - `render:layout`
 4. Final page is rendered.
 
+## Editor autoloaders and article state
+
+Editor autoloaders on article/item pages must track explicit article-owned load state.
+
+- `loaded and empty` is a valid terminal state and must not be treated as `not loaded yet`
+- background loaders must consult article/editor state before re-fetching article-owned resources such as taxonomy reference data
+- autoloader helpers must update and consult article-owned settled state before issuing any background fetch
+- editor autoloaders must not use empty arrays alone as a refresh trigger
+- article editor state must converge to one authoritative loaded state before additional eager refreshes are scheduled
+- eager autoload retry budgets must be driven by article-owned evidence such as selected terms, pending writes, or known nonzero term counts; they must not blindly retry empty reference loads
+- article autoloaders must carry an explicit settled state so a previously-attempted empty load cannot silently regress into a new background fetch loop
+- persisted article/item pages that already received seeded editorial taxonomy reference data must not background-fetch `category` or `tag` again just to expand or confirm the same state
+- client-side category/tag reference helpers on persisted article/item pages must fail closed to local/cache-only state rather than issuing follow-up network requests
+- the `/api/editor/reference?taxonomy=category|tag` compatibility path is forbidden for persisted article/item editors; eager editorial taxonomies must be seeded by the item route itself and direct eager reads must fail closed
+
 ## Dashboard flow
 
 1. Themes and plugins are discovered from filesystem folders.

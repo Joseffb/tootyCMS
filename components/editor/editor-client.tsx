@@ -14,6 +14,7 @@ function EditorClientComponent({ content, setContent }: EditorClientProps) {
   return (
     <EditorRoot>
       <EditorContent
+        immediatelyRender={false}
         initialContent={content}
         onUpdate={({ editor }) => {
           const updated = editor.getJSON();

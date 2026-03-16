@@ -23,6 +23,9 @@ describe("prepare next tsconfig", () => {
           "next-env.d.ts",
           "**/*.ts",
           ".next/types/**/*.ts",
+          ".next/dev/types/**/*.ts",
+          ".next-audit/types/**/*.ts",
+          ".next-liveidle/dev/types/**/*.ts",
           ".next-test-*/types/**/*.ts",
           ".next-playwright-harness-*/dev/types/**/*.ts",
           ".next-vercel-dev/types/**/*.ts",
@@ -34,12 +37,36 @@ describe("prepare next tsconfig", () => {
 
     expect(config.include).toContain(".next-test-3123/types/**/*.ts");
     expect(config.include).toContain(".next-test-3123/dev/types/**/*.ts");
+    expect(config.include).not.toContain(".next/types/**/*.ts");
+    expect(config.include).not.toContain(".next/dev/types/**/*.ts");
+    expect(config.include).not.toContain(".next-audit/types/**/*.ts");
+    expect(config.include).not.toContain(".next-liveidle/dev/types/**/*.ts");
     expect(config.include).not.toContain(".next-test-*/types/**/*.ts");
     expect(config.include).not.toContain(".next-playwright-harness-*/dev/types/**/*.ts");
     expect(config.include).not.toContain(".next-vercel-dev/types/**/*.ts");
     expect(config.exclude).toContain(".next-test-*/**");
     expect(config.exclude).toContain(".next-playwright-harness-*/**");
     expect(config.exclude).toContain(".next-vercel-dev*/**");
+  });
+
+  it("restores the default next includes when no dist dir override is used", () => {
+    const config = buildManagedTsconfig(
+      {
+        include: [
+          "next-env.d.ts",
+          "**/*.ts",
+          ".next-vercel-dev/types/**/*.ts",
+          ".next-audit/dev/types/**/*.ts",
+        ],
+        exclude: ["node_modules"],
+      },
+      "",
+    );
+
+    expect(config.include).toContain(".next/types/**/*.ts");
+    expect(config.include).toContain(".next/dev/types/**/*.ts");
+    expect(config.include).not.toContain(".next-vercel-dev/types/**/*.ts");
+    expect(config.include).not.toContain(".next-audit/dev/types/**/*.ts");
   });
 
   it("rebases path aliases for generated configs outside repo root", () => {

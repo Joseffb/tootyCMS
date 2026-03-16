@@ -19,6 +19,16 @@ The kernel is the extension runtime. Everything else integrates through it.
 - New hook/filter surfaces should be generic, reusable, and justified at the platform level.
 - If a governance-sensitive capability needs a hard kill switch, prefer a core-team-controlled spine service plugin boundary over embedding that behavior directly into kernel-specific special cases.
 
+## Stateful Autoloaders
+
+Core autoloaders must check the current article/item state before fetching or re-fetching supporting data.
+
+- Persisted item pages must prefer server-seeded state and fail closed against background autoload loops.
+- Empty but loaded reference sets are authoritative state, not an invitation to retry forever.
+- Draft-shell hydration may use bounded recovery fetches, but persisted items must not behave like unresolved draft shells.
+- Any new editor/sidebar autoloader must document which item states can trigger it and what terminal loaded state looks like.
+- Direct eager editorial taxonomy reads (`category`, `tag`) are not a fallback API for persisted item editors; those taxonomies must arrive through seeded route state and per-taxonomy eager reads must fail closed.
+
 ## Core types
 
 - `ActionName`: predefined lifecycle events.

@@ -550,7 +550,7 @@ describe("updateDomainPost", () => {
 
   it("serializes taxonomy relationship rewrites at the site level to avoid shared-table deadlocks", () => {
     const source = readFileSync(
-      path.join(process.cwd(), "lib/actions.ts"),
+      path.join(process.cwd(), "lib/domain-post-persistence.ts"),
       "utf8",
     );
 
@@ -560,7 +560,7 @@ describe("updateDomainPost", () => {
 
   it("retries taxonomy relationship rewrites on deadlock-class site write conflicts", () => {
     const source = readFileSync(
-      path.join(process.cwd(), "lib/actions.ts"),
+      path.join(process.cwd(), "lib/domain-post-persistence.ts"),
       "utf8",
     );
 
