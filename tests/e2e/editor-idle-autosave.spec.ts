@@ -43,9 +43,25 @@ async function gotoEditorItemPage(page: Page, url: string, timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      await page.goto(url, { waitUntil: "networkidle" });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
       await expect(page).toHaveURL(url);
-      return;
+      const appErrorVisible = await page
+        .getByText(/Application error: a server-side exception has occurred while loading/i)
+        .isVisible()
+        .catch(() => false);
+      if (appErrorVisible) {
+        await page.waitForTimeout(1_000);
+        continue;
+      }
+      const titleVisible = await page.getByPlaceholder("Title").isVisible().catch(() => false);
+      const saveStatusVisible = await page
+        .locator("[data-editor-save-status]")
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (titleVisible || saveStatusVisible) {
+        return;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (
