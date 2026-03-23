@@ -569,19 +569,7 @@ async function waitForEditorSurface(
   timeoutMs = 60_000,
   options?: { requireEditable?: boolean },
 ) {
-  const deadline = Date.now() + timeoutMs;
-  const startedAt = Date.now();
-  let lastKnownUrl = page.url();
-  const requireEditable = Boolean(options?.requireEditable);
-  while (Date.now() < deadline) {
-    const activeUrl = page.url();
-    if (activeUrl && !activeUrl.startsWith("chrome-error://")) {
-      lastKnownUrl = activeUrl;
-    } else if (lastKnownUrl) {
-      await page.goto(lastKnownUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
-      await page.waitForTimeout(1000);
-      continue;
-    }
+  const readEditorSurfaceState = async () => {
     const titlePlaceholderVisible = await page.getByPlaceholder("Title").isVisible().catch(() => false);
     const titleTextboxVisible = await page.getByRole("textbox", { name: "Title" }).isVisible().catch(() => false);
     const saveButtonVisible = await page.getByRole("button", { name: "Save Changes" }).isVisible().catch(() => false);
@@ -596,6 +584,27 @@ async function waitForEditorSurface(
         ? await page.getByRole("textbox", { name: "Title" }).isEditable().catch(() => false)
         : false;
     const editorReady = titlePlaceholderVisible || titleTextboxVisible || (saveButtonVisible && slugTextboxVisible);
+    return {
+      editorReady,
+      readOnlyVisible,
+      titleEditable,
+    };
+  };
+
+  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  let lastKnownUrl = page.url();
+  const requireEditable = Boolean(options?.requireEditable);
+  while (Date.now() < deadline) {
+    const activeUrl = page.url();
+    if (activeUrl && !activeUrl.startsWith("chrome-error://")) {
+      lastKnownUrl = activeUrl;
+    } else if (lastKnownUrl) {
+      await page.goto(lastKnownUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+      await page.waitForTimeout(1000);
+      continue;
+    }
+    const { editorReady, readOnlyVisible, titleEditable } = await readEditorSurfaceState();
     if (editorReady && (!requireEditable || (titleEditable && !readOnlyVisible))) {
       return;
     }
@@ -629,6 +638,12 @@ async function waitForEditorSurface(
     }
     await page.waitForTimeout(1000);
   }
+
+  const { editorReady, readOnlyVisible, titleEditable } = await readEditorSurfaceState();
+  if (editorReady && (!requireEditable || (titleEditable && !readOnlyVisible))) {
+    return;
+  }
+
   throw new Error(`Timed out waiting for editor surface on ${page.url()}`);
 }
 

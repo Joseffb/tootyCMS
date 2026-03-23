@@ -27,6 +27,35 @@ Current tree status:
 
 ## Active Items
 
+### 13. Domain admin cards/list view toggle
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/app/(dashboard)/site/[id]/domain/[domainKey]/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/domain-posts.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/domain-post-list-table.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/domain-post-admin-view.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/domain-post-admin-routes.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/domain-posts.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/site-domain-posts-page.test.tsx`
+- Scope:
+  - add a generic list view alongside the existing domain-post card grid
+  - keep the current card grid as the default view
+  - use a query-param-backed admin view toggle that can work for any data domain and remember the last selected view
+- Affected surfaces:
+  - site domain admin listing
+  - operator scan/edit workflow for posts and other domain-backed entries
+  - admin route/query-param view state
+- Current notes:
+  - implemented a WordPress-style top-right cards/list toggle on the site domain admin page
+  - list view now renders a structured row/table workspace while cards remain the default
+  - current view is remembered through a cookie-backed preference, with query params still taking precedence
+  - focused Vitest coverage is green for page toggle state, list rendering, and canonical edit/view links
+  - isolated worktrees now resolve relative `THEMES_PATH` and `PLUGINS_PATH` entries against the primary repo root when the worktree-local sibling path is missing, so shared plugin/theme repos stay discoverable in runtime and integration flows
+  - the site lifecycle e2e helper now performs a final editor-surface readiness check before timing out, which removed a Firefox timeout boundary flake on the page editor persistence step
+  - full `npm run test` is green on this branch
+  - full `npm run test:integration` is green on this branch across `chromium`, `firefox`, `webkit`, and `edge`
+
 ### 11. GitHub Core CI portability for `vercel:dev` wrapper tests
 
 - Status: `verified`

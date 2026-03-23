@@ -5,17 +5,21 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import Image from "next/image";
 import DomainPostCard from "@/components/domain-post-card";
+import DomainPostListTable from "@/components/domain-post-list-table";
 import { getSiteDataDomainByKey } from "@/lib/actions";
 import { listSiteDomainPosts } from "@/lib/site-domain-post-store";
+import { type DomainPostAdminView } from "@/lib/domain-post-admin-view";
 
 export default async function DomainPosts({
   siteId,
   domainKey,
   limit,
+  view = "cards",
 }: {
   siteId: string;
   domainKey: string;
   limit?: number;
+  view?: DomainPostAdminView;
 }) {
   const session = await getSession();
   if (!session?.user) {
@@ -45,11 +49,15 @@ export default async function DomainPosts({
   });
 
   return rows.length > 0 ? (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {rows.map((post) => (
-        <DomainPostCard key={post.id} data={{ ...post, site }} siteId={siteId} domainKey={domainKey} />
-      ))}
-    </div>
+    view === "list" ? (
+      <DomainPostListTable rows={rows} site={site} siteId={siteId} domainKey={domainKey} />
+    ) : (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {rows.map((post) => (
+          <DomainPostCard key={post.id} data={{ ...post, site }} siteId={siteId} domainKey={domainKey} />
+        ))}
+      </div>
+    )
   ) : (
     <div className="flex flex-col items-center space-x-4">
       <h1 className="font-cal text-4xl">No Entries Yet</h1>
