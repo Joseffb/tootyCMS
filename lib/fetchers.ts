@@ -176,7 +176,14 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
         published: true,
       });
       if (!post) return null;
-      const mdxSource = await getMdxSource(post.content ?? "");
+      const [mdxSource, metaRows] = await Promise.all([
+        getMdxSource(post.content ?? ""),
+        listSiteDomainPostMeta({
+          siteId: site.id,
+          dataDomainKey,
+          postId: post.id,
+        }),
+      ]);
       return {
         ...post,
         site,
@@ -186,6 +193,7 @@ export async function getDomainPostData(domain: string, dataDomainKey: string, s
           label: post.dataDomainLabel,
         },
         mdxSource,
+        meta: metaRows,
         adjacentPosts: [],
       };
     },

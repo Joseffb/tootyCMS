@@ -48,6 +48,9 @@ function collectAllowedOrigins() {
     const portSuffix = !rootHasPort && localLike && nextAuthPort ? `:${nextAuthPort}` : "";
 
     origins.add(rootHasPort ? rootDomain : `${rootHostOnly}${portSuffix}`);
+    if (rootHostOnly) {
+      origins.add(`*.${rootHostOnly}${portSuffix}`);
+    }
   }
 
   return [...origins].filter(Boolean);

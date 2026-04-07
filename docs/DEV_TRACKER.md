@@ -27,6 +27,88 @@ Current tree status:
 
 ## Active Items
 
+### 14. Robert Betan dedicated Vercel deploy worktree scaffold
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/robert_betan_vercel_deploy`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - create a dedicated assembled deployment checkout for the Robert Betan site
+  - keep `tooty-cms` as the CMS code of record while making the deploy checkout self-contained for Vercel
+  - ensure the deploy checkout stays attached to Robert Betan Git history instead of becoming a separate orphan repo
+  - add a repeatable sync script that pulls core app code plus Robert Betan themes/plugins into one place
+- Affected surfaces:
+  - Robert Betan deploy assembly workflow
+  - future Vercel deploys for the Robert Betan site
+- Required validation:
+  1. create `robert_betan_vercel_deploy` as an RB git worktree
+  2. run the sync script successfully
+  3. confirm repo-local `themes/` and `plugins/` include the Robert Betan overlays
+- Current notes:
+  - created `/Users/joseffbetancourt/PhpstormProjects/robert_betan_vercel_deploy`
+  - added deploy-local `.env.example`, `.gitignore`, and `scripts/sync-from-sources.sh`
+  - converted the folder into a `git worktree` attached to `/Users/joseffbetancourt/PhpstormProjects/robert_betan` on branch `codex/rb-vercel-deploy`
+  - corrected the sync script so it preserves worktree git metadata instead of deleting `.git`
+  - verified the first sync completed successfully into the RB-attached deploy worktree
+  - verified repo-local `themes/` contains `robert-betan` and `robert-betan-sub`
+  - verified repo-local `plugins/` contains `tooty-story-teller`
+
+### 13. Robert Betan local universe content fill and Story Teller demo seeding
+
+- Status: `verified`
+- Area:
+  - local Robert Betan runtime content in the `robertbetan_` prefixed development database
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/fetchers.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/next.config.js`
+  - `/Users/joseffbetancourt/PhpstormProjects/tootyCMS-custom-themes/robert-betan-sub/templates/single.html`
+- Scope:
+  - populate the local Robert Betan subsites with first-pass universe copy, character/profile-style entries, and hub content
+  - keep `main` positioned as the orchestration site
+  - make `axed` the first concrete Story Teller demo surface so the plugin can be reviewed on a real entry
+- Affected surfaces:
+  - `main.robertbetan.test`
+  - `axed.robertbetan.test`
+  - `cigars.robertbetan.test`
+  - `lexia.robertbetan.test`
+  - `car.robertbetan.test`
+  - `shorts.robertbetan.test`
+  - `audio.robertbetan.test`
+  - `writing.robertbetan.test`
+- Required validation:
+  1. local DB inventory before/after seeding
+  2. browser verification of the seeded public pages
+  3. browser verification that the Story Teller demo renders on `axed`
+- Current notes:
+  - seeded first-pass local content across `main`, `axed`, `cigars`, `lexia`, `car`, `shorts`, `audio`, and `writing`
+  - kept `main` as the orchestration hub and seeded `axed` with a page-based Story Teller demo surface
+  - fixed a local Robert Betan theme regression where `robert-betan-sub/templates/single.html` used a Nunjucks include pattern that broke server-side detail rendering
+  - fixed core local multi-site dev host allowance so branded `*.robertbetan.test` origins are accepted by Next dev
+  - fixed core domain-detail loading so non-`post` entries expose meta rows to runtime plugins; this was required for page-based Story Teller payloads to render
+  - verified by local DB inventory, local HTTP/browser checks for `main`, `axed`, and `cigars`, and direct HTML/runtime inspection showing Story Teller gutter/action/runtime markup plus seeded artifact payload on `axed`
+
+### 12. Global `AGENTS.md` base policy with project overlays
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/AGENTS.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - replace a project-blended execution constitution with a reusable global `AGENTS.md`
+  - isolate project-specific rules into explicit overlay sections instead of mixing them into the base policy
+  - make delegation guidance capability-aware so the file remains portable across Codex environments
+- Affected surfaces:
+  - repo-level Codex execution guidance
+  - future multi-project agent policy reuse
+  - project-boundary and validation expectations for Tooty/Fernain and Lyra overlays
+- Current notes:
+  - user requested a global design review rather than a Tooty-only policy file
+  - drafting a base-plus-overlays structure so repo-specific roots, workflows, and validation gates stay scoped to named projects
+  - created a root `AGENTS.md` that separates global execution policy from named project overlays
+  - delegation guidance is now capability-aware so the file remains portable even when subagent tooling is unavailable
+  - docs-only validation completed with manual consistency review and `git diff --check`
+
 ### 11. GitHub Core CI portability for `vercel:dev` wrapper tests
 
 - Status: `verified`
@@ -299,3 +381,36 @@ An item can move to `verified` only when:
 4. both full gates pass:
    - `npm run test`
    - `npm run test:integration`
+
+### 15. Render policy contract, baseline audit, and first public-route cache correction
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/[domain]/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/RENDER_POLICY.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/RENDER_POLICY_AUDIT_2026-04-07.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - codify an explicit render-policy contract for public/admin/API surfaces
+  - re-run the public-route rendering audit against the new contract with file/line evidence
+  - convert the top-level public entry routes (`/` and `/[domain]`) from unconditional dynamic rendering to ISR with dev-only no-store behavior
+- Affected surfaces:
+  - rendering governance docs
+  - public-route cache/dynamic audit baseline
+  - root site public homepage rendering
+  - domain homepage rendering
+- Required validation:
+  1. `npm run test`
+  2. `npm run test:integration`
+- Current notes:
+  - added `docs/RENDER_POLICY.md` as the authoritative contract for surface-level render behavior
+  - recorded a baseline audit in `docs/RENDER_POLICY_AUDIT_2026-04-07.md`
+  - converted `app/page.tsx` and `app/[domain]/page.tsx` from `dynamic = "force-dynamic"` to `revalidate = 60`
+  - added development-only `unstable_noStore()` in the two public entry routes so local development stays request-fresh without forcing dynamic rendering in production
+  - `npm run test` is green on the current tree
+  - `next build` within `npm run test` still classifies `/` and `/[domain]` as dynamic (`ƒ`) routes
+  - `npm run test:integration` is green and its build classifies `/` as dynamic (`ƒ`) and `/[domain]` as SSG (`●`)
+  - executed render classification is still environment-sensitive, so the cache-first contract is not yet satisfied deterministically
+  - current remaining explicit public-route violation is `app/sitemap.xml/route.tsx`
+  - this slice is verified as a first correction and audit update, with follow-up render determinism work still remaining

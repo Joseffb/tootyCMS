@@ -5,6 +5,7 @@ import { getThemeAssetsForSite } from "@/lib/theme-runtime";
 import Script from "next/script";
 import { getInstallState } from "@/lib/install-state";
 import { redirect } from "next/navigation";
+import { unstable_noStore as noStore } from "next/cache";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 import { getAdminPathAlias } from "@/lib/admin-path";
 import { getThemeCacheBustToken, withCacheBust } from "@/lib/theme-cache-bust";
@@ -13,7 +14,7 @@ export const metadata: Metadata = {
   title: "Tooty CMS",
   description: "Tooty CMS",
 };
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 function normalizeConfiguredHost(value: string) {
   return String(value || "")
@@ -25,6 +26,10 @@ function normalizeConfiguredHost(value: string) {
 }
 
 export default async function RootPage() {
+  if (process.env.NODE_ENV === "development") {
+    noStore();
+  }
+
   const installState = await getInstallState();
   if (installState.setupRequired) {
     redirect("/setup");

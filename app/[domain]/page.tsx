@@ -15,8 +15,9 @@ import { buildArchivePath, buildDetailPath } from "@/lib/permalink";
 import { getThemeRenderContext } from "@/lib/theme-render-context";
 import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu, normalizeMenuItemsForPermalinks } from "@/lib/menu-system";
+import { unstable_noStore as noStore } from "next/cache";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 function normalizeConfiguredHost(value: string) {
   return String(value || "")
@@ -102,6 +103,10 @@ interface Panel {
 type Params = Promise<{ domain: string }>;
 
 export default async function SiteHomePage({ params }: { params: Params }) {
+  if (process.env.NODE_ENV === "development") {
+    noStore();
+  }
+
   const { domain } = await params;
   const decodedDomain = decodeURIComponent(domain);
 
