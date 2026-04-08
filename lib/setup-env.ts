@@ -378,25 +378,14 @@ async function upsertVercelEnvVar(
   value: string,
   projectId: string,
   authToken: string,
+  existingEnvIds: string[],
   teamId?: string,
 ) {
   const qs = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
   const base = `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}`;
 
-  const listRes = await fetch(`${base}/env${qs}`, {
-    headers: { Authorization: `Bearer ${authToken}` },
-    cache: "no-store",
-  });
-  if (!listRes.ok) {
-    throw new Error(`Failed listing Vercel env vars for ${key}.`);
-  }
-  const listJson = (await listRes.json()) as {
-    envs?: Array<{ id: string; key: string; target?: string[] }>;
-  };
-  const existing = (listJson.envs ?? []).filter((entry) => entry.key === key);
-
-  for (const envVar of existing) {
-    await fetch(`${base}/env/${encodeURIComponent(envVar.id)}${qs}`, {
+  for (const envId of existingEnvIds) {
+    await fetch(`${base}/env/${encodeURIComponent(envId)}${qs}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${authToken}` },
       cache: "no-store",
@@ -423,6 +412,46 @@ async function upsertVercelEnvVar(
   }
 }
 
+async function listVercelEnvVarIdsByKey(
+  projectId: string,
+  authToken: string,
+  teamId?: string,
+) {
+  const qs = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+  const base = `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}`;
+  const listRes = await fetch(`${base}/env${qs}`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+    cache: "no-store",
+  });
+  if (!listRes.ok) {
+    throw new Error("Failed listing Vercel env vars.");
+  }
+  const listJson = (await listRes.json()) as {
+    envs?: Array<{ id: string; key: string; target?: string[] }>;
+  };
+  const byKey = new Map<string, string[]>();
+  for (const entry of listJson.envs ?? []) {
+    const key = String(entry.key || "").trim();
+    const id = String(entry.id || "").trim();
+    if (!key || !id) continue;
+    const existing = byKey.get(key) ?? [];
+    existing.push(id);
+    byKey.set(key, existing);
+  }
+  return byKey;
+}
+
+function getVercelEnvPayloadEntries(payload: Record<string, string>) {
+  const entries: Array<[string, string]> = [];
+  for (const field of SETUP_ENV_FIELDS) {
+    if (!ALLOWED_KEYS.has(field.key)) continue;
+    const value = String(payload[field.key] ?? "").trim();
+    if (!value) continue;
+    entries.push([field.key, value]);
+  }
+  return entries;
+}
+
 async function saveVercelEnvValues(payload: Record<string, string>) {
   const projectId = String(payload.PROJECT_ID_VERCEL ?? process.env.PROJECT_ID_VERCEL ?? "").trim();
   const authToken = String(payload.AUTH_BEARER_TOKEN ?? process.env.AUTH_BEARER_TOKEN ?? "").trim();
@@ -435,13 +464,19 @@ async function saveVercelEnvValues(payload: Record<string, string>) {
   }
 
   trace("setup-env", "saving vercel env values", { projectId, hasTeamId: Boolean(teamId) });
-  for (const field of SETUP_ENV_FIELDS) {
-    const key = field.key;
-    if (!ALLOWED_KEYS.has(key)) continue;
-    const value = String(payload[key] ?? "").trim();
-    await upsertVercelEnvVar(key, value, projectId, authToken, teamId || undefined);
+  const entries = getVercelEnvPayloadEntries(payload);
+  const existingEnvIdsByKey = await listVercelEnvVarIdsByKey(projectId, authToken, teamId || undefined);
+  for (const [key, value] of entries) {
+    await upsertVercelEnvVar(
+      key,
+      value,
+      projectId,
+      authToken,
+      existingEnvIdsByKey.get(key) ?? [],
+      teamId || undefined,
+    );
   }
-  trace("setup-env", "saved vercel env values", { keyCount: SETUP_ENV_FIELDS.length });
+  trace("setup-env", "saved vercel env values", { keyCount: entries.length });
   return {
     backend: "vercel",
     persisted: true,

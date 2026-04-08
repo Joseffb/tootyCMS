@@ -28,6 +28,9 @@ import {
   REQUIRED_SETUP_TABLE_SUFFIXES,
 } from "@/lib/setup-schema";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const AUTH_SESSION_COOKIE_NAMES = [
   "__Secure-next-auth.session-token",
   "next-auth.session-token",

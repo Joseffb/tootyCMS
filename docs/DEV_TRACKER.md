@@ -473,3 +473,5 @@ An item can move to `verified` only when:
   - `npx vitest run tests/setup-env.test.ts` and `npx vitest run tests/setup-env-route.test.ts` are green
   - `npm run test` is green
   - `npm run test:integration` is green after rerunning sequentially; the earlier Firefox failure was caused by parallel gate contention, not by this setup-env change
+  - follow-up preview debugging on 2026-04-08 found `/api/setup/env` timing out on Vercel after 10 seconds during setup
+  - fixed by giving the setup route a larger Vercel function budget and reducing Vercel env sync from per-field list/delete/create cycles to a single env listing plus populated-key upserts only

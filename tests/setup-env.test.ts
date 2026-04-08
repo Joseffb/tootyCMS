@@ -132,6 +132,9 @@ describe("setup env persistence", () => {
     expect(mocks.writeFile).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalled();
     expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("/v9/projects/prj_123/env?teamId=team_123")).length,
+    ).toBe(1);
+    expect(
       fetchMock.mock.calls.some(([url]) => String(url).includes("/v10/projects/prj_123/env?teamId=team_123")),
     ).toBe(true);
   });
