@@ -11,10 +11,37 @@ type DispatchInput = {
   slug?: string[];
 };
 
+const BLOCKED_PLUGIN_ROUTE_HEADERS = new Set([
+  "authorization",
+  "connection",
+  "content-length",
+  "cookie",
+  "forwarded",
+  "host",
+  "set-cookie",
+  "transfer-encoding",
+  "upgrade",
+  "x-real-ip",
+]);
+
+const BLOCKED_PLUGIN_ROUTE_HEADER_PREFIXES = [
+  "cf-",
+  "sec-",
+  "x-forwarded-",
+  "x-vercel-",
+];
+
 function normalizeHeaders(headers: Headers) {
   const out: Record<string, string> = {};
   headers.forEach((value, key) => {
-    out[String(key || "").toLowerCase()] = String(value || "");
+    const normalizedKey = String(key || "").toLowerCase();
+    if (
+      BLOCKED_PLUGIN_ROUTE_HEADERS.has(normalizedKey) ||
+      BLOCKED_PLUGIN_ROUTE_HEADER_PREFIXES.some((prefix) => normalizedKey.startsWith(prefix))
+    ) {
+      return;
+    }
+    out[normalizedKey] = String(value || "");
   });
   return out;
 }

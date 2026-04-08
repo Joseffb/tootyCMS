@@ -102,6 +102,17 @@ const REQUIRED_NETWORK_TABLES = [
   { table_name: `${PREFIX}network_webhook_subscriptions` },
 ];
 
+function flattenStatementText(statement: unknown): string {
+  if (Array.isArray((statement as { queryChunks?: unknown[] } | null)?.queryChunks)) {
+    return (statement as { queryChunks: unknown[] }).queryChunks.map((chunk) => flattenStatementText(chunk)).join("");
+  }
+  if (Array.isArray((statement as { value?: unknown[] } | null)?.value)) {
+    return (statement as { value: unknown[] }).value.map((entry) => flattenStatementText(entry)).join("");
+  }
+  if (typeof statement === "string") return statement;
+  return String(statement ?? "");
+}
+
 describe("db health version tracking", () => {
   beforeEach(() => {
     mocks.execute.mockReset();
@@ -235,11 +246,7 @@ describe("db health version tracking", () => {
 
   it("routes site-scoped bootstrap through the locked site helper families", async () => {
     mocks.execute.mockImplementation(async (statement: unknown) => {
-      const text = Array.isArray((statement as { queryChunks?: Array<{ value?: string[] }> } | null)?.queryChunks)
-        ? (statement as { queryChunks: Array<{ value?: string[] }> }).queryChunks
-            .flatMap((chunk) => chunk.value || [])
-            .join("")
-        : String(statement ?? "");
+      const text = flattenStatementText(statement);
       if (text.includes('SELECT "id" FROM')) {
         return { rows: [{ id: "site-under-load" }] };
       }
@@ -259,11 +266,7 @@ describe("db health version tracking", () => {
     ]);
     const statements: string[] = [];
     mocks.execute.mockImplementation(async (statement: unknown) => {
-      const text = Array.isArray((statement as { queryChunks?: Array<{ value?: string[] }> } | null)?.queryChunks)
-        ? (statement as { queryChunks: Array<{ value?: string[] }> }).queryChunks
-            .flatMap((chunk) => chunk.value || [])
-            .join("")
-        : String(statement ?? "");
+      const text = flattenStatementText(statement);
       statements.push(text);
       if (text.includes('SELECT "id" FROM')) {
         return { rows: [{ id: "site-under-load" }] };
@@ -274,7 +277,7 @@ describe("db health version tracking", () => {
     await applyPendingDatabaseMigrations();
 
     expect(statements.some((text) => text.includes('DELETE FROM "tooty_site_site-under-load_domain_post_meta" legacy'))).toBe(true);
-    expect(statements.some((text) => text.includes('SET "key" = \'_view_count\''))).toBe(true);
+    expect(statements.some((text) => text.includes('SET "key" = _view_count'))).toBe(true);
   });
 
   it("is idempotent across two migration runs with no duplicate state or version drift", async () => {

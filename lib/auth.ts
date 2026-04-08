@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { getServerSession, type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import db from "./db";
@@ -24,6 +25,35 @@ import {
 const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
 export const MIMIC_ACTOR_COOKIE = "tooty_mimic_actor";
 export const MIMIC_TARGET_COOKIE = "tooty_mimic_target";
+export const MIMIC_SIGNATURE_COOKIE = "tooty_mimic_signature";
+export const MIMIC_SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
+
+function getMimicSigningSecret() {
+  return String(process.env.NEXTAUTH_SECRET || "").trim();
+}
+
+function createMimicSigningMessage(actorId: string, targetId: string) {
+  return `${actorId}:${targetId}`;
+}
+
+export function createMimicCookieSignature(actorId: string, targetId: string) {
+  const normalizedActorId = String(actorId || "").trim();
+  const normalizedTargetId = String(targetId || "").trim();
+  const signingKey = getMimicSigningSecret();
+  if (!normalizedActorId || !normalizedTargetId || !signingKey) return "";
+  return createHmac("sha256", signingKey)
+    .update(createMimicSigningMessage(normalizedActorId, normalizedTargetId))
+    .digest("hex");
+}
+
+export function verifyMimicCookieSignature(actorId: string, targetId: string, signature: string) {
+  const normalizedSignature = String(signature || "").trim();
+  const expected = createMimicCookieSignature(actorId, targetId);
+  if (!expected || !normalizedSignature || expected.length !== normalizedSignature.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(normalizedSignature));
+}
 
 function normalizeCookieDomain(value: string) {
   const trimmed = value.trim();
@@ -412,7 +442,16 @@ export async function getSession() {
   const store = await cookies();
   const actorId = String(store.get(MIMIC_ACTOR_COOKIE)?.value || "").trim();
   const targetId = String(store.get(MIMIC_TARGET_COOKIE)?.value || "").trim();
-  if (!actorId || !targetId || actorId !== session.user.id || targetId === actorId) {
+  const signature = String(store.get(MIMIC_SIGNATURE_COOKIE)?.value || "").trim();
+  if (
+    !actorId ||
+    !targetId ||
+    !signature ||
+    actorId !== session.user.id ||
+    targetId === actorId ||
+    currentUser.role !== NETWORK_ADMIN_ROLE ||
+    !verifyMimicCookieSignature(actorId, targetId, signature)
+  ) {
     return session;
   }
 
@@ -426,7 +465,7 @@ export async function getSession() {
       role: true,
     },
   });
-  if (!target) return baseSession;
+  if (!target) return session;
   const targetProfileImageUrl = await getUserMetaValue(target.id, PROFILE_IMAGE_META_KEY);
   const targetResolvedImage = resolveProfileImageUrl({
     profileImageUrl: targetProfileImageUrl,

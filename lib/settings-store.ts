@@ -8,12 +8,26 @@ let ensurePromise: Promise<void> | null = null;
 
 type SqlExecutor = { execute: typeof db.execute };
 
-function isTransientWriteError(error: unknown) {
+function getTransientDbErrorDetails(error: unknown) {
   const code =
     typeof error === "object" && error && "code" in error
       ? String((error as { code?: unknown }).code || "")
       : "";
-  return code === "40P01" || code === "55P03";
+  const message = error instanceof Error ? error.message : String(error || "");
+  return { code, message };
+}
+
+function isTransientDbError(error: unknown) {
+  const { code, message } = getTransientDbErrorDetails(error);
+  if (code === "40P01" || code === "55P03" || code === "57P01" || code === "57P02" || code === "57P03") {
+    return true;
+  }
+  if (code === "ECONNRESET" || code === "ETIMEDOUT") return true;
+  return (
+    message.includes("Connection terminated unexpectedly") ||
+    message.includes("terminating connection due to administrator command") ||
+    message.includes("Client has encountered a connection error and is not queryable")
+  );
 }
 
 function isDuplicatePgTypeError(error: unknown) {
@@ -40,7 +54,23 @@ async function withWriteRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T
     try {
       return await run();
     } catch (error) {
-      if (!isTransientWriteError(error) || attempt === attempts) {
+      if (!isTransientDbError(error) || attempt === attempts) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 125 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+async function withReadRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isTransientDbError(error) || attempt === attempts) {
         throw error;
       }
       lastError = error;
@@ -169,63 +199,67 @@ function isSiteScopedKey(key: string) {
 }
 
 export async function getSettingByKey(key: string) {
-  await ensureSettingsTables();
   const normalized = normalize(key);
   if (!normalized) return undefined;
-  if (isSiteScopedKey(normalized)) {
-    const parts = parseSiteScopedKeyParts(normalized);
-    if (!parts) return undefined;
-    const info = await ensureSiteSettingsTable(parts.siteId);
-    const rows = (await db.execute(
-      sql`SELECT "value" FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} WHERE "key" = ${parts.localKey} LIMIT 1`,
-    )) as { rows?: Array<{ value?: string | null }> };
-    return rows.rows?.[0]?.value || undefined;
-  }
-  const row = await db.query.systemSettings.findFirst({
-    where: eq(systemSettings.key, normalized),
-    columns: { value: true },
+  return withReadRetry(async () => {
+    await ensureSettingsTables();
+    if (isSiteScopedKey(normalized)) {
+      const parts = parseSiteScopedKeyParts(normalized);
+      if (!parts) return undefined;
+      const info = await ensureSiteSettingsTable(parts.siteId);
+      const rows = (await db.execute(
+        sql`SELECT "value" FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} WHERE "key" = ${parts.localKey} LIMIT 1`,
+      )) as { rows?: Array<{ value?: string | null }> };
+      return rows.rows?.[0]?.value || undefined;
+    }
+    const row = await db.query.systemSettings.findFirst({
+      where: eq(systemSettings.key, normalized),
+      columns: { value: true },
+    });
+    return row?.value;
   });
-  return row?.value;
 }
 
 export async function getSettingsByKeys(keys: string[]) {
-  await ensureSettingsTables();
   const normalized = Array.from(new Set(keys.map(normalize).filter(Boolean)));
   const siteKeys = normalized.filter((key) => isSiteScopedKey(key));
   const systemKeys = normalized.filter((key) => !isSiteScopedKey(key));
-  const out: Record<string, string> = {};
+  return withReadRetry(async () => {
+    await ensureSettingsTables();
+    const out: Record<string, string> = {};
 
-  if (systemKeys.length > 0) {
-    const rows = await db
-      .select({ key: systemSettings.key, value: systemSettings.value })
-      .from(systemSettings)
-      .where(inArray(systemSettings.key, systemKeys));
-    for (const row of rows) out[row.key] = row.value;
-  }
-
-  if (siteKeys.length > 0) {
-    const bySite = new Map<string, string[]>();
-    for (const key of siteKeys) {
-      const parts = parseSiteScopedKeyParts(key);
-      if (!parts) continue;
-      const list = bySite.get(parts.siteId) ?? [];
-      list.push(parts.localKey);
-      bySite.set(parts.siteId, list);
+    if (systemKeys.length > 0) {
+      const rows = await db
+        .select({ key: systemSettings.key, value: systemSettings.value })
+        .from(systemSettings)
+        .where(inArray(systemSettings.key, systemKeys));
+      for (const row of rows) out[row.key] = row.value;
     }
-    for (const [siteId, localKeys] of bySite.entries()) {
-      const info = await ensureSiteSettingsTable(siteId);
-      const rows = (await db.execute(
-        sql`SELECT "key", "value" FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} WHERE "key" IN (${sql.join(localKeys.map((k) => sql`${k}`), sql`,`)})`,
-      )) as { rows?: Array<{ key?: string | null; value?: string | null }> };
-      for (const row of rows.rows || []) {
-        const localKey = normalize(row.key);
-        if (!localKey) continue;
-        out[`site_${siteId}_${localKey}`] = String(row.value || "");
+
+    if (siteKeys.length > 0) {
+      const bySite = new Map<string, string[]>();
+      for (const key of siteKeys) {
+        const parts = parseSiteScopedKeyParts(key);
+        if (!parts) continue;
+        const list = bySite.get(parts.siteId) ?? [];
+        list.push(parts.localKey);
+        bySite.set(parts.siteId, list);
+      }
+      for (const [siteId, localKeys] of bySite.entries()) {
+        const info = await ensureSiteSettingsTable(siteId);
+        const rows = (await db.execute(
+          sql`SELECT "key", "value" FROM ${sql.raw(`"${info.settingsTable.replace(/"/g, "\"\"")}"`)} WHERE "key" IN (${sql.join(localKeys.map((k) => sql`${k}`), sql`,`)})`,
+        )) as { rows?: Array<{ key?: string | null; value?: string | null }> };
+        for (const row of rows.rows || []) {
+          const localKey = normalize(row.key);
+          if (!localKey) continue;
+          out[`site_${siteId}_${localKey}`] = String(row.value || "");
+        }
       }
     }
-  }
 
-  return out;
+    return out;
+  });
 }
 
 export async function setSettingByKey(key: string, value: string) {
@@ -289,54 +323,56 @@ export async function deleteSettingsByKeys(keys: string[]) {
 }
 
 export async function listSettingsByLikePatterns(patterns: string[]) {
-  await ensureSettingsTables();
   const normalized = patterns.map(normalize).filter(Boolean);
   if (normalized.length === 0) return [] as Array<{ key: string; value: string }>;
 
-  const sitePatterns = normalized.filter((pattern) => pattern.startsWith("site_"));
-  const systemPatterns = normalized.filter((pattern) => !pattern.startsWith("site_"));
-  const rows: Array<{ key: string; value: string }> = [];
+  return withReadRetry(async () => {
+    await ensureSettingsTables();
+    const sitePatterns = normalized.filter((pattern) => pattern.startsWith("site_"));
+    const systemPatterns = normalized.filter((pattern) => !pattern.startsWith("site_"));
+    const rows: Array<{ key: string; value: string }> = [];
 
-  if (systemPatterns.length > 0) {
-    const conditions = systemPatterns.map((pattern) => like(systemSettings.key, pattern));
-    const found = await db
-      .select({ key: systemSettings.key, value: systemSettings.value })
-      .from(systemSettings)
-      .where(or(...conditions));
-    rows.push(...found);
-  }
+    if (systemPatterns.length > 0) {
+      const conditions = systemPatterns.map((pattern) => like(systemSettings.key, pattern));
+      const found = await db
+        .select({ key: systemSettings.key, value: systemSettings.value })
+        .from(systemSettings)
+        .where(or(...conditions));
+      rows.push(...found);
+    }
 
-  if (sitePatterns.length > 0) {
-    const registries = await listSiteSettingsRegistries();
-    for (const registry of registries) {
-      const localPatterns = sitePatterns
-        .map((pattern) => {
-          const parts = parseSiteScopedKeyParts(pattern.replace("%", `${registry.siteId}`));
-          if (parts?.siteId === registry.siteId) return parts.localKey;
-          if (pattern.startsWith(`site_${registry.siteId}_`)) {
-            return pattern.slice(`site_${registry.siteId}_`.length);
-          }
-          if (pattern.startsWith("site_%_")) return pattern.slice("site_%_".length);
-          return "";
-        })
-        .filter(Boolean);
-      if (!localPatterns.length) continue;
-      const whereSql = sql.join(localPatterns.map((pattern) => sql`"key" LIKE ${pattern}`), sql` OR `);
-      const found = (await db.execute(sql`
-        SELECT "key", "value"
-        FROM ${sql.raw(`"${registry.settingsTable.replace(/"/g, "\"\"")}"`)}
-        WHERE ${whereSql}
-      `)) as { rows?: Array<{ key?: string | null; value?: string | null }> };
-      for (const row of found.rows || []) {
-        const localKey = normalize(row.key);
-        if (!localKey) continue;
-        rows.push({
-          key: `site_${registry.siteId}_${localKey}`,
-          value: String(row.value || ""),
-        });
+    if (sitePatterns.length > 0) {
+      const registries = await listSiteSettingsRegistries();
+      for (const registry of registries) {
+        const localPatterns = sitePatterns
+          .map((pattern) => {
+            const parts = parseSiteScopedKeyParts(pattern.replace("%", `${registry.siteId}`));
+            if (parts?.siteId === registry.siteId) return parts.localKey;
+            if (pattern.startsWith(`site_${registry.siteId}_`)) {
+              return pattern.slice(`site_${registry.siteId}_`.length);
+            }
+            if (pattern.startsWith("site_%_")) return pattern.slice("site_%_".length);
+            return "";
+          })
+          .filter(Boolean);
+        if (!localPatterns.length) continue;
+        const whereSql = sql.join(localPatterns.map((pattern) => sql`"key" LIKE ${pattern}`), sql` OR `);
+        const found = (await db.execute(sql`
+          SELECT "key", "value"
+          FROM ${sql.raw(`"${registry.settingsTable.replace(/"/g, "\"\"")}"`)}
+          WHERE ${whereSql}
+        `)) as { rows?: Array<{ key?: string | null; value?: string | null }> };
+        for (const row of found.rows || []) {
+          const localKey = normalize(row.key);
+          if (!localKey) continue;
+          rows.push({
+            key: `site_${registry.siteId}_${localKey}`,
+            value: String(row.value || ""),
+          });
+        }
       }
     }
-  }
 
-  return rows;
+    return rows;
+  });
 }

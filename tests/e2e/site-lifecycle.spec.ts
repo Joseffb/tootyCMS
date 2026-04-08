@@ -1,5 +1,4 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { sql } from "@vercel/postgres";
 import db from "../../lib/db";
 import { and, eq, sql as drizzleSql } from "drizzle-orm";
 import { encode } from "next-auth/jwt";
@@ -18,6 +17,7 @@ import { ensureSiteTaxonomyTables, getSiteTaxonomyTables } from "../../lib/site-
 import { getSettingByKey, setSettingByKey } from "../../lib/settings-store";
 import { addSessionTokenCookie } from "./helpers/auth";
 import { getAppHostname, getAppOrigin } from "./helpers/env";
+import { sqlClient } from "./helpers/vercel-sql";
 import {
   ensureCoreSiteDomain,
   ensureCustomSiteDomain,
@@ -978,7 +978,7 @@ async function seedCarouselData() {
     content: "",
     published: true,
   });
-  await sql.query(
+  await sqlClient.query(
     `INSERT INTO ${quotedIdentifier(siteDomainMetaTable(primarySiteId, "carousel"))}
       ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES
@@ -1012,7 +1012,7 @@ async function seedCarouselData() {
     content: "",
     published: true,
   });
-  await sql.query(
+  await sqlClient.query(
     `INSERT INTO ${quotedIdentifier(siteDomainMetaTable(primarySiteId, "carousel-slide"))}
       ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES

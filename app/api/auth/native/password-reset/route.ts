@@ -23,6 +23,11 @@ type ResetMeta = {
 };
 
 const RESET_META_KEY = "native_password_reset_code";
+const RESET_REQUEST_IP_LIMIT = 10;
+const RESET_REQUEST_IP_WINDOW_MS = 10 * 60_000;
+const RESET_APPLY_IP_LIMIT = 30;
+const RESET_APPLY_IP_WINDOW_MS = 15 * 60_000;
+const resetThrottleByKey = new Map<string, { count: number; resetAt: number }>();
 
 function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
@@ -37,7 +42,41 @@ function hashCode(code: string) {
 }
 
 function issueCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
+}
+
+function extractClientIp(request: Request) {
+  const forwardedFor = String(
+    request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      request.headers.get("cf-connecting-ip") ||
+      "",
+  ).trim();
+  if (!forwardedFor) return "";
+  return String(forwardedFor.split(",")[0] || "").trim();
+}
+
+function enforceIpThrottle(key: string, limit: number, windowMs: number) {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) return { allowed: true as const, retryAfterMs: 0 };
+
+  const now = Date.now();
+  for (const [entryKey, entry] of resetThrottleByKey.entries()) {
+    if (entry.resetAt <= now) {
+      resetThrottleByKey.delete(entryKey);
+    }
+  }
+
+  const current = resetThrottleByKey.get(normalizedKey);
+  const next =
+    !current || current.resetAt <= now
+      ? { count: 1, resetAt: now + windowMs }
+      : { count: current.count + 1, resetAt: current.resetAt };
+  resetThrottleByKey.set(normalizedKey, next);
+  if (next.count <= limit) {
+    return { allowed: true as const, retryAfterMs: 0 };
+  }
+  return { allowed: false as const, retryAfterMs: Math.max(0, next.resetAt - now) };
 }
 
 function genericRequestMessage() {
@@ -201,9 +240,34 @@ export async function POST(request: Request) {
 
   const action = String(body.action || "").trim().toLowerCase();
   const email = normalizeEmail(body.email);
-  if (action === "request") return requestReset(email);
+  const clientIp = extractClientIp(request);
+  if (action === "request") {
+    const throttle = enforceIpThrottle(
+      `password-reset:request:${clientIp}`,
+      RESET_REQUEST_IP_LIMIT,
+      RESET_REQUEST_IP_WINDOW_MS,
+    );
+    if (!throttle.allowed) {
+      return NextResponse.json(
+        { ok: false, error: "Please wait before requesting another reset code." },
+        { status: 429 },
+      );
+    }
+    return requestReset(email);
+  }
 
   if (action === "reset") {
+    const throttle = enforceIpThrottle(
+      `password-reset:apply:${clientIp}`,
+      RESET_APPLY_IP_LIMIT,
+      RESET_APPLY_IP_WINDOW_MS,
+    );
+    if (!throttle.allowed) {
+      return NextResponse.json(
+        { ok: false, error: "Too many reset attempts. Try again later." },
+        { status: 429 },
+      );
+    }
     return applyReset(
       email,
       normalizeCode(body.code),

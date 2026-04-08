@@ -91,4 +91,40 @@ describe("settings-store bootstrap", () => {
       columns: { value: true },
     });
   });
+
+  it("retries transient connection termination while reading a network setting", async () => {
+    let tableVisible = false;
+    mocks.transaction.mockImplementation(async (callback: (tx: { execute: typeof mocks.execute }) => Promise<unknown>) =>
+      callback({ execute: mocks.execute }),
+    );
+    mocks.execute.mockImplementation(async (statement: any) => {
+      const chunks = Array.isArray(statement?.queryChunks) ? statement.queryChunks : [];
+      const text = chunks
+        .map((chunk: any) => {
+          if (typeof chunk === "string") return chunk;
+          if (Array.isArray(chunk?.value)) return chunk.value.join("");
+          return "";
+        })
+        .join("");
+
+      if (text.includes("CREATE TABLE IF NOT EXISTS") && text.includes("\"tooty_network_system_settings\"")) {
+        tableVisible = true;
+        return { rows: [] };
+      }
+
+      if (text.includes("SELECT to_regclass(") && text.includes("tooty_network_system_settings")) {
+        return { rows: [{ table_name: tableVisible ? "tooty_network_system_settings" : null }] };
+      }
+
+      return { rows: [] };
+    });
+    mocks.findFirst
+      .mockRejectedValueOnce(new Error("Connection terminated unexpectedly"))
+      .mockResolvedValue({ value: "https://retry.example.com" });
+
+    const { getSettingByKey } = await import("@/lib/settings-store");
+
+    await expect(getSettingByKey("site_url")).resolves.toBe("https://retry.example.com");
+    expect(mocks.findFirst).toHaveBeenCalledTimes(2);
+  });
 });

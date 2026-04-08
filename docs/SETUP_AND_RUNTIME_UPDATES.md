@@ -87,7 +87,7 @@ Setup behavior:
   - on non-Vercel managed runtimes, fails closed with an operator-facing message when required runtime env vars are missing or differ from submitted setup values
 - supports optional `POSTGRES_TEST_URL` for integration/e2e isolation (falls back to `POSTGRES_URL` when empty)
 - checks required prefixed DB tables before running init
-- initializes schema when required
+- initializes schema when required using the submitted/runtime DB connection and submitted table prefix so managed-platform setup does not depend on a separate manual Drizzle push
 - creates or updates the first native admin user (`email` + password hash) during setup
 - stores bootstrap admin metadata and marks setup complete
 - does not require any OAuth provider to complete setup

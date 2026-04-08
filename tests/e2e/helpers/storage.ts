@@ -20,7 +20,9 @@ import { sitePhysicalTableName } from "@/lib/site-physical-table-name";
 
 const rawPrefix = process.env.CMS_DB_PREFIX?.trim() || "tooty_";
 const normalizedPrefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
-
+const sqlClient = sql as typeof sql & {
+  query: (text: string, params?: unknown[]) => Promise<unknown>;
+};
 function isTransientDbError(error: unknown) {
   const code =
     typeof error === "object" && error && "code" in error
@@ -76,7 +78,7 @@ export async function ensureNetworkUser(params: {
 }) {
   const table = quotedIdentifier(networkTableName("users"));
   await withDbRetry(() =>
-    sql.query(
+    sqlClient.query(
       `INSERT INTO ${table} ("id", "email", "name", "username", "role", "authProvider", "passwordHash", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
        ON CONFLICT ("id") DO UPDATE
@@ -102,9 +104,9 @@ export async function ensureNetworkUser(params: {
 
 export async function ensureNetworkUserMeta(userId: string, key: string, value: string) {
   const table = quotedIdentifier(networkTableName("user_meta"));
-  await withDbRetry(() => sql.query(`DELETE FROM ${table} WHERE "userId" = $1 AND "key" = $2`, [userId, key]));
+  await withDbRetry(() => sqlClient.query(`DELETE FROM ${table} WHERE "userId" = $1 AND "key" = $2`, [userId, key]));
   await withDbRetry(() =>
-    sql.query(
+    sqlClient.query(
       `INSERT INTO ${table} ("userId", "key", "value", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, NOW(), NOW())`,
       [userId, key, value],
@@ -121,7 +123,7 @@ export async function ensureNetworkSite(params: {
 }) {
   const table = quotedIdentifier(networkTableName("sites"));
   await withDbRetry(() =>
-    sql.query(
+    sqlClient.query(
       `INSERT INTO ${table} ("id", "userId", "name", "subdomain", "isPrimary", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
        ON CONFLICT ("id") DO UPDATE
@@ -140,7 +142,7 @@ export async function ensureNetworkSite(params: {
 export async function ensureNetworkSession(sessionToken: string, userId: string, expires: Date | string) {
   const table = quotedIdentifier(networkTableName("sessions"));
   await withDbRetry(() =>
-    sql.query(
+    sqlClient.query(
       `INSERT INTO ${table} ("sessionToken", "userId", "expires")
        VALUES ($1, $2, $3)
        ON CONFLICT ("sessionToken") DO UPDATE

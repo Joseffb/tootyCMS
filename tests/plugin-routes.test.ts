@@ -159,6 +159,7 @@ describe("plugin route governance", () => {
       echo: {
         query: ctx.query,
         body: ctx.body,
+        headers: ctx.headers,
         userId: ctx.userId,
       },
     }));
@@ -185,7 +186,13 @@ describe("plugin route governance", () => {
     const response = await dispatchPluginRouteRequest({
       request: new Request("http://localhost/api/plugins/demo/secure?mode=inspect", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-test": "yes" },
+        headers: {
+          authorization: "Bearer top-secret",
+          cookie: "session=abc",
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.10",
+          "x-test": "yes",
+        },
         body: JSON.stringify({ count: 2 }),
       }),
       pluginId: "demo",
@@ -198,6 +205,10 @@ describe("plugin route governance", () => {
       echo: {
         query: { mode: "inspect" },
         body: { count: 2 },
+        headers: {
+          "content-type": "application/json",
+          "x-test": "yes",
+        },
         userId: "user-1",
       },
     });

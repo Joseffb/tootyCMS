@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { sql } from "@vercel/postgres";
 import { randomUUID } from "node:crypto";
+import { sql, sqlClient } from "./helpers/vercel-sql";
 import { networkTableName, quotedIdentifier } from "./helpers/storage";
 
 const runId = `e2e-setup-${randomUUID()}`;
@@ -9,12 +9,12 @@ const adminPassword = "password123";
 const runSetupFlow = process.env.RUN_SETUP_FLOW_E2E === "1";
 
 async function resetTootyTables() {
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("accounts"))}`);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("sessions"))}`);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("verification_tokens"))}`);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("sites"))}`);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("users"))}`);
-  await sql.query(`DELETE FROM ${quotedIdentifier(networkTableName("system_settings"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("accounts"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("sessions"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("verification_tokens"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("sites"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("users"))}`);
+  await sqlClient.query(`DELETE FROM ${quotedIdentifier(networkTableName("system_settings"))}`);
   await sql`
     DO $$
     DECLARE

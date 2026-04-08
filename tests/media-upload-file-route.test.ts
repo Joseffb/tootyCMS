@@ -108,4 +108,28 @@ describe("POST /api/media/upload", () => {
     expect(json.url).toBe("https://blob.example/file.png");
     expect(json.mediaId).toBe("42");
   });
+
+  it("rejects blocked executable or script upload types", async () => {
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("file", new File([Buffer.from("console.log('x')")], "script.js", { type: "text/javascript" }));
+
+    const response = await POST(makeRequest(formData));
+
+    expect(response.status).toBe(400);
+    expect(resolveMediaUploadTransportMock).not.toHaveBeenCalled();
+    expect(upsertMediaRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects executable bytes disguised as an image upload", async () => {
+    const formData = new FormData();
+    formData.append("siteId", "site-1");
+    formData.append("file", new File([Buffer.from([0x4d, 0x5a, 0x90, 0x00])], "cover.png", { type: "image/png" }));
+
+    const response = await POST(makeRequest(formData));
+
+    expect(response.status).toBe(400);
+    expect(resolveMediaUploadTransportMock).not.toHaveBeenCalled();
+    expect(upsertMediaRecordMock).not.toHaveBeenCalled();
+  });
 });

@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SetupEnvField } from "@/lib/setup-env";
-import { signIn } from "next-auth/react";
 import { Eye } from "lucide-react";
 
 type Props = {
@@ -144,13 +143,14 @@ export default function SetupWizard({ fields, initialValues }: Props) {
     setStepIndex((current) => Math.max(0, current - 1));
   }
 
-  async function signInWithRetry(email: string, password: string, callbackUrl: string): Promise<{
-    ok: boolean;
-    url?: string;
-    error?: string;
-  }> {
-    let lastError = "";
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+async function signInWithRetry(email: string, password: string, callbackUrl: string): Promise<{
+  ok: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const { signIn } = await import("next-auth/react");
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
       const authResult = (await signIn("native", {
         email,
         password,
@@ -231,7 +231,8 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       if (!response.ok) {
         if (data.requiresDbInit) {
           setInfo(
-            "Setup configuration was accepted, but DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Finish Setup again.",
+            data.error ||
+              "Setup configuration was accepted, but the framework could not finish initializing the database schema automatically yet. Check the runtime DB configuration, then click Finish Setup again.",
           );
           return;
         }

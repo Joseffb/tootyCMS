@@ -53,10 +53,11 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { getSession } from "@/lib/auth";
+import { createMimicCookieSignature, getSession } from "@/lib/auth";
 
 describe("auth session hardening", () => {
   beforeEach(() => {
+    process.env.NEXTAUTH_SECRET = "test-nextauth-secret";
     mocks.getServerSession.mockReset();
     mocks.cookies.mockReset();
     mocks.usersFindFirst.mockReset();
@@ -125,5 +126,91 @@ describe("auth session hardening", () => {
         profileImageUrl: "https://cdn.example.com/profile.png",
       },
     });
+  });
+
+  it("honors a signed mimic cookie bundle for network admin sessions", async () => {
+    const actorId = "user-1";
+    const targetId = "user-2";
+    const signature = createMimicCookieSignature(actorId, targetId);
+    mocks.getServerSession.mockResolvedValue({
+      user: {
+        id: actorId,
+        name: "Admin User",
+        email: "admin@example.com",
+        image: null,
+      },
+    });
+    mocks.usersFindFirst
+      .mockResolvedValueOnce({
+        id: actorId,
+        name: "Admin User",
+        email: "admin@example.com",
+        image: null,
+        role: "network admin",
+        username: "admin",
+        gh_username: "",
+      })
+      .mockResolvedValueOnce({
+        id: targetId,
+        name: "Target User",
+        email: "target@example.com",
+        image: null,
+        role: "author",
+      });
+    mocks.cookies.mockResolvedValue({
+      get: (key: string) => {
+        if (key === "tooty_mimic_actor") return { value: actorId };
+        if (key === "tooty_mimic_target") return { value: targetId };
+        if (key === "tooty_mimic_signature") return { value: signature };
+        return undefined;
+      },
+    });
+
+    await expect(getSession()).resolves.toMatchObject({
+      user: {
+        id: targetId,
+        email: "target@example.com",
+        mimicActorId: actorId,
+        mimicTargetId: targetId,
+      },
+    });
+  });
+
+  it("ignores mimic cookies when the signature does not verify", async () => {
+    const actorId = "user-1";
+    const targetId = "user-2";
+    mocks.getServerSession.mockResolvedValue({
+      user: {
+        id: actorId,
+        name: "Admin User",
+        email: "admin@example.com",
+        image: null,
+      },
+    });
+    mocks.usersFindFirst.mockResolvedValue({
+      id: actorId,
+      name: "Admin User",
+      email: "admin@example.com",
+      image: null,
+      role: "network admin",
+      username: "admin",
+      gh_username: "",
+    });
+    mocks.cookies.mockResolvedValue({
+      get: (key: string) => {
+        if (key === "tooty_mimic_actor") return { value: actorId };
+        if (key === "tooty_mimic_target") return { value: targetId };
+        if (key === "tooty_mimic_signature") return { value: "tampered" };
+        return undefined;
+      },
+    });
+
+    await expect(getSession()).resolves.toMatchObject({
+      user: {
+        id: actorId,
+        email: "admin@example.com",
+      },
+    });
+    expect(mocks.usersFindFirst).toHaveBeenCalledTimes(1);
   });
 });

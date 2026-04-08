@@ -475,3 +475,84 @@ An item can move to `verified` only when:
   - `npm run test:integration` is green after rerunning sequentially; the earlier Firefox failure was caused by parallel gate contention, not by this setup-env change
   - follow-up preview debugging on 2026-04-08 found `/api/setup/env` timing out on Vercel after 10 seconds during setup
   - fixed by giving the setup route a larger Vercel function budget and reducing Vercel env sync from per-field list/delete/create cycles to a single env listing plus populated-key upserts only
+
+### 18. First-run setup must auto-apply schema on serverless runtimes without manual Drizzle commands
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/api/setup/env/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/db-health.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/setup/setup-wizard.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-env-route.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-wizard.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/SETUP_AND_RUNTIME_UPDATES.md`
+- Scope:
+  - remove the first-run setup dependency on manual `drizzle-kit push` for Vercel/serverless users
+  - make setup bootstrap the required schema over the configured Postgres connection automatically
+  - update operator-facing setup messaging so the framework does not instruct hosted users to run CLI schema commands
+- Affected surfaces:
+  - setup schema bootstrap on managed runtimes
+  - setup wizard user messaging
+  - first-run Vercel/Neon onboarding
+- Required validation:
+  1. `npx vitest run tests/setup-env-route.test.ts tests/setup-wizard.test.tsx`
+  2. `npm run test`
+  3. `npm run test:integration`
+- Current notes:
+  - current setup route already attempts automatic schema bootstrap, but the failure contract still falls back to telling hosted users to run `npx drizzle-kit push`
+  - manual recovery on 2026-04-08 succeeded by pushing the schema against `robertbetan_prod`, which confirms the first-run framework path still needs hardening for managed/serverless setups
+  - implementation now uses a direct Postgres bootstrap path for first-run network tables and lazily loads `next-auth/react` inside the setup auto-sign-in path so `/setup` does not hard-fail before auth env is configured
+  - `npx vitest run tests/setup-env-route.test.ts tests/setup-wizard.test.tsx` is green
+  - `npm run test` is green
+  - `npm run test:integration` is green
+  - the dedicated setup flow integration spec (`tests/e2e/setup-flow.spec.ts`) passed inside the full integration run
+  - active fix landed by moving setup schema/bootstrap work onto the submitted runtime env values and submitted table prefix during the setup request so automatic init does not silently target stale process env
+  - preview deployment completed on 2026-04-08 at `https://robertbetan-dgokf8dym-joseffbs-projects.vercel.app`
+
+### 19. Security hardening from April 8 audit triage
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/auth.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/actions.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/api/auth/native/password-reset/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/plugin-routes.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/media-service.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/api/media/[id]/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/db-health.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/plugin-routes.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/media-item-route.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/auth-session.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/media-upload-file-route.test.ts`
+- Scope:
+  - cryptographically bind mimic-session cookies so session swapping is not driven by unsigned cookie state
+  - replace weak password-reset code generation and tighten practical reset throttling
+  - filter sensitive request headers before governed plugin handlers receive route context
+  - remove cross-tenant media lookup by requiring site-scoped media record resolution
+  - parameterize or otherwise eliminate constant interpolation in raw SQL maintenance paths
+  - harden the generic media upload route using the stricter image/file validation patterns already present elsewhere in core
+- Affected surfaces:
+  - network-admin mimic flow
+  - native password reset
+  - governed plugin route execution
+  - media item edit/delete APIs
+  - DB maintenance/bootstrap safety
+  - hosted preview security posture
+- Required validation:
+  1. targeted Vitest coverage for auth/plugin/media/security paths
+  2. `npm run test`
+  3. `npm run test:integration`
+  4. `vercel deploy -y`
+- Current notes:
+  - this slice is based on the locally reviewed, high-confidence findings from the April 8 audit rather than treating the full report as authoritative
+  - implementation is being kept contract-safe: core-owned auth/session/media boundaries remain core-owned, and plugin execution is being tightened without changing the published kernel/plugin contract shape
+  - mimic-session cookies are now cryptographically bound before any admin-to-user session swap is honored
+  - password reset codes now use `crypto.randomInt(...)`, and the route adds lightweight per-IP throttling on request and apply paths
+  - governed plugin route handlers now receive a filtered header set with sensitive and platform-specific forwarding headers removed
+  - media item lookup is now site-scoped, which closes the cross-tenant ID scan path and aligns update/delete flows with tenant boundaries
+  - raw SQL maintenance paths in `lib/db-health.ts` now quote literals or use SQL parameter binding instead of interpolating constant values directly into statements
+  - the generic media upload route now validates MIME/extension combinations and rejects blocked or disguised executable/script payloads
+  - targeted Vitest coverage is green for auth/plugin/media/security and setup/serverless paths
+  - `npm run test` is green
+  - `npm run test:integration` is green
+  - `vercel deploy -y` completed on 2026-04-08 at `https://robertbetan-dgokf8dym-joseffbs-projects.vercel.app`

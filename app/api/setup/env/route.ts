@@ -17,7 +17,7 @@ import { getPluginById } from "@/lib/plugins";
 import { getAvailableThemes, setSiteTheme, setThemeEnabled } from "@/lib/themes";
 import { getSetupDefaultPluginIds, getSetupDefaultThemeId } from "@/lib/setup-defaults";
 import {
-  applyDatabaseCompatibilityFixes,
+  applyFirstRunNetworkSchemaBootstrap,
   applyPendingDatabaseMigrations,
   getDatabaseHealthReport,
   markDatabaseSchemaCurrent,
@@ -48,10 +48,57 @@ const LAST_ADMIN_PATH_COOKIE_NAMES = [
   "tooty_last_app_path",
 ] as const;
 
-async function runLocalDbInit() {
-  trace("setup", "db init via local compatibility started");
-  await applyDatabaseCompatibilityFixes();
-  trace("setup", "db init via local compatibility completed");
+const SETUP_RUNTIME_ENV_KEYS = [
+  "CMS_DB_PREFIX",
+  "POSTGRES_URL",
+  "POSTGRES_PRISMA_URL",
+  "POSTGRES_URL_NON_POOLING",
+  "POSTGRES_URL_NO_SSL",
+  "DATABASE_URL",
+  "DATABASE_URL_UNPOOLED",
+  "PGDATABASE",
+  "POSTGRES_DATABASE",
+  "PGHOST",
+  "PGHOST_UNPOOLED",
+  "PGUSER",
+  "POSTGRES_USER",
+  "PGPASSWORD",
+  "POSTGRES_PASSWORD",
+  "POSTGRES_HOST",
+  "NEXTAUTH_URL",
+  "NEXT_PUBLIC_ROOT_DOMAIN",
+  "NEXTAUTH_SECRET",
+  "PLUGINS_PATH",
+  "THEMES_PATH",
+] as const;
+
+async function withSetupRuntimeEnv<T>(values: Record<string, string>, work: () => Promise<T>) {
+  const previous = new Map<string, string | undefined>();
+
+  for (const key of SETUP_RUNTIME_ENV_KEYS) {
+    previous.set(key, process.env[key]);
+    const nextValue = String(values[key] ?? "").trim();
+    if (nextValue) process.env[key] = nextValue;
+  }
+
+  try {
+    return await work();
+  } finally {
+    for (const key of SETUP_RUNTIME_ENV_KEYS) {
+      const priorValue = previous.get(key);
+      if (priorValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = priorValue;
+      }
+    }
+  }
+}
+
+async function runLocalDbInit(values: Record<string, string>) {
+  trace("setup", "db init via direct first-run bootstrap started");
+  await applyFirstRunNetworkSchemaBootstrap(values);
+  trace("setup", "db init via direct first-run bootstrap completed");
 }
 
 async function runHttpDbInit(values: Record<string, string>) {
@@ -78,10 +125,10 @@ async function initializeDbSchema(values: Record<string, string>) {
   trace("setup", "db init backend selected", { backend });
   if (backend === "none") return;
   if (backend === "http") return runHttpDbInit(values);
-  if (backend === "command") return runLocalDbInit();
-  if (backend === "local") return runLocalDbInit();
+  if (backend === "command") return runLocalDbInit(values);
+  if (backend === "local") return runLocalDbInit(values);
   if (process.env.SETUP_DB_INIT_URL?.trim()) return runHttpDbInit(values);
-  return runLocalDbInit();
+  return runLocalDbInit(values);
 }
 
 function normalizedPrefixFromValues(values: Record<string, string>) {
@@ -242,191 +289,199 @@ export async function POST(req: Request) {
     }
     throw error;
   }
-  try {
-    const missingTables = await getMissingTableSets(normalized);
-    trace("setup", "required table existence check", {
-      missingRequiredCount: missingTables.missingRequired.length,
-      missingOptionalCount: missingTables.missingOptional.length,
-    });
-    if (missingTables.missingRequired.length > 0) {
-      trace("setup", "initializing db schema");
-      await initializeDbSchema(normalized);
-    } else {
-      trace("setup", "db init skipped because all required tables exist");
+  return await withSetupRuntimeEnv(normalized, async () => {
+    try {
+      const missingTables = await getMissingTableSets(normalized);
+      trace("setup", "required table existence check", {
+        missingRequiredCount: missingTables.missingRequired.length,
+        missingOptionalCount: missingTables.missingOptional.length,
+      });
+      if (missingTables.missingRequired.length > 0) {
+        trace("setup", "initializing db schema");
+        await initializeDbSchema(normalized);
+      } else {
+        trace("setup", "db init skipped because all required tables exist");
+      }
+    } catch (error) {
+      trace("setup", "db schema init failed; continuing to relation probe", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Continue to DB probe below; if schema is still missing we return a clear error.
     }
-  } catch {
-    trace("setup", "db schema init failed; continuing to relation probe");
-    // Continue to DB probe below; if schema is still missing we return a clear error.
-  }
 
-  const missingAfterInit = await getMissingTableSets(normalized);
-  if (missingAfterInit.missingRequired.length > 0) {
-    trace("setup", "setup save incomplete: missing tables after init", {
-      missingRequiredCount: missingAfterInit.missingRequired.length,
-      missingOptionalCount: missingAfterInit.missingOptional.length,
-    });
-    return NextResponse.json(
-      {
-        ok: false,
-        envConfigured: true,
-        envSaved: envPersistence.persisted,
-        envBackend: envPersistence.backend,
-        requiresDbInit: true,
-        error:
-          "Setup configuration was accepted, but required DB schema could not be initialized automatically. Fix the DB bootstrap issue, then click Finish Setup again.",
-      },
-      { status: 409 },
-    );
-  }
+    const missingAfterInit = await getMissingTableSets(normalized);
+    if (missingAfterInit.missingRequired.length > 0) {
+      trace("setup", "setup save incomplete: missing tables after init", {
+        missingRequiredCount: missingAfterInit.missingRequired.length,
+        missingOptionalCount: missingAfterInit.missingOptional.length,
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          envConfigured: true,
+          envSaved: envPersistence.persisted,
+          envBackend: envPersistence.backend,
+          requiresDbInit: true,
+          error:
+            "Setup configuration was accepted, but the framework could not finish initializing the required database schema automatically. Check the runtime DB configuration and click Finish Setup again.",
+        },
+        { status: 409 },
+      );
+    }
 
-  await advanceSetupLifecycleTo("configured");
+    await advanceSetupLifecycleTo("configured");
 
-  const dbHealth = await getDatabaseHealthReport();
-  if (dbHealth.migrationRequired) {
-    trace("setup", "applying pending database migrations during setup", {
-      pendingCount: dbHealth.pending.length,
-    });
-    await applyPendingDatabaseMigrations();
-  } else {
-    await markDatabaseSchemaCurrent();
-  }
-  await advanceSetupLifecycleTo("migrated");
+    const dbHealth = await getDatabaseHealthReport();
+    const hasStructuralDrift =
+      (dbHealth.missingTables?.length ?? 0) > 0 ||
+      (dbHealth.disallowedFound?.length ?? 0) > 0 ||
+      (dbHealth.obsoleteRegistryFound?.length ?? 0) > 0;
+    if (dbHealth.migrationRequired && hasStructuralDrift) {
+      trace("setup", "applying pending database migrations during setup", {
+        pendingCount: dbHealth.pending.length,
+      });
+      await applyPendingDatabaseMigrations();
+    } else {
+      await markDatabaseSchemaCurrent();
+    }
+    await advanceSetupLifecycleTo("migrated");
 
-  trace("setup", "storing setup metadata and creating native admin user", {
-    adminEmail,
-  });
-  const passwordHash = await hashPassword(adminPassword);
-  const existingUser = await db.query.users.findFirst({
-    where: (table, { eq }) => eq(table.email, adminEmail),
-    columns: { id: true },
-  });
-  let ensuredUserId = "";
-  if (!existingUser) {
-    const created = await db
-      .insert(users)
-      .values({
-        email: adminEmail,
-        name: adminName,
-        role: NETWORK_ADMIN_ROLE,
-        authProvider: "native",
-        passwordHash,
-      })
-      .returning({ id: users.id });
-    ensuredUserId = String(created[0]?.id || "").trim();
-  } else {
-    await db
-      .update(users)
-      .set({
-        name: adminName,
-        role: NETWORK_ADMIN_ROLE,
-        authProvider: "native",
-        passwordHash,
-      })
-      .where(eq(users.id, existingUser.id));
-    ensuredUserId = String(existingUser.id || "").trim();
-  }
-  if (!ensuredUserId) {
-    throw new Error("Failed to create or resolve setup admin user.");
-  }
-  await setSettingByKey("bootstrap_admin_name", adminName);
-  await setSettingByKey("bootstrap_admin_email", adminEmail);
-  await setSettingByKey("bootstrap_admin_phone", adminPhone);
-  await setSettingByKey("setup_completed", "true");
-  await setSettingByKey("setup_completed_at", new Date().toISOString());
-  const inferredSiteUrl = inferSiteUrl(normalized);
-  if (inferredSiteUrl) {
-    await setSettingByKey("site_url", inferredSiteUrl);
-  }
-
-  const setupPluginIds = getSetupDefaultPluginIds(process.env.SETUP_DEFAULT_ENABLED_PLUGINS);
-  for (const pluginId of setupPluginIds) {
-    const plugin = await getPluginById(pluginId);
-    if (!plugin) continue;
-    await setSettingByKey(`plugin_${pluginId}_enabled`, "true");
-  }
-
-  await ensureDefaultCoreDataDomains();
-  await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
-  let siteIds = await listSiteIdsForUser(ensuredUserId);
-  let memberSites = siteIds.length > 0
-    ? await db.query.sites.findMany({
-        where: inArray(sites.id, siteIds),
-        columns: { id: true, isPrimary: true, subdomain: true },
-      })
-    : [];
-  let mainSiteId =
-    memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
-    memberSites[0]?.id ||
-    null;
-
-  if (!mainSiteId) {
-    trace("setup", "main site missing after initial bootstrap; retrying site ensure", {
+    trace("setup", "storing setup metadata and creating native admin user", {
       adminEmail,
-      userId: ensuredUserId,
     });
+    const passwordHash = await hashPassword(adminPassword);
+    const existingUser = await db.query.users.findFirst({
+      where: (table, { eq }) => eq(table.email, adminEmail),
+      columns: { id: true },
+    });
+    let ensuredUserId = "";
+    if (!existingUser) {
+      const created = await db
+        .insert(users)
+        .values({
+          email: adminEmail,
+          name: adminName,
+          role: NETWORK_ADMIN_ROLE,
+          authProvider: "native",
+          passwordHash,
+        })
+        .returning({ id: users.id });
+      ensuredUserId = String(created[0]?.id || "").trim();
+    } else {
+      await db
+        .update(users)
+        .set({
+          name: adminName,
+          role: NETWORK_ADMIN_ROLE,
+          authProvider: "native",
+          passwordHash,
+        })
+        .where(eq(users.id, existingUser.id));
+      ensuredUserId = String(existingUser.id || "").trim();
+    }
+    if (!ensuredUserId) {
+      throw new Error("Failed to create or resolve setup admin user.");
+    }
+    await setSettingByKey("bootstrap_admin_name", adminName);
+    await setSettingByKey("bootstrap_admin_email", adminEmail);
+    await setSettingByKey("bootstrap_admin_phone", adminPhone);
+    await setSettingByKey("setup_completed", "true");
+    await setSettingByKey("setup_completed_at", new Date().toISOString());
+    const inferredSiteUrl = inferSiteUrl(normalized);
+    if (inferredSiteUrl) {
+      await setSettingByKey("site_url", inferredSiteUrl);
+    }
+
+    const setupPluginIds = getSetupDefaultPluginIds(process.env.SETUP_DEFAULT_ENABLED_PLUGINS);
+    for (const pluginId of setupPluginIds) {
+      const plugin = await getPluginById(pluginId);
+      if (!plugin) continue;
+      await setSettingByKey(`plugin_${pluginId}_enabled`, "true");
+    }
+
+    await ensureDefaultCoreDataDomains();
     await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
-    siteIds = await listSiteIdsForUser(ensuredUserId);
-    memberSites = siteIds.length > 0
+    let siteIds = await listSiteIdsForUser(ensuredUserId);
+    let memberSites = siteIds.length > 0
       ? await db.query.sites.findMany({
           where: inArray(sites.id, siteIds),
           columns: { id: true, isPrimary: true, subdomain: true },
         })
       : [];
-    mainSiteId =
+    let mainSiteId =
       memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
       memberSites[0]?.id ||
       null;
-  }
 
-  if (!mainSiteId) {
-    trace("setup", "setup save invariant failed: main site unresolved after bootstrap", {
-      adminEmail,
-      userId: ensuredUserId,
-    });
-    return NextResponse.json(
-      {
-        ok: false,
-        envConfigured: true,
-        envSaved: envPersistence.persisted,
-        envBackend: envPersistence.backend,
-        dbInitialized: true,
-        userCreated: true,
-        error:
-          "Setup created the admin user, but no main site could be resolved. Repair site bootstrap and run setup again.",
-      },
-      { status: 500 },
-    );
-  }
-
-  if (mainSiteId) {
-    for (const pluginId of setupPluginIds) {
-      const plugin = await getPluginById(pluginId);
-      if (!plugin || plugin.scope !== "site") continue;
-      await setSettingByKey(sitePluginEnabledKey(mainSiteId, pluginId), "true");
+    if (!mainSiteId) {
+      trace("setup", "main site missing after initial bootstrap; retrying site ensure", {
+        adminEmail,
+        userId: ensuredUserId,
+      });
+      await ensureMainSiteForUser(ensuredUserId, { seedStarterContent: true });
+      siteIds = await listSiteIdsForUser(ensuredUserId);
+      memberSites = siteIds.length > 0
+        ? await db.query.sites.findMany({
+            where: inArray(sites.id, siteIds),
+            columns: { id: true, isPrimary: true, subdomain: true },
+          })
+        : [];
+      mainSiteId =
+        memberSites.find((site) => site.isPrimary || site.subdomain === "main")?.id ||
+        memberSites[0]?.id ||
+        null;
     }
 
-    const defaultThemeId = getSetupDefaultThemeId(process.env.SETUP_DEFAULT_THEME_ID);
-    if (defaultThemeId) {
-      const availableThemes = await getAvailableThemes();
-      const matchingTheme = availableThemes.find((theme) => theme.id === defaultThemeId);
-      if (matchingTheme) {
-        await setThemeEnabled(defaultThemeId, true);
-        await setSiteTheme(mainSiteId, defaultThemeId);
+    if (!mainSiteId) {
+      trace("setup", "setup save invariant failed: main site unresolved after bootstrap", {
+        adminEmail,
+        userId: ensuredUserId,
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          envConfigured: true,
+          envSaved: envPersistence.persisted,
+          envBackend: envPersistence.backend,
+          dbInitialized: true,
+          userCreated: true,
+          error:
+            "Setup created the admin user, but no main site could be resolved. Repair site bootstrap and run setup again.",
+        },
+        { status: 500 },
+      );
+    }
+
+    if (mainSiteId) {
+      for (const pluginId of setupPluginIds) {
+        const plugin = await getPluginById(pluginId);
+        if (!plugin || plugin.scope !== "site") continue;
+        await setSettingByKey(sitePluginEnabledKey(mainSiteId, pluginId), "true");
+      }
+
+      const defaultThemeId = getSetupDefaultThemeId(process.env.SETUP_DEFAULT_THEME_ID);
+      if (defaultThemeId) {
+        const availableThemes = await getAvailableThemes();
+        const matchingTheme = availableThemes.find((theme) => theme.id === defaultThemeId);
+        if (matchingTheme) {
+          await setThemeEnabled(defaultThemeId, true);
+          await setSiteTheme(mainSiteId, defaultThemeId);
+        }
       }
     }
-  }
 
-  await advanceSetupLifecycleTo("ready");
-  trace("setup", "setup save completed successfully");
-  const response = NextResponse.json({
-    ok: true,
-    envConfigured: true,
-    envSaved: envPersistence.persisted,
-    envBackend: envPersistence.backend,
-    dbInitialized: true,
-    userCreated: true,
-    mainSiteId,
+    await advanceSetupLifecycleTo("ready");
+    trace("setup", "setup save completed successfully");
+    const response = NextResponse.json({
+      ok: true,
+      envConfigured: true,
+      envSaved: envPersistence.persisted,
+      envBackend: envPersistence.backend,
+      dbInitialized: true,
+      userCreated: true,
+      mainSiteId,
+    });
+    applyPostSetupCookies(response, mainSiteId);
+    return response;
   });
-  applyPostSetupCookies(response, mainSiteId);
-  return response;
 }

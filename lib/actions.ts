@@ -1,6 +1,13 @@
 "use server";
 
-import { getSession, MIMIC_ACTOR_COOKIE, MIMIC_TARGET_COOKIE } from "@/lib/auth";
+import {
+  createMimicCookieSignature,
+  getSession,
+  MIMIC_ACTOR_COOKIE,
+  MIMIC_SESSION_MAX_AGE_SECONDS,
+  MIMIC_SIGNATURE_COOKIE,
+  MIMIC_TARGET_COOKIE,
+} from "@/lib/auth";
 import {
   addDomainToVercel,
   removeDomainFromVercelProject,
@@ -2914,12 +2921,15 @@ export const deleteUserAdmin = async (formData: FormData) => {
 };
 
 function mimicCookieOptions() {
-  const secure = Boolean(process.env.VERCEL_URL);
+  const secure =
+    Boolean(process.env.VERCEL_URL) ||
+    String(process.env.NEXTAUTH_URL || "").trim().startsWith("https://");
   return {
     path: "/",
     httpOnly: true,
     sameSite: "lax" as const,
     secure,
+    maxAge: MIMIC_SESSION_MAX_AGE_SECONDS,
   };
 }
 
@@ -2934,10 +2944,15 @@ export const startUserMimicAdmin = async (formData: FormData) => {
     columns: { id: true, role: true },
   });
   if (!target) return { error: "Target user not found" };
+  const signature = createMimicCookieSignature(session.user.id, targetId);
+  if (!signature) {
+    return { error: "Mimic session is unavailable until NEXTAUTH_SECRET is configured." };
+  }
 
   const store = await cookies();
   store.set(MIMIC_ACTOR_COOKIE, session.user.id, mimicCookieOptions());
   store.set(MIMIC_TARGET_COOKIE, targetId, mimicCookieOptions());
+  store.set(MIMIC_SIGNATURE_COOKIE, signature, mimicCookieOptions());
   revalidatePath("/app", "layout");
   return { ok: true };
 };
@@ -2955,6 +2970,7 @@ export const stopUserMimic = async () => {
 
   store.delete(MIMIC_ACTOR_COOKIE);
   store.delete(MIMIC_TARGET_COOKIE);
+  store.delete(MIMIC_SIGNATURE_COOKIE);
   revalidatePath("/app", "layout");
   return { ok: true };
 };

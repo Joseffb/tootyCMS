@@ -104,4 +104,44 @@ describe("SetupWizard", () => {
     expect(pushedUrl.startsWith("/app/login?error=")).toBe(true);
     expect(decodeURIComponent(pushedUrl)).toContain("CredentialsSignin");
   });
+
+  it("shows the server-provided auto-schema message instead of instructing a manual drizzle push", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      json: async () => ({
+        requiresDbInit: true,
+        error:
+          "Setup configuration was accepted, but the framework could not finish initializing the required database schema automatically. Check the runtime DB configuration and click Finish Setup again.",
+      }),
+    })) as unknown as typeof fetch);
+
+    render(
+      <SetupWizard
+        fields={[
+          { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "text" },
+        ]}
+        initialValues={{
+          POSTGRES_URL: "postgres://example",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByPlaceholderText("Site Owner"), { target: { value: "Admin" } });
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), { target: { value: "admin@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), { target: { value: "password123" } });
+    fireEvent.change(screen.getByPlaceholderText("Repeat password"), { target: { value: "password123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish Setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Finish Setup" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Setup configuration was accepted, but the framework could not finish initializing the required database schema automatically. Check the runtime DB configuration and click Finish Setup again.",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
 });

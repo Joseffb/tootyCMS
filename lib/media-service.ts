@@ -303,40 +303,35 @@ export async function deleteMediaTransportObject(input: {
   }
 }
 
-export async function getMediaRecordById(id: number) {
-  const siteRows = await db.select({ id: sites.id }).from(sites);
-  for (const site of siteRows) {
-    const siteId = String(site.id || "").trim();
-    if (!siteId) continue;
-    const rows = await withSiteMediaRecovery(siteId, async () => {
-      const media = getSiteMediaTable(siteId);
-      return db
-        .select({
-          id: media.id,
-          userId: media.userId,
-          provider: media.provider,
-          bucket: media.bucket,
-          objectKey: media.objectKey,
-          url: media.url,
-          label: media.label,
-          altText: media.altText,
-          caption: media.caption,
-          description: media.description,
-          mimeType: media.mimeType,
-          size: media.size,
-        })
-        .from(media)
-        .where(eq(media.id, id))
-        .limit(1);
-    });
-    if (rows[0]) {
-      return {
-        ...rows[0],
-        siteId,
-      };
-    }
-  }
-  return null;
+export async function getMediaRecordById(id: number, input?: { siteId?: string | null }) {
+  const siteId = String(input?.siteId || "").trim();
+  if (!siteId) return null;
+  const rows = await withSiteMediaRecovery(siteId, async () => {
+    const media = getSiteMediaTable(siteId);
+    return db
+      .select({
+        id: media.id,
+        userId: media.userId,
+        provider: media.provider,
+        bucket: media.bucket,
+        objectKey: media.objectKey,
+        url: media.url,
+        label: media.label,
+        altText: media.altText,
+        caption: media.caption,
+        description: media.description,
+        mimeType: media.mimeType,
+        size: media.size,
+      })
+      .from(media)
+      .where(eq(media.id, id))
+      .limit(1);
+  });
+  if (!rows[0]) return null;
+  return {
+    ...rows[0],
+    siteId,
+  };
 }
 
 export async function updateMediaRecord(input: {
@@ -360,7 +355,7 @@ export async function updateMediaRecord(input: {
       })
       .where(eq(media.id, input.id));
   });
-  return getMediaRecordById(input.id);
+  return getMediaRecordById(input.id, { siteId: input.siteId });
 }
 
 export async function deleteMediaRecord(input: { id: number; siteId: string }) {

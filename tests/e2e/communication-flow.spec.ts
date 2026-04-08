@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { encode } from "next-auth/jwt";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
 import { getAppOrigin } from "./helpers/env";
 import { addSessionTokenCookie } from "./helpers/auth";
+import { sqlClient } from "./helpers/vercel-sql";
 import { ensureNetworkSite, ensureNetworkUser, networkTableName, quotedIdentifier, siteFeatureTableName } from "./helpers/storage";
 
 const runId = `e2e-comm-${randomUUID()}`;
@@ -25,7 +25,7 @@ async function upsertSiteSetting(siteId: string, key: string, value: string) {
 }
 
 async function ensureSchema() {
-  await sql.query(`
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("communication_messages"))} (
       "id" text PRIMARY KEY,
       "siteId" text NULL,
@@ -47,7 +47,7 @@ async function ensureSchema() {
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql.query(`
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("communication_attempts"))} (
       "id" serial PRIMARY KEY,
       "messageId" text NOT NULL,
@@ -59,7 +59,7 @@ async function ensureSchema() {
       "createdAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql.query(`
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webcallback_events"))} (
       "id" serial PRIMARY KEY,
       "siteId" text NULL,
@@ -75,9 +75,9 @@ async function ensureSchema() {
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql.query(`ALTER TABLE ${quotedIdentifier(networkTableName("communication_attempts"))} ADD COLUMN IF NOT EXISTS "eventId" text NULL`);
-  await sql.query(`ALTER TABLE ${quotedIdentifier(networkTableName("webcallback_events"))} ADD COLUMN IF NOT EXISTS "siteId" text NULL`);
-  await sql.query(`
+  await sqlClient.query(`ALTER TABLE ${quotedIdentifier(networkTableName("communication_attempts"))} ADD COLUMN IF NOT EXISTS "eventId" text NULL`);
+  await sqlClient.query(`ALTER TABLE ${quotedIdentifier(networkTableName("webcallback_events"))} ADD COLUMN IF NOT EXISTS "siteId" text NULL`);
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webhook_subscriptions"))} (
       "id" serial PRIMARY KEY,
       "siteId" text NULL,
@@ -92,7 +92,7 @@ async function ensureSchema() {
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql.query(`
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${quotedIdentifier(networkTableName("webhook_deliveries"))} (
       "id" text PRIMARY KEY,
       "subscriptionId" integer NOT NULL,
@@ -113,10 +113,10 @@ async function ensureSchema() {
       "updatedAt" timestamp NOT NULL DEFAULT now()
     )
   `);
-  await sql.query(`
+  await sqlClient.query(`
     DROP TABLE IF EXISTS ${siteQueueTable}
   `);
-  await sql.query(`
+  await sqlClient.query(`
     CREATE TABLE IF NOT EXISTS ${siteQueueTable} (
       "id" text PRIMARY KEY,
       "event" jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -212,7 +212,7 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   const sendJson = await sendRes.json();
   expect(sendJson.messageId).toBeTruthy();
 
-  const row = await sql.query(
+  const row = await sqlClient.query(
     `SELECT "status", "providerId" FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "id" = $1 LIMIT 1`,
     [sendJson.messageId],
   );
@@ -220,11 +220,11 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   expect(row.rows[0]?.providerId).toBe("native:null-provider");
 
   const queuedEventCount =
-    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.queued' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
+    await sqlClient.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.queued' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(queuedEventCount.rows[0]?.count || 0)).toBe(1);
 
   const sentEventAfterInitialSend =
-    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
+    await sqlClient.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterInitialSend.rows[0]?.count || 0)).toBe(1);
 
   const callbackRes = await page.request.post(`${appOrigin}/api/communications/callback/native-null`, {
@@ -237,14 +237,14 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   });
   expect(callbackRes.status()).toBe(202);
 
-  const updated = await sql.query(
+  const updated = await sqlClient.query(
     `SELECT "status" FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "id" = $1 LIMIT 1`,
     [sendJson.messageId],
   );
   expect(updated.rows[0]?.status).toBe("sent");
 
   const sentEventAfterCallback =
-    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
+    await sqlClient.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterCallback.rows[0]?.count || 0)).toBe(2);
 
   const duplicateCallbackRes = await page.request.post(`${appOrigin}/api/communications/callback/native-null`, {
@@ -257,7 +257,7 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   expect(duplicateCallbackRes.status()).toBe(202);
 
   const sentEventAfterDuplicateCallback =
-    await sql.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
+    await sqlClient.query(`SELECT COUNT(*)::int AS count FROM ${siteQueueTable} WHERE ("event"->>'name') = 'communication.sent' AND ("event"->'payload'->>'messageId') = $1`, [sendJson.messageId]);
   expect(Number(sentEventAfterDuplicateCallback.rows[0]?.count || 0)).toBe(2);
 
   const genericCallbackRes = await page.request.post(`${appOrigin}/api/webcallbacks/no-handler`, {
@@ -265,7 +265,7 @@ test("communication send + callback + generic webcallback flow", async ({ page }
   });
   expect(genericCallbackRes.status()).toBe(404);
 
-  const event = await sql.query(
+  const event = await sqlClient.query(
     `SELECT "status" FROM ${quotedIdentifier(networkTableName("webcallback_events"))} WHERE "handlerId" = 'no-handler' ORDER BY "id" DESC LIMIT 1`,
   );
   expect(event.rows[0]?.status).toBe("ignored");
@@ -288,7 +288,7 @@ test("communication governance toggle and per-site rate limiting are enforced", 
   expect(disabledJson.code).toBe("disabled");
 
   await upsertSiteSetting(siteId, "communication_enabled", "true");
-  await sql.query(
+  await sqlClient.query(
     `DELETE FROM ${quotedIdentifier(networkTableName("communication_messages"))} WHERE "siteId" = $1`,
     [siteId],
   );

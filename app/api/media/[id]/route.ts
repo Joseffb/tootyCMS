@@ -42,7 +42,15 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid media id" }, { status: 400 });
   }
 
-  const record = await getMediaRecordById(mediaId);
+  const payload = (await req.json().catch(() => null)) as
+    | { siteId?: string; label?: string; altText?: string; caption?: string; description?: string }
+    | null;
+  const siteId = String(payload?.siteId || "").trim();
+  if (!siteId) {
+    return NextResponse.json({ error: "Site id is required" }, { status: 400 });
+  }
+
+  const record = await getMediaRecordById(mediaId, { siteId });
   if (!record) {
     return NextResponse.json({ error: "Media not found" }, { status: 404 });
   }
@@ -53,10 +61,6 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const payload = (await req.json().catch(() => null)) as
-    | { siteId?: string; label?: string; altText?: string; caption?: string; description?: string }
-    | null;
-  const siteId = String(payload?.siteId || "").trim();
   if (!siteId || siteId !== String(record.siteId || "").trim()) {
     return NextResponse.json({ error: "Site mismatch" }, { status: 400 });
   }
@@ -112,7 +116,15 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid media id" }, { status: 400 });
   }
 
-  const record = await getMediaRecordById(mediaId);
+  const payload = (await req.json().catch(() => null)) as
+    | { siteId?: string; confirm?: string }
+    | null;
+  const siteId = String(payload?.siteId || "").trim();
+  if (!siteId) {
+    return NextResponse.json({ error: "Site id is required" }, { status: 400 });
+  }
+
+  const record = await getMediaRecordById(mediaId, { siteId });
   if (!record) {
     return NextResponse.json({ error: "Media not found" }, { status: 404 });
   }
@@ -123,10 +135,6 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const payload = (await req.json().catch(() => null)) as
-    | { siteId?: string; confirm?: string }
-    | null;
-  const siteId = String(payload?.siteId || "").trim();
   const confirm = String(payload?.confirm || "").trim().toLowerCase();
   if (!siteId || siteId !== String(record.siteId || "").trim()) {
     return NextResponse.json({ error: "Site mismatch" }, { status: 400 });

@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { sql } from "@vercel/postgres";
 import { encode } from "next-auth/jwt";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
 import { getAppOrigin } from "./helpers/env";
 import { addSessionTokenCookie } from "./helpers/auth";
+import { sqlClient } from "./helpers/vercel-sql";
 import {
   ensureCustomSiteDomain,
   ensureNetworkSite,
@@ -37,7 +37,7 @@ async function upsertSetting(key: string, value: string) {
 
 async function safeQuery(text: string, params: unknown[] = []) {
   try {
-    await sql.query(text, params);
+    await sqlClient.query(text, params);
   } catch {
     // Test cleanup should not fail the suite when setup never completed.
   }
@@ -130,7 +130,7 @@ async function ensureCarouselDomain() {
     published: true,
   });
 
-  await sql.query(
+  await sqlClient.query(
     `INSERT INTO ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel"))}
       ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES
@@ -165,7 +165,7 @@ async function ensureCarouselDomain() {
     published: true,
   });
 
-  await sql.query(
+  await sqlClient.query(
     `INSERT INTO ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel-slide"))}
       ("domainPostId", "key", "value", "createdAt", "updatedAt")
     VALUES
@@ -185,7 +185,7 @@ async function ensureCarouselDomain() {
 }
 
 async function readSortOrder(domainPostId: string) {
-  const result = await sql.query<{ value: string }>(
+  const result = await sqlClient.query<{ value: string }>(
     `SELECT "value"
      FROM ${quotedIdentifier(siteDomainMetaTable(siteId, "carousel-slide"))}
      WHERE "domainPostId" = $1 AND "key" = 'sort_order'

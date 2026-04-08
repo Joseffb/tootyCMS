@@ -111,8 +111,17 @@ function getPrefix() {
   return raw.endsWith("_") ? raw : `${raw}_`;
 }
 
+function getPrefixFromValues(values?: Record<string, string>) {
+  const raw = String(values?.CMS_DB_PREFIX ?? process.env.CMS_DB_PREFIX ?? "tooty_").trim() || "tooty_";
+  return raw.endsWith("_") ? raw : `${raw}_`;
+}
+
 function quoteIdentifier(input: string) {
   return `"${input.replace(/"/g, "\"\"")}"`;
+}
+
+function quoteLiteral(input: string) {
+  return `'${String(input || "").replace(/'/g, "''")}'`;
 }
 
 function stableIdentifierHash(input: string) {
@@ -138,6 +147,44 @@ export function networkSequenceName(tableName: string, columnName = "id") {
   return `${readable.slice(0, maxBaseLength)}${suffix}`;
 }
 
+function resolveSetupBootstrapConnectionString(values?: Record<string, string>) {
+  const candidates = [
+    values?.POSTGRES_URL_NON_POOLING,
+    values?.DATABASE_URL_UNPOOLED,
+    values?.POSTGRES_URL,
+    values?.DATABASE_URL,
+    process.env.POSTGRES_URL_NON_POOLING,
+    process.env.DATABASE_URL_UNPOOLED,
+    process.env.POSTGRES_URL,
+    process.env.DATABASE_URL,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").trim();
+    if (normalized) return normalized;
+  }
+  throw new Error("No Postgres connection string is available for first-run schema bootstrap.");
+}
+
+function resolvePgSsl(connectionString: string) {
+  return /(?:\?|&)sslmode=require(?:&|$)/i.test(connectionString)
+    ? { rejectUnauthorized: false as const }
+    : undefined;
+}
+
+type SetupBootstrapClient = {
+  connect: () => Promise<void>;
+  query: (statement: string) => Promise<unknown>;
+  end: () => Promise<void>;
+};
+
+async function createSetupBootstrapClient(connectionString: string): Promise<SetupBootstrapClient> {
+  const { Client } = require("pg") as { Client: new (config: unknown) => SetupBootstrapClient };
+  return new Client({
+    connectionString,
+    ssl: resolvePgSsl(connectionString),
+  });
+}
+
 async function ensureOwnedSequence(tableName: string, columnName = "id") {
   const sequenceName = networkSequenceName(tableName, columnName);
   await db.execute(sql.raw(`
@@ -145,6 +192,250 @@ async function ensureOwnedSequence(tableName: string, columnName = "id") {
     OWNED BY ${quoteIdentifier(tableName)}.${quoteIdentifier(columnName)}
   `));
   return sequenceName;
+}
+
+export async function applyFirstRunNetworkSchemaBootstrap(values?: Record<string, string>) {
+  const prefix = getPrefixFromValues(values);
+  const connectionString = resolveSetupBootstrapConnectionString(values);
+  const client = await createSetupBootstrapClient(connectionString);
+
+  const networkUsersTable = `${prefix}network_users`;
+  const networkUserMetaTable = `${prefix}network_user_meta`;
+  const networkSessionsTable = `${prefix}network_sessions`;
+  const networkVerificationTokensTable = `${prefix}network_verification_tokens`;
+  const networkSystemSettingsTable = `${prefix}network_system_settings`;
+  const networkRbacRolesTable = `${prefix}network_rbac_roles`;
+  const networkSitesTable = `${prefix}network_sites`;
+  const networkAccountsTable = `${prefix}network_accounts`;
+  const networkCommunicationMessagesTable = `${prefix}network_communication_messages`;
+  const networkCommunicationAttemptsTable = `${prefix}network_communication_attempts`;
+  const networkWebcallbackEventsTable = `${prefix}network_webcallback_events`;
+  const networkWebhookSubscriptionsTable = `${prefix}network_webhook_subscriptions`;
+  const networkWebhookDeliveriesTable = `${prefix}network_webhook_deliveries`;
+  const networkUserMetaIdSequence = networkSequenceName(networkUserMetaTable);
+  const networkCommunicationAttemptsIdSequence = networkSequenceName(networkCommunicationAttemptsTable);
+  const networkWebcallbackEventsIdSequence = networkSequenceName(networkWebcallbackEventsTable);
+  const networkWebhookSubscriptionsIdSequence = networkSequenceName(networkWebhookSubscriptionsTable);
+
+  try {
+    await client.connect();
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkUserMetaIdSequence)}`);
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkCommunicationAttemptsIdSequence)}`);
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkWebcallbackEventsIdSequence)}`);
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS ${quoteIdentifier(networkWebhookSubscriptionsIdSequence)}`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkUsersTable)} (
+        "id" text PRIMARY KEY,
+        "name" text NULL,
+        "username" text NULL,
+        "gh_username" text NULL,
+        "email" text NOT NULL UNIQUE,
+        "emailVerified" timestamp NULL,
+        "image" text NULL,
+        "authProvider" text NOT NULL DEFAULT 'native',
+        "passwordHash" text NULL,
+        "role" text NOT NULL DEFAULT 'author',
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkUserMetaTable)} (
+        "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkUserMetaIdSequence)}::regclass),
+        "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "key" text NOT NULL,
+        "value" text NOT NULL DEFAULT '',
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now(),
+        UNIQUE ("userId", "key")
+      )
+    `);
+    await client.query(`
+      ALTER SEQUENCE ${quoteIdentifier(networkUserMetaIdSequence)}
+      OWNED BY ${quoteIdentifier(networkUserMetaTable)}."id"
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSessionsTable)} (
+        "sessionToken" text PRIMARY KEY,
+        "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "expires" timestamp NOT NULL
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkVerificationTokensTable)} (
+        "identifier" text NOT NULL,
+        "token" text NOT NULL UNIQUE,
+        "expires" timestamp NOT NULL,
+        PRIMARY KEY ("identifier", "token")
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSystemSettingsTable)} (
+        "key" text PRIMARY KEY,
+        "value" text NOT NULL,
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkRbacRolesTable)} (
+        "role" text PRIMARY KEY,
+        "capabilities" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "isSystem" boolean NOT NULL DEFAULT false,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkSitesTable)} (
+        "id" text PRIMARY KEY,
+        "name" text NULL,
+        "description" text NULL,
+        "logo" text NULL DEFAULT '',
+        "font" text NOT NULL DEFAULT 'font-cal',
+        "image" text NULL DEFAULT '/tooty-soccer.svg',
+        "imageBlurhash" text NULL DEFAULT '',
+        "subdomain" text UNIQUE,
+        "customDomain" text UNIQUE,
+        "message404" text NULL DEFAULT 'Blimey! You''ve found a page that doesn''t exist.',
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now(),
+        "userId" text NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "seriesCards" jsonb NULL DEFAULT '[]'::jsonb,
+        "layout" text NULL DEFAULT 'default',
+        "heroImage" text NULL,
+        "heroTitle" text NULL,
+        "heroSubtitle" text NULL,
+        "heroCtaText" text NULL,
+        "heroCtaUrl" text NULL,
+        "isPrimary" boolean NOT NULL DEFAULT false
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkAccountsTable)} (
+        "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "type" text NOT NULL,
+        "provider" text NOT NULL,
+        "providerAccountId" text NOT NULL,
+        "refresh_token" text NULL,
+        "refresh_token_expires_in" integer NULL,
+        "access_token" text NULL,
+        "expires_at" integer NULL,
+        "token_type" text NULL,
+        "scope" text NULL,
+        "id_token" text NULL,
+        "session_state" text NULL,
+        "oauth_token_secret" text NULL,
+        "oauth_token" text NULL,
+        PRIMARY KEY ("provider", "providerAccountId")
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkCommunicationMessagesTable)} (
+        "id" text PRIMARY KEY,
+        "siteId" text NULL,
+        "channel" text NOT NULL,
+        "to" text NOT NULL,
+        "subject" text NULL,
+        "body" text NOT NULL,
+        "category" text NOT NULL DEFAULT 'transactional',
+        "status" text NOT NULL DEFAULT 'queued',
+        "providerId" text NULL,
+        "externalId" text NULL,
+        "attemptCount" integer NOT NULL DEFAULT 0,
+        "maxAttempts" integer NOT NULL DEFAULT 3,
+        "nextAttemptAt" timestamp NULL,
+        "lastError" text NULL,
+        "metadata" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "createdByUserId" text NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE SET NULL ON UPDATE CASCADE,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkCommunicationAttemptsTable)} (
+        "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkCommunicationAttemptsIdSequence)}::regclass),
+        "messageId" text NOT NULL REFERENCES ${quoteIdentifier(networkCommunicationMessagesTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "providerId" text NOT NULL,
+        "eventId" text NULL,
+        "status" text NOT NULL,
+        "error" text NULL,
+        "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "createdAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      ALTER SEQUENCE ${quoteIdentifier(networkCommunicationAttemptsIdSequence)}
+      OWNED BY ${quoteIdentifier(networkCommunicationAttemptsTable)}."id"
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebcallbackEventsTable)} (
+        "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkWebcallbackEventsIdSequence)}::regclass),
+        "siteId" text NULL,
+        "handlerId" text NOT NULL,
+        "pluginId" text NULL,
+        "status" text NOT NULL DEFAULT 'received',
+        "requestBody" text NOT NULL DEFAULT '',
+        "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "requestQuery" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "response" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "error" text NULL,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      ALTER SEQUENCE ${quoteIdentifier(networkWebcallbackEventsIdSequence)}
+      OWNED BY ${quoteIdentifier(networkWebcallbackEventsTable)}."id"
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebhookSubscriptionsTable)} (
+        "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkWebhookSubscriptionsIdSequence)}::regclass),
+        "siteId" text NULL,
+        "eventName" text NOT NULL,
+        "endpointUrl" text NOT NULL,
+        "secret" text NULL,
+        "enabled" boolean NOT NULL DEFAULT true,
+        "maxRetries" integer NOT NULL DEFAULT 4,
+        "backoffBaseSeconds" integer NOT NULL DEFAULT 30,
+        "headers" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      ALTER SEQUENCE ${quoteIdentifier(networkWebhookSubscriptionsIdSequence)}
+      OWNED BY ${quoteIdentifier(networkWebhookSubscriptionsTable)}."id"
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebhookDeliveriesTable)} (
+        "id" text PRIMARY KEY,
+        "subscriptionId" integer NOT NULL REFERENCES ${quoteIdentifier(networkWebhookSubscriptionsTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        "siteId" text NULL,
+        "eventId" text NOT NULL,
+        "eventName" text NOT NULL,
+        "endpointUrl" text NOT NULL,
+        "status" text NOT NULL DEFAULT 'queued',
+        "attemptCount" integer NOT NULL DEFAULT 0,
+        "maxAttempts" integer NOT NULL DEFAULT 4,
+        "nextAttemptAt" timestamp NULL,
+        "lastError" text NULL,
+        "requestBody" text NOT NULL DEFAULT '',
+        "requestHeaders" jsonb NOT NULL DEFAULT '{}'::jsonb,
+        "responseStatus" integer NULL,
+        "responseBody" text NULL,
+        "createdAt" timestamp NOT NULL DEFAULT now(),
+        "updatedAt" timestamp NOT NULL DEFAULT now()
+      )
+    `);
+
+    trace("db", "first-run network schema bootstrap applied", {
+      prefix,
+      connectionMode: connectionString.includes("pooler.") ? "pooled" : "direct",
+    });
+  } finally {
+    await client.end().catch(() => undefined);
+  }
 }
 
 async function listExistingTables(tableNames: string[]) {
@@ -184,18 +475,18 @@ async function migrateLegacyViewCountMeta(siteId: string) {
   for (const definition of definitions) {
     const metaTable = String(definition.metaTable || "").trim();
     if (!metaTable) continue;
-    await db.execute(sql.raw(`
-      DELETE FROM ${quoteIdentifier(metaTable)} legacy
-      USING ${quoteIdentifier(metaTable)} hidden
-      WHERE legacy."key" = '${LEGACY_VIEW_COUNT_META_KEY}'
-        AND hidden."key" = '${HIDDEN_VIEW_COUNT_META_KEY}'
+    await db.execute(sql`
+      DELETE FROM ${sql.raw(quoteIdentifier(metaTable))} legacy
+      USING ${sql.raw(quoteIdentifier(metaTable))} hidden
+      WHERE legacy."key" = ${LEGACY_VIEW_COUNT_META_KEY}
+        AND hidden."key" = ${HIDDEN_VIEW_COUNT_META_KEY}
         AND legacy."domainPostId" = hidden."domainPostId"
-    `));
-    await db.execute(sql.raw(`
-      UPDATE ${quoteIdentifier(metaTable)}
-      SET "key" = '${HIDDEN_VIEW_COUNT_META_KEY}'
-      WHERE "key" = '${LEGACY_VIEW_COUNT_META_KEY}'
-    `));
+    `);
+    await db.execute(sql`
+      UPDATE ${sql.raw(quoteIdentifier(metaTable))}
+      SET "key" = ${HIDDEN_VIEW_COUNT_META_KEY}
+      WHERE "key" = ${LEGACY_VIEW_COUNT_META_KEY}
+    `);
   }
 }
 
@@ -314,7 +605,7 @@ export async function applyDatabaseCompatibilityFixes() {
   `));
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkUserMetaTable)} (
-      "id" integer PRIMARY KEY DEFAULT nextval('${networkUserMetaIdSequence}'::regclass),
+      "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkUserMetaIdSequence)}::regclass),
       "userId" text NOT NULL REFERENCES ${quoteIdentifier(networkUsersTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
       "key" text NOT NULL,
       "value" text NOT NULL DEFAULT '',
@@ -423,7 +714,7 @@ export async function applyDatabaseCompatibilityFixes() {
   `));
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkCommunicationAttemptsTable)} (
-      "id" integer PRIMARY KEY DEFAULT nextval('${networkCommunicationAttemptsIdSequence}'::regclass),
+      "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkCommunicationAttemptsIdSequence)}::regclass),
       "messageId" text NOT NULL REFERENCES ${quoteIdentifier(networkCommunicationMessagesTable)}("id") ON DELETE CASCADE ON UPDATE CASCADE,
       "providerId" text NOT NULL,
       "eventId" text NULL,
@@ -436,7 +727,7 @@ export async function applyDatabaseCompatibilityFixes() {
   await ensureOwnedSequence(networkCommunicationAttemptsTable);
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebcallbackEventsTable)} (
-      "id" integer PRIMARY KEY DEFAULT nextval('${networkWebcallbackEventsIdSequence}'::regclass),
+      "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkWebcallbackEventsIdSequence)}::regclass),
       "siteId" text NULL,
       "handlerId" text NOT NULL,
       "pluginId" text NULL,
@@ -453,7 +744,7 @@ export async function applyDatabaseCompatibilityFixes() {
   await ensureOwnedSequence(networkWebcallbackEventsTable);
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS ${quoteIdentifier(networkWebhookSubscriptionsTable)} (
-      "id" integer PRIMARY KEY DEFAULT nextval('${networkWebhookSubscriptionsIdSequence}'::regclass),
+      "id" integer PRIMARY KEY DEFAULT nextval(${quoteLiteral(networkWebhookSubscriptionsIdSequence)}::regclass),
       "siteId" text NULL,
       "eventName" text NOT NULL,
       "endpointUrl" text NOT NULL,

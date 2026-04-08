@@ -121,6 +121,7 @@ describe("/api/media/[id]", () => {
     const json = await response.json();
 
     expect(response.status).toBe(200);
+    expect(getMediaRecordByIdMock).toHaveBeenCalledWith(42, { siteId: "site-1" });
     expect(updateMediaRecordMock).toHaveBeenCalledWith({
       id: 42,
       siteId: "site-1",
@@ -150,8 +151,24 @@ describe("/api/media/[id]", () => {
     );
 
     expect(response.status).toBe(400);
+    expect(getMediaRecordByIdMock).toHaveBeenCalledWith(42, { siteId: "site-1" });
     expect(deleteMediaTransportObjectMock).not.toHaveBeenCalled();
     expect(deleteMediaRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects patch when siteId is missing before record lookup", async () => {
+    const response = await PATCH(
+      new Request("http://localhost/api/media/42", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label: "x" }),
+      }),
+      { params: Promise.resolve({ id: "42" }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(getMediaRecordByIdMock).not.toHaveBeenCalled();
+    expect(updateMediaRecordMock).not.toHaveBeenCalled();
   });
 
   it("deletes media when confirmation and capability checks pass", async () => {
@@ -170,6 +187,7 @@ describe("/api/media/[id]", () => {
     const json = await response.json();
 
     expect(response.status).toBe(200);
+    expect(getMediaRecordByIdMock).toHaveBeenCalledWith(42, { siteId: "site-1" });
     expect(deleteMediaTransportObjectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "s3",

@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   setThemeEnabled: vi.fn(),
   getSetupDefaultPluginIds: vi.fn(),
   getSetupDefaultThemeId: vi.fn(),
-  applyDatabaseCompatibilityFixes: vi.fn(),
+  applyFirstRunNetworkSchemaBootstrap: vi.fn(),
   applyPendingDatabaseMigrations: vi.fn(),
   getDatabaseHealthReport: vi.fn(),
   markDatabaseSchemaCurrent: vi.fn(),
@@ -114,7 +114,7 @@ vi.mock("@/lib/setup-defaults", () => ({
 }));
 
 vi.mock("@/lib/db-health", () => ({
-  applyDatabaseCompatibilityFixes: mocks.applyDatabaseCompatibilityFixes,
+  applyFirstRunNetworkSchemaBootstrap: mocks.applyFirstRunNetworkSchemaBootstrap,
   applyPendingDatabaseMigrations: mocks.applyPendingDatabaseMigrations,
   getDatabaseHealthReport: mocks.getDatabaseHealthReport,
   markDatabaseSchemaCurrent: mocks.markDatabaseSchemaCurrent,
@@ -149,7 +149,7 @@ describe("setup env route", () => {
     mocks.setThemeEnabled.mockReset();
     mocks.getSetupDefaultPluginIds.mockReset();
     mocks.getSetupDefaultThemeId.mockReset();
-    mocks.applyDatabaseCompatibilityFixes.mockReset();
+    mocks.applyFirstRunNetworkSchemaBootstrap.mockReset();
     mocks.applyPendingDatabaseMigrations.mockReset();
     mocks.getDatabaseHealthReport.mockReset();
     mocks.markDatabaseSchemaCurrent.mockReset();
@@ -167,8 +167,14 @@ describe("setup env route", () => {
     mocks.getAvailableThemes.mockResolvedValue([]);
     mocks.getSetupDefaultPluginIds.mockReturnValue([]);
     mocks.getSetupDefaultThemeId.mockReturnValue(null);
-    mocks.applyDatabaseCompatibilityFixes.mockResolvedValue(undefined);
-    mocks.getDatabaseHealthReport.mockResolvedValue({ migrationRequired: false, pending: [] });
+    mocks.applyFirstRunNetworkSchemaBootstrap.mockResolvedValue(undefined);
+    mocks.getDatabaseHealthReport.mockResolvedValue({
+      migrationRequired: false,
+      pending: [],
+      missingTables: [],
+      disallowedFound: [],
+      obsoleteRegistryFound: [],
+    });
     mocks.markDatabaseSchemaCurrent.mockResolvedValue(undefined);
     mocks.applyPendingDatabaseMigrations.mockResolvedValue(undefined);
     mocks.ensureDefaultCoreDataDomains.mockResolvedValue(new Map());
@@ -203,13 +209,44 @@ describe("setup env route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mocks.applyDatabaseCompatibilityFixes).toHaveBeenCalledTimes(1);
+    expect(mocks.applyFirstRunNetworkSchemaBootstrap).toHaveBeenCalledTimes(1);
     expect(mocks.markDatabaseSchemaCurrent).toHaveBeenCalledTimes(1);
     expect(mocks.applyPendingDatabaseMigrations).not.toHaveBeenCalled();
 
     const json = await response.json();
     expect(json.ok).toBe(true);
     expect(json.dbInitialized).toBe(true);
+  });
+
+  it("uses the submitted setup prefix for schema bootstrap and restores process env after setup", async () => {
+    process.env.CMS_DB_PREFIX = "";
+    mocks.applyFirstRunNetworkSchemaBootstrap.mockImplementation(async () => {
+      expect(process.env.CMS_DB_PREFIX).toBe("robertbetan_");
+      expect(process.env.POSTGRES_URL).toBe("postgres://example");
+    });
+    mocks.markDatabaseSchemaCurrent.mockImplementation(async () => {
+      expect(process.env.CMS_DB_PREFIX).toBe("robertbetan_");
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/setup/env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          values: {
+            POSTGRES_URL: "postgres://example",
+            CMS_DB_PREFIX: "robertbetan_",
+          },
+          adminName: "Admin User",
+          adminEmail: "admin@example.com",
+          adminPhone: "",
+          adminPassword: "password123",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(process.env.CMS_DB_PREFIX).toBe("");
   });
 
   it("clears stale auth cookies and pins admin routing to the new main site on setup success", async () => {
@@ -271,6 +308,38 @@ describe("setup env route", () => {
     const json = await response.json();
     expect(json.ok).toBe(false);
     expect(json.error).toContain("no main site could be resolved");
+  });
+
+  it("marks the schema current when setup only needs a version record after bootstrap", async () => {
+    mocks.getDatabaseHealthReport.mockResolvedValue({
+      migrationRequired: true,
+      pending: [{ id: "2026.03.08.0-version" }],
+      missingTables: [],
+      disallowedFound: [],
+      obsoleteRegistryFound: [],
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/setup/env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          values: {
+            POSTGRES_URL: "postgres://example",
+            POSTGRES_URL_NON_POOLING: "postgres://example-direct",
+            CMS_DB_PREFIX: "robertbetan_",
+          },
+          adminName: "Admin User",
+          adminEmail: "admin@example.com",
+          adminPhone: "",
+          adminPassword: "password123",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.markDatabaseSchemaCurrent).toHaveBeenCalledTimes(1);
+    expect(mocks.applyPendingDatabaseMigrations).not.toHaveBeenCalled();
   });
 
   it("returns a clear 409 when managed runtime env values must be configured externally", async () => {

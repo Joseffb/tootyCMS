@@ -1,10 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { sql } from "@vercel/postgres";
 import { hashPassword } from "../../lib/password";
 import { randomUUID } from "node:crypto";
 import { setSettingByKey } from "../../lib/settings-store";
 import { getAppOrigin } from "./helpers/env";
 import { addSessionTokenCookie } from "./helpers/auth";
+import { sqlClient } from "./helpers/vercel-sql";
 import {
   ensureNetworkSession,
   ensureNetworkSite,
@@ -58,7 +58,7 @@ async function authenticateAs(page: Page, userId: string) {
 }
 
 async function readCapability(role: string, capability: string) {
-  const result = await sql.query(
+  const result = await sqlClient.query(
     `SELECT "capabilities"->>$1 AS "enabled"
      FROM ${quotedIdentifier(networkTableName("rbac_roles"))}
      WHERE "role" = $2
