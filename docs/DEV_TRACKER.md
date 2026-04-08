@@ -591,3 +591,32 @@ An item can move to `verified` only when:
   - the WebKit `site lifecycle` suite exposed a one-off timeout waiting for the final `Unpublish` button under full-suite load; an isolated rerun passed, and the suite now keeps the same assertion with a longer wait budget on that specific transition
   - `npm run test` is green
   - `npm run test:integration` is green
+
+### 21. Vercel preview auth cookies must not pin to the production root domain
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/auth.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/auth-cookie-domain.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - keep production subdomain-sharing cookies on the branded root domain
+  - make Vercel preview deployments fail closed to host-only auth cookies instead of forcing `.NEXT_PUBLIC_ROOT_DOMAIN`
+  - verify preview native login sets a session again after the cookie-domain correction
+- Affected surfaces:
+  - Vercel preview login/session persistence
+  - production auth cookie domain behavior
+  - native credentials login on hosted previews
+- Required validation:
+  1. `npm run test`
+  2. `npm run test:integration`
+  3. `vercel deploy -y`
+- Current notes:
+  - live preview auth accepted native credentials but did not retain a session cookie
+  - `NEXTAUTH_URL` and `NEXT_PUBLIC_ROOT_DOMAIN` are set to `robertbetan.com` in preview, while the actual preview host is `*.vercel.app`
+  - the existing Vercel auth cookie config always forced `Domain=.NEXT_PUBLIC_ROOT_DOMAIN`, which prevents the browser from storing the cookie on preview hosts
+  - preview deployments now fail closed to host-only cookies unless `VERCEL_ENV=production` and `NEXTAUTH_URL` matches the configured branded root domain
+  - production still retains branded root-domain cookie sharing when the auth host matches the configured root
+  - focused auth cookie-domain coverage is green
+  - `npm run test` is green
+  - `npm run test:integration` is green

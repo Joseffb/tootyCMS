@@ -86,6 +86,31 @@ function deriveLocalCookieDomain() {
   return deriveLocalCookieDomainForUrl(String(process.env.NEXTAUTH_URL || ""));
 }
 
+export function deriveVercelCookieDomain(input?: {
+  vercelEnv?: string;
+  rootDomain?: string;
+  nextAuthUrl?: string;
+}) {
+  const vercelEnv = String(input?.vercelEnv || process.env.VERCEL_ENV || "").trim().toLowerCase();
+  const rootDomain = normalizeCookieDomain(String(input?.rootDomain || process.env.NEXT_PUBLIC_ROOT_DOMAIN || ""));
+  const nextAuthUrl = String(input?.nextAuthUrl || process.env.NEXTAUTH_URL || "").trim();
+
+  if (vercelEnv !== "production") return undefined;
+  if (!rootDomain) return undefined;
+  if (!nextAuthUrl) return rootDomain;
+
+  try {
+    const hostname = new URL(nextAuthUrl).hostname.toLowerCase();
+    const normalizedRoot = rootDomain.replace(/^\./, "").toLowerCase();
+    if (hostname === normalizedRoot || hostname.endsWith(`.${normalizedRoot}`)) {
+      return rootDomain;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseJsonObject(raw: string | undefined): Record<string, unknown> {
   if (!raw) return {};
   try {
@@ -290,7 +315,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           path: "/",
           // In local subdomain dev (e.g. app.localhost/main.localhost), share auth cookies across subdomains.
           domain: VERCEL_DEPLOYMENT
-            ? `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`
+            ? deriveVercelCookieDomain()
             : deriveLocalCookieDomain(),
           secure: VERCEL_DEPLOYMENT,
         },
