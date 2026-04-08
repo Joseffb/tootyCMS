@@ -6,12 +6,32 @@ import { ensureSiteSettingsTable, listSiteSettingsRegistries } from "@/lib/site-
 let ensured = false;
 let ensurePromise: Promise<void> | null = null;
 
+type SqlExecutor = { execute: typeof db.execute };
+
 function isTransientWriteError(error: unknown) {
   const code =
     typeof error === "object" && error && "code" in error
       ? String((error as { code?: unknown }).code || "")
       : "";
   return code === "40P01" || code === "55P03";
+}
+
+function isDuplicatePgTypeError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; constraint?: string };
+  return (
+    candidate.code === "42710" ||
+    (candidate.code === "23505" && candidate.constraint === "pg_type_typname_nsp_index")
+  );
+}
+
+function isDuplicatePgRelationError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; constraint?: string };
+  return (
+    candidate.code === "42P07" ||
+    (candidate.code === "23505" && candidate.constraint === "pg_class_relname_nsp_index")
+  );
 }
 
 async function withWriteRetry<T>(run: () => Promise<T>, attempts = 5): Promise<T> {
@@ -64,22 +84,79 @@ function quoted(value: string) {
   return `"${String(value || "").replace(/"/g, "\"\"")}"`;
 }
 
-async function ensureSettingsTables() {
-  if (ensured) return;
-  if (ensurePromise) return ensurePromise;
-  ensurePromise = (async () => {
-  const p = prefix();
-  const system = `${p}network_system_settings`;
-  const sites = `${p}network_sites`;
-  await db.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS ${quoted(system)} (
+async function executeDdl(executor: SqlExecutor, statement: string) {
+  try {
+    await executor.execute(sql.raw(statement));
+  } catch (error) {
+    if (isDuplicatePgTypeError(error) || isDuplicatePgRelationError(error)) return;
+    throw error;
+  }
+}
+
+async function tableExistsWithExecutor(executor: SqlExecutor, tableName: string) {
+  const result = (await executor.execute(
+    sql`SELECT to_regclass(${`public.${tableName}`}) AS table_name`,
+  )) as { rows?: Array<{ table_name?: string | null }> };
+  return Boolean(result?.rows?.[0]?.table_name);
+}
+
+async function waitForTableVisible(executor: SqlExecutor, tableName: string, attempts = 5) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await tableExistsWithExecutor(executor, tableName)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+  }
+  return false;
+}
+
+async function ensureNetworkSystemSettingsTable(executor: SqlExecutor, tableName: string) {
+  await executeDdl(
+    executor,
+    `
+    CREATE TABLE IF NOT EXISTS ${quoted(tableName)} (
       "key" TEXT PRIMARY KEY,
       "value" TEXT NOT NULL,
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `));
-  await db.execute(sql.raw(`SELECT 1 FROM ${quoted(sites)} LIMIT 1`)).catch(() => undefined);
-  ensured = true;
+  `,
+  );
+
+  if (await waitForTableVisible(executor, tableName)) return;
+
+  await executeDdl(
+    executor,
+    `
+    CREATE TABLE IF NOT EXISTS ${quoted(tableName)} (
+      "key" TEXT PRIMARY KEY,
+      "value" TEXT NOT NULL,
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `,
+  );
+
+  if (!(await waitForTableVisible(executor, tableName))) {
+    throw new Error(`Failed to ensure settings table ${tableName}.`);
+  }
+}
+
+async function ensureSettingsTables() {
+  if (ensured) return;
+  if (ensurePromise) return ensurePromise;
+  ensurePromise = (async () => {
+    const p = prefix();
+    const system = `${p}network_system_settings`;
+    const sites = `${p}network_sites`;
+    const lockKey = `${p}network_system_settings_bootstrap`;
+    await withWriteRetry(() =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+        await ensureNetworkSystemSettingsTable(tx, system);
+        await tx.execute(sql.raw(`SELECT 1 FROM ${quoted(sites)} LIMIT 1`)).catch(() => undefined);
+      }),
+    );
+    if (!(await tableExistsWithExecutor(db, system))) {
+      await ensureNetworkSystemSettingsTable(db, system);
+    }
+    ensured = true;
   })()
     .finally(() => {
       if (!ensured) ensurePromise = null;

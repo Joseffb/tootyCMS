@@ -75,10 +75,16 @@ First-run setup is served at `/setup` until setup is marked complete.
 
 Setup behavior:
 - validates required environment fields
-- saves env values using selected backend:
-  - local `.env`
-  - Vercel env API
-  - lambda env sync endpoint
+- loads existing runtime env values into the wizard when available
+- saves env values using the runtime-appropriate backend:
+  - local `.env` for local development
+  - Vercel env API only when explicitly needed and runtime env is not already satisfied
+  - optional lambda env sync endpoint when explicitly configured
+- treats managed/serverless runtimes as externally managed env surfaces:
+  - uses already-configured runtime env vars when present
+  - skips all env persistence when submitted setup values already match runtime env
+  - does not write `.env` files from the deployed app runtime
+  - on non-Vercel managed runtimes, fails closed with an operator-facing message when required runtime env vars are missing or differ from submitted setup values
 - supports optional `POSTGRES_TEST_URL` for integration/e2e isolation (falls back to `POSTGRES_URL` when empty)
 - checks required prefixed DB tables before running init
 - initializes schema when required

@@ -17,7 +17,7 @@ export default async function SetupPage() {
       <div className="mx-auto flex min-h-[70vh] w-full max-w-6xl flex-col gap-6 p-8">
         <h1 className="font-cal text-4xl font-bold text-stone-900">First-Run Setup</h1>
         <p className="text-stone-700">
-          Complete the three setup steps. Values are saved to environment config for this install.
+          Complete the three setup steps. Setup uses existing runtime config when available and only persists values through the configured backend when needed.
         </p>
         <section className="rounded-xl border border-stone-200 bg-white p-6">
           <SetupWizard fields={SETUP_ENV_FIELDS} initialValues={values} />

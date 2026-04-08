@@ -231,11 +231,11 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       if (!response.ok) {
         if (data.requiresDbInit) {
           setInfo(
-            "Environment was saved, but DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Finish Setup again.",
+            "Setup configuration was accepted, but DB schema could not be initialized automatically. Run `npx drizzle-kit push` once, then click Finish Setup again.",
           );
           return;
         }
-        throw new Error(data.error || "Failed to save environment values.");
+        throw new Error(data.error || "Failed to apply setup configuration.");
       }
 
       const mainSiteId = String(data.mainSiteId || "").trim();
@@ -254,7 +254,7 @@ export default function SetupWizard({ fields, initialValues }: Props) {
       router.refresh();
     } catch (err) {
       setBootingFirstTime(false);
-      setError(err instanceof Error ? err.message : "Failed to save environment values.");
+      setError(err instanceof Error ? err.message : "Failed to apply setup configuration.");
     } finally {
       setSaving(false);
     }

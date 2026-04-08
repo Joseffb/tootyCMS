@@ -25,6 +25,10 @@ const mocks = vi.hoisted(() => ({
   applyPendingDatabaseMigrations: vi.fn(),
   getDatabaseHealthReport: vi.fn(),
   markDatabaseSchemaCurrent: vi.fn(),
+  SetupEnvPersistenceError: class MockSetupEnvPersistenceError extends Error {
+    status = 409;
+    code = "SETUP_ENV_PERSISTENCE_FAILED";
+  },
 }));
 
 vi.mock("@/lib/install-state", () => ({
@@ -33,6 +37,7 @@ vi.mock("@/lib/install-state", () => ({
 
 vi.mock("@/lib/setup-env", () => ({
   saveSetupEnvValues: mocks.saveSetupEnvValues,
+  SetupEnvPersistenceError: mocks.SetupEnvPersistenceError,
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -150,7 +155,7 @@ describe("setup env route", () => {
     mocks.markDatabaseSchemaCurrent.mockReset();
 
     mocks.getInstallState.mockResolvedValue({ setupRequired: true });
-    mocks.saveSetupEnvValues.mockResolvedValue(undefined);
+    mocks.saveSetupEnvValues.mockResolvedValue({ backend: "local", persisted: true });
     mocks.hashPassword.mockResolvedValue("hashed-password");
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.insertReturning.mockResolvedValue([{ id: "user-1" }]);
@@ -266,5 +271,40 @@ describe("setup env route", () => {
     const json = await response.json();
     expect(json.ok).toBe(false);
     expect(json.error).toContain("no main site could be resolved");
+  });
+
+  it("returns a clear 409 when managed runtime env values must be configured externally", async () => {
+    mocks.saveSetupEnvValues.mockRejectedValue(
+      new mocks.SetupEnvPersistenceError(
+        "Managed runtime detected. Configure environment values outside the app before continuing.",
+      ),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/setup/env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          values: {
+            POSTGRES_URL: "postgres://example",
+            CMS_DB_PREFIX: "robertbetan_",
+          },
+          adminName: "Admin User",
+          adminEmail: "admin@example.com",
+          adminPhone: "",
+          adminPassword: "password123",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.advanceSetupLifecycleTo).not.toHaveBeenCalled();
+
+    const json = await response.json();
+    expect(json.ok).toBe(false);
+    expect(json.envConfigured).toBe(false);
+    expect(json.envSaved).toBe(false);
+    expect(json.requiresExternalEnvSync).toBe(true);
+    expect(json.error).toContain("Configure environment values outside the app");
   });
 });

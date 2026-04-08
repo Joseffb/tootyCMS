@@ -267,7 +267,10 @@ Tooty is currently in pre-`1.0.0` unstable development.
 First-run setup is available at `/setup` until setup is completed.
 
 Current setup flow:
-- Save environment values (local `.env`, Vercel env API, or lambda backend based on runtime/backend setting)
+- Load existing runtime environment values into the wizard when available
+- On managed/serverless runtimes, use already-configured runtime env when present and skip persistence entirely
+- On Vercel, only fall back to the Vercel env API when runtime env is not already satisfied
+- Persist environment values to local `.env` only in local development
 - Initialize schema (auto-check existing tables and only run init when required)
 - Persist setup completion and bootstrap admin metadata
 - First admin user is created on first OAuth login (no pre-seeded auth user row)

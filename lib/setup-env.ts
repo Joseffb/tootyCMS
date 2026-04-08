@@ -212,7 +212,27 @@ export const SETUP_ENV_FIELDS: SetupEnvField[] = [
 
 const ALLOWED_KEYS = new Set(SETUP_ENV_FIELDS.map((field) => field.key));
 const isVercelRuntime = Boolean(process.env.VERCEL || process.env.VERCEL_URL);
-type EnvBackend = "local" | "vercel" | "lambda";
+const isManagedRuntime = Boolean(
+  isVercelRuntime ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.AWS_EXECUTION_ENV ||
+  process.env.NETLIFY ||
+  process.env.CF_PAGES ||
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.RENDER ||
+  process.env.FLY_APP_NAME,
+);
+type EnvBackend = "local" | "vercel" | "lambda" | "runtime";
+
+export type SetupEnvPersistenceResult = {
+  backend: EnvBackend;
+  persisted: boolean;
+};
+
+export class SetupEnvPersistenceError extends Error {
+  status = 409;
+  code = "SETUP_ENV_PERSISTENCE_FAILED";
+}
 
 function parseEnv(raw: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -232,6 +252,38 @@ function formatEnvValue(value: string): string {
   if (value === "") return "";
   if (/^[A-Za-z0-9_./:@?&=+,-]*$/.test(value)) return value;
   return JSON.stringify(value);
+}
+
+function normalizeRuntimeEnvValue(key: string) {
+  return String(process.env[key] || "").trim();
+}
+
+function getRequiredSetupKeys() {
+  return SETUP_ENV_FIELDS.filter((field) => field.required).map((field) => field.key);
+}
+
+function getManagedRuntimeEnvDiff(payload: Record<string, string>) {
+  const missingRequired: string[] = [];
+  const missingSubmitted: string[] = [];
+  const mismatchedSubmitted: string[] = [];
+
+  for (const key of getRequiredSetupKeys()) {
+    if (!normalizeRuntimeEnvValue(key)) missingRequired.push(key);
+  }
+
+  for (const field of SETUP_ENV_FIELDS) {
+    if (!ALLOWED_KEYS.has(field.key)) continue;
+    const requestedValue = String(payload[field.key] ?? "").trim();
+    if (!requestedValue) continue;
+    const runtimeValue = normalizeRuntimeEnvValue(field.key);
+    if (!runtimeValue) {
+      if (!missingSubmitted.includes(field.key)) missingSubmitted.push(field.key);
+      continue;
+    }
+    if (runtimeValue !== requestedValue) mismatchedSubmitted.push(field.key);
+  }
+
+  return { missingRequired, missingSubmitted, mismatchedSubmitted };
 }
 
 export async function loadSetupEnvValues(): Promise<Record<string, string>> {
@@ -258,7 +310,7 @@ export async function loadSetupEnvValues(): Promise<Record<string, string>> {
   }
 
   trace("setup-env", "loaded setup env values", {
-    source: isVercelRuntime ? "runtime+file" : "file",
+    source: isManagedRuntime ? "runtime+file" : "file",
     keyCount: Object.keys(values).length,
   });
   return values;
@@ -288,6 +340,37 @@ async function saveLocalEnvValues(payload: Record<string, string>) {
   lines.push("");
   await writeFile(envPath, `${lines.join("\n")}`, "utf8");
   trace("setup-env", "saved local .env values", { keyCount: lines.length - 1 });
+}
+
+async function saveRuntimeEnvValues(payload: Record<string, string>) {
+  const diff = getManagedRuntimeEnvDiff(payload);
+  const unresolved = Array.from(
+    new Set([...diff.missingRequired, ...diff.missingSubmitted, ...diff.mismatchedSubmitted]),
+  );
+
+  if (unresolved.length > 0) {
+    const details: string[] = [];
+    if (diff.missingRequired.length > 0) {
+      details.push(`missing required runtime env vars: ${diff.missingRequired.join(", ")}`);
+    }
+    if (diff.missingSubmitted.length > 0) {
+      details.push(`submitted values are not present in runtime env: ${diff.missingSubmitted.join(", ")}`);
+    }
+    if (diff.mismatchedSubmitted.length > 0) {
+      details.push(`runtime env values differ from submitted setup values: ${diff.mismatchedSubmitted.join(", ")}`);
+    }
+    throw new SetupEnvPersistenceError(
+      `Managed runtime detected. Configure environment values outside the app before continuing (${details.join("; ")}).`,
+    );
+  }
+
+  trace("setup-env", "runtime env values already satisfied; persistence skipped", {
+    keyCount: Object.keys(payload).filter((key) => ALLOWED_KEYS.has(key)).length,
+  });
+  return {
+    backend: "runtime",
+    persisted: false,
+  } satisfies SetupEnvPersistenceResult;
 }
 
 async function upsertVercelEnvVar(
@@ -341,13 +424,13 @@ async function upsertVercelEnvVar(
 }
 
 async function saveVercelEnvValues(payload: Record<string, string>) {
-  const projectId = process.env.PROJECT_ID_VERCEL?.trim();
-  const authToken = process.env.AUTH_BEARER_TOKEN?.trim();
-  const teamId = process.env.TEAM_ID_VERCEL?.trim();
+  const projectId = String(payload.PROJECT_ID_VERCEL ?? process.env.PROJECT_ID_VERCEL ?? "").trim();
+  const authToken = String(payload.AUTH_BEARER_TOKEN ?? process.env.AUTH_BEARER_TOKEN ?? "").trim();
+  const teamId = String(payload.TEAM_ID_VERCEL ?? process.env.TEAM_ID_VERCEL ?? "").trim();
 
   if (!projectId || !authToken) {
-    throw new Error(
-      "Vercel runtime detected, but PROJECT_ID_VERCEL or AUTH_BEARER_TOKEN is missing.",
+    throw new SetupEnvPersistenceError(
+      "Vercel runtime detected, but PROJECT_ID_VERCEL or AUTH_BEARER_TOKEN is missing. Provide them in setup or preconfigure them in the runtime.",
     );
   }
 
@@ -359,6 +442,10 @@ async function saveVercelEnvValues(payload: Record<string, string>) {
     await upsertVercelEnvVar(key, value, projectId, authToken, teamId || undefined);
   }
   trace("setup-env", "saved vercel env values", { keyCount: SETUP_ENV_FIELDS.length });
+  return {
+    backend: "vercel",
+    persisted: true,
+  } satisfies SetupEnvPersistenceResult;
 }
 
 async function saveLambdaEnvValues(payload: Record<string, string>) {
@@ -386,25 +473,61 @@ async function saveLambdaEnvValues(payload: Record<string, string>) {
     throw new Error(`Lambda env sync failed. ${text}`.trim());
   }
   trace("setup-env", "saved lambda env values", { endpoint });
+  return {
+    backend: "lambda",
+    persisted: true,
+  } satisfies SetupEnvPersistenceResult;
 }
 
 function detectEnvBackend(): EnvBackend {
   const configured = (process.env.SETUP_ENV_BACKEND || "").trim().toLowerCase();
-  if (configured === "local" || configured === "vercel" || configured === "lambda") {
+  if (configured === "local" || configured === "vercel" || configured === "lambda" || configured === "runtime") {
     return configured;
   }
   if (isVercelRuntime) return "vercel";
+  if (isManagedRuntime) return "runtime";
   return "local";
 }
 
-export async function saveSetupEnvValues(payload: Record<string, string>): Promise<void> {
+export async function saveSetupEnvValues(payload: Record<string, string>): Promise<SetupEnvPersistenceResult> {
   const backend = detectEnvBackend();
   trace("setup-env", "selected env backend", { backend });
+
+  // Managed runtimes must never write `.env` files. If the runtime config already
+  // satisfies setup, treat it as authoritative and skip any persistence backend.
+  if (isManagedRuntime && backend !== "vercel" && backend !== "lambda") {
+    return saveRuntimeEnvValues(payload);
+  }
+  if (backend === "runtime") {
+    return saveRuntimeEnvValues(payload);
+  }
   if (backend === "vercel") {
+    const diff = getManagedRuntimeEnvDiff(payload);
+    if (
+      isManagedRuntime &&
+      diff.missingRequired.length === 0 &&
+      diff.missingSubmitted.length === 0 &&
+      diff.mismatchedSubmitted.length === 0
+    ) {
+      return saveRuntimeEnvValues(payload);
+    }
     return saveVercelEnvValues(payload);
   }
   if (backend === "lambda") {
+    const diff = getManagedRuntimeEnvDiff(payload);
+    if (
+      isManagedRuntime &&
+      diff.missingRequired.length === 0 &&
+      diff.missingSubmitted.length === 0 &&
+      diff.mismatchedSubmitted.length === 0
+    ) {
+      return saveRuntimeEnvValues(payload);
+    }
     return saveLambdaEnvValues(payload);
   }
-  return saveLocalEnvValues(payload);
+  await saveLocalEnvValues(payload);
+  return {
+    backend: "local",
+    persisted: true,
+  };
 }

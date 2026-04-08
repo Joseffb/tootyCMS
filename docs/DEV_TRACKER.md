@@ -414,3 +414,62 @@ An item can move to `verified` only when:
   - executed render classification is still environment-sensitive, so the cache-first contract is not yet satisfied deterministically
   - current remaining explicit public-route violation is `app/sitemap.xml/route.tsx`
   - this slice is verified as a first correction and audit update, with follow-up render determinism work still remaining
+
+### 16. Vercel preview build failure against prod DB in network settings bootstrap
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/settings-store.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/settings-store.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - unblock Vercel preview deploys that run against the production Robert Betan database
+  - make network system-settings bootstrap idempotent under concurrent/prerendered reads
+- Affected surfaces:
+  - production/preview build-time settings reads
+  - `/robots.txt` prerender path
+  - shared network settings bootstrap behavior
+- Required validation:
+  1. `npx vitest run tests/settings-store.test.ts`
+  2. `npm run test`
+  3. `npm run test:integration`
+  4. `vercel deploy -y`
+- Current notes:
+  - preview deploy failed while prerendering `/robots.txt` against the prod DB with duplicate key constraint `pg_type_typname_nsp_index` for `robertbetan_network_system_settings`
+  - root cause is the network settings bootstrap path doing raw `CREATE TABLE IF NOT EXISTS` without the duplicate-pg-type guard and advisory lock discipline already used by the site-scoped settings bootstrap
+  - fixed by serializing network settings bootstrap with an advisory transaction lock and swallowing duplicate pg_type races during DDL
+  - added a focused regression test covering the duplicate-pg-type race during `getSettingByKey()`
+  - `npx vitest run tests/settings-store.test.ts`, local `npm run build`, `npm run test`, and `npm run test:integration` are green on the current tree
+  - Vercel preview redeploy succeeded against the new `robertbetan_prod` database using deploy-time DB overrides: `https://robertbetan-i9llz0ncd-joseffbs-projects.vercel.app`
+  - validated with the current setup-env slice in the same tree; preview update for the combined checkpoint remains the next step
+
+### 17. Serverless setup env persistence must not write runtime files or self-mutate envs when config already exists
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/setup-env.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/api/setup/env/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-env-route.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/SETUP_AND_RUNTIME_UPDATES.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/README.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - stop setup from trying to write `.env` files in serverless runtimes
+  - make setup smart enough to use already-populated runtime env vars instead of attempting persistence
+  - keep local development `.env` persistence behavior intact
+- Affected surfaces:
+  - setup wizard env-save behavior
+  - Vercel and other serverless runtime setup flows
+  - setup documentation and operator expectations
+- Required validation:
+  1. `npx vitest run tests/setup-env-route.test.ts`
+  2. `npm run test`
+  3. `npm run test:integration`
+- Current notes:
+  - setup helper now short-circuits to runtime-backed config when managed/serverless env vars already satisfy setup, even if a persistence backend is configured
+  - setup route and UI copy now describe configuration truthfully instead of always claiming environment values were saved
+  - updated contract is: on Vercel, setup first uses already-populated runtime env values and otherwise falls back to the Vercel env API; on other managed runtimes it consumes runtime env values without attempting file writes
+  - local `.env` persistence remains local-only
+  - `npx vitest run tests/setup-env.test.ts` and `npx vitest run tests/setup-env-route.test.ts` are green
+  - `npm run test` is green
+  - `npm run test:integration` is green after rerunning sequentially; the earlier Firefox failure was caused by parallel gate contention, not by this setup-env change

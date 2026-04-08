@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getInstallState } from "@/lib/install-state";
-import { saveSetupEnvValues } from "@/lib/setup-env";
+import { saveSetupEnvValues, SetupEnvPersistenceError } from "@/lib/setup-env";
 import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
 import { trace } from "@/lib/debug";
@@ -219,7 +219,26 @@ export async function POST(req: Request) {
     Object.entries(values).map(([key, value]) => [key, String(value ?? "")]),
   );
   trace("setup", "saving setup env values");
-  await saveSetupEnvValues(normalized);
+  let envPersistence: { backend: string; persisted: boolean } = { backend: "unknown", persisted: false };
+  try {
+    envPersistence = await saveSetupEnvValues(normalized);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to save setup environment values.";
+    if (error instanceof SetupEnvPersistenceError) {
+      trace("setup", "setup save rejected: managed runtime env persistence unavailable", { message });
+      return NextResponse.json(
+        {
+          ok: false,
+          envConfigured: false,
+          envSaved: false,
+          requiresExternalEnvSync: true,
+          error: message,
+        },
+        { status: error.status },
+      );
+    }
+    throw error;
+  }
   try {
     const missingTables = await getMissingTableSets(normalized);
     trace("setup", "required table existence check", {
@@ -246,10 +265,12 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         ok: false,
-        envSaved: true,
+        envConfigured: true,
+        envSaved: envPersistence.persisted,
+        envBackend: envPersistence.backend,
         requiresDbInit: true,
         error:
-          "Environment was saved, but required DB schema could not be initialized automatically. Fix the DB bootstrap issue, then click Finish Setup again.",
+          "Setup configuration was accepted, but required DB schema could not be initialized automatically. Fix the DB bootstrap issue, then click Finish Setup again.",
       },
       { status: 409 },
     );
@@ -362,7 +383,9 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         ok: false,
-        envSaved: true,
+        envConfigured: true,
+        envSaved: envPersistence.persisted,
+        envBackend: envPersistence.backend,
         dbInitialized: true,
         userCreated: true,
         error:
@@ -394,7 +417,9 @@ export async function POST(req: Request) {
   trace("setup", "setup save completed successfully");
   const response = NextResponse.json({
     ok: true,
-    envSaved: true,
+    envConfigured: true,
+    envSaved: envPersistence.persisted,
+    envBackend: envPersistence.backend,
     dbInitialized: true,
     userCreated: true,
     mainSiteId,
