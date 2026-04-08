@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getInstallState } from "@/lib/install-state";
-import { saveSetupEnvValues, SetupEnvPersistenceError } from "@/lib/setup-env";
+import { loadSetupEnvValues, saveSetupEnvValues, SETUP_ENV_FIELDS, SetupEnvPersistenceError } from "@/lib/setup-env";
 import db from "@/lib/db";
 import { sites, users } from "@/lib/schema";
 import { trace } from "@/lib/debug";
@@ -129,6 +129,22 @@ async function initializeDbSchema(values: Record<string, string>) {
   if (backend === "local") return runLocalDbInit(values);
   if (process.env.SETUP_DB_INIT_URL?.trim()) return runHttpDbInit(values);
   return runLocalDbInit(values);
+}
+
+async function normalizeSubmittedSetupValues(values: Record<string, unknown>) {
+  const existingValues = await loadSetupEnvValues();
+  const normalized: Record<string, string> = {};
+
+  for (const field of SETUP_ENV_FIELDS) {
+    const submittedValue = String(values[field.key] ?? "").trim();
+    if (field.type === "password" && !submittedValue) {
+      normalized[field.key] = String(existingValues[field.key] || "").trim();
+      continue;
+    }
+    normalized[field.key] = submittedValue;
+  }
+
+  return normalized;
 }
 
 function normalizedPrefixFromValues(values: Record<string, string>) {
@@ -265,9 +281,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Admin password must be at least 8 characters." }, { status: 400 });
   }
 
-  const normalized = Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [key, String(value ?? "")]),
-  );
+  const normalized = await normalizeSubmittedSetupValues(values);
   trace("setup", "saving setup env values");
   let envPersistence: { backend: string; persisted: boolean } = { backend: "unknown", persisted: false };
   try {

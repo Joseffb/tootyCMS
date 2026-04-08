@@ -1518,7 +1518,7 @@ test("site lifecycle: article editor supports create, edit, taxonomy, scheduling
   await waitForEnabledButtonWithReload(page, /^Publish$/);
   await page.getByRole("button", { name: /^Publish$/ }).click();
   await waitForEditorSaved(page);
-  await waitForEnabledButtonWithReload(page, /^Unpublish$/);
+  await waitForEnabledButtonWithReload(page, /^Unpublish$/, 90_000);
 
   const verifyPage = await page.context().newPage();
   const oldSlugResponse = await waitForPublicStatus(

@@ -47,6 +47,7 @@ describe("SetupWizard", () => {
           { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "text" },
           { key: "DEBUG_MODE", label: "Debug", required: false, type: "text" },
         ]}
+        configuredPasswordKeys={[]}
         initialValues={{
           POSTGRES_URL: "postgres://example",
           DEBUG_MODE: "true",
@@ -80,6 +81,7 @@ describe("SetupWizard", () => {
           { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "text" },
           { key: "DEBUG_MODE", label: "Debug", required: false, type: "text" },
         ]}
+        configuredPasswordKeys={[]}
         initialValues={{
           POSTGRES_URL: "postgres://example",
           DEBUG_MODE: "true",
@@ -120,6 +122,7 @@ describe("SetupWizard", () => {
         fields={[
           { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "text" },
         ]}
+        configuredPasswordKeys={[]}
         initialValues={{
           POSTGRES_URL: "postgres://example",
         }}
@@ -143,5 +146,27 @@ describe("SetupWizard", () => {
         ),
       ).toBeInTheDocument();
     });
+  });
+
+  it("allows a configured required password field to stay blank in the client wizard", async () => {
+    render(
+      <SetupWizard
+        fields={[
+          { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "password" },
+        ]}
+        configuredPasswordKeys={["POSTGRES_URL"]}
+        initialValues={{
+          POSTGRES_URL: "",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Existing configured value stays in place unless you enter a replacement\./),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.getByPlaceholderText("Site Owner")).toBeInTheDocument();
   });
 });

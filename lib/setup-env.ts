@@ -11,6 +11,11 @@ export type SetupEnvField = {
   helpText?: string;
 };
 
+export type SetupWizardSeed = {
+  initialValues: Record<string, string>;
+  configuredPasswordKeys: string[];
+};
+
 export const SETUP_ENV_FIELDS: SetupEnvField[] = [
   {
     key: "NEXTAUTH_URL",
@@ -258,6 +263,10 @@ function normalizeRuntimeEnvValue(key: string) {
   return String(process.env[key] || "").trim();
 }
 
+function isSensitiveSetupField(field: SetupEnvField) {
+  return field.type === "password";
+}
+
 function getRequiredSetupKeys() {
   return SETUP_ENV_FIELDS.filter((field) => field.required).map((field) => field.key);
 }
@@ -288,21 +297,25 @@ function getManagedRuntimeEnvDiff(payload: Record<string, string>) {
 
 export async function loadSetupEnvValues(): Promise<Record<string, string>> {
   const envPath = join(process.cwd(), ".env");
-  let values: Record<string, string> = {};
+  let fileValues: Record<string, string> = {};
   try {
     const raw = await readFile(envPath, "utf8");
-    values = parseEnv(raw);
+    fileValues = parseEnv(raw);
   } catch {
     try {
       const exampleRaw = await readFile(join(process.cwd(), ".env.example"), "utf8");
-      values = parseEnv(exampleRaw);
+      fileValues = parseEnv(exampleRaw);
     } catch {
-      values = {};
+      fileValues = {};
     }
   }
 
-  // Runtime env vars (e.g. Vercel-managed) should be visible in the wizard.
+  const values: Record<string, string> = {};
   for (const field of SETUP_ENV_FIELDS) {
+    const fileValue = String(fileValues[field.key] || "").trim();
+    if (fileValue) values[field.key] = fileValue;
+
+    // Runtime env vars (e.g. Vercel-managed) should be visible to server-side setup flows.
     const runtimeValue = process.env[field.key];
     if (runtimeValue && runtimeValue.trim()) {
       values[field.key] = runtimeValue.trim();
@@ -314,6 +327,22 @@ export async function loadSetupEnvValues(): Promise<Record<string, string>> {
     keyCount: Object.keys(values).length,
   });
   return values;
+}
+
+export function buildSetupWizardSeed(values: Record<string, string>): SetupWizardSeed {
+  const initialValues: Record<string, string> = {};
+  const configuredPasswordKeys: string[] = [];
+
+  for (const field of SETUP_ENV_FIELDS) {
+    const normalizedValue = String(values[field.key] || "").trim();
+    initialValues[field.key] = isSensitiveSetupField(field) ? "" : normalizedValue;
+    if (normalizedValue && isSensitiveSetupField(field)) configuredPasswordKeys.push(field.key);
+  }
+
+  return {
+    initialValues,
+    configuredPasswordKeys,
+  };
 }
 
 async function saveLocalEnvValues(payload: Record<string, string>) {

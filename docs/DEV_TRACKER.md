@@ -556,3 +556,38 @@ An item can move to `verified` only when:
   - `npm run test` is green
   - `npm run test:integration` is green
   - `vercel deploy -y` completed on 2026-04-08 at `https://robertbetan-dgokf8dym-joseffbs-projects.vercel.app`
+
+### 20. Hosted setup wizard must not hydrate configured secrets into the client
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/setup-env.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/setup/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/setup/setup-wizard.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/api/setup/env/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-env.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-env-route.test.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/setup-wizard.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/e2e/site-lifecycle.spec.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - stop hosted `/setup` from serializing configured secrets or unrelated env keys into the client payload
+  - preserve already-configured password values server-side when operators leave hosted password fields blank
+  - keep required non-password fields truthy when operators clear them instead of letting the wizard bypass validation
+  - harden the WebKit lifecycle wait that flaked under full-suite load after the setup fix verification pass
+- Affected surfaces:
+  - hosted setup wizard initial state
+  - Vercel/serverless first-run operator experience
+  - setup env save normalization
+  - cross-browser site lifecycle integration stability
+- Required validation:
+  1. `npm run test`
+  2. `npm run test:integration`
+- Current notes:
+  - preview verification on 2026-04-08 showed `/setup` rendering successfully on Vercel, but the page payload still exposed configured setup secrets to the browser through the initial wizard seed
+  - `loadSetupEnvValues()` is now allowlist-only for setup fields, and `buildSetupWizardSeed()` blanks password values before hydration while only exposing configured-password metadata needed to preserve hosted secrets
+  - the setup route now preserves existing configured password values when the client leaves those fields blank, while required non-password fields must remain populated and can no longer bypass client validation if cleared
+  - a parallel review found the first seed-model pass still let cleared non-password fields slip through and leaked the presence of every configured secret key; both issues are now fixed on the current tree
+  - the WebKit `site lifecycle` suite exposed a one-off timeout waiting for the final `Unpublish` button under full-suite load; an isolated rerun passed, and the suite now keeps the same assertion with a longer wait budget on that specific transition
+  - `npm run test` is green
+  - `npm run test:integration` is green

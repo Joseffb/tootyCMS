@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getInstallState } from "@/lib/install-state";
 import SetupWizard from "./setup-wizard";
-import { SETUP_ENV_FIELDS, loadSetupEnvValues } from "@/lib/setup-env";
+import { buildSetupWizardSeed, SETUP_ENV_FIELDS, loadSetupEnvValues } from "@/lib/setup-env";
 
 export default async function SetupPage() {
   const state = await getInstallState();
@@ -11,6 +11,7 @@ export default async function SetupPage() {
   }
 
   const values = await loadSetupEnvValues();
+  const wizardSeed = buildSetupWizardSeed(values);
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,_#fef3c7,_#ecfeff_42%,_#fff7ed_100%)]">
@@ -20,7 +21,11 @@ export default async function SetupPage() {
           Complete the three setup steps. Setup uses existing runtime config when available and only persists values through the configured backend when needed.
         </p>
         <section className="rounded-xl border border-stone-200 bg-white p-6">
-          <SetupWizard fields={SETUP_ENV_FIELDS} initialValues={values} />
+          <SetupWizard
+            fields={SETUP_ENV_FIELDS}
+            initialValues={wizardSeed.initialValues}
+            configuredPasswordKeys={wizardSeed.configuredPasswordKeys}
+          />
         </section>
       </div>
     </main>

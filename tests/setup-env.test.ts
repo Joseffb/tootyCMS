@@ -173,4 +173,46 @@ describe("setup env persistence", () => {
       `POSTGRES_URL=${REQUIRED_RUNTIME_VALUES.POSTGRES_URL}`,
     );
   });
+
+  it("only loads allowed setup env keys from file/runtime sources", async () => {
+    mocks.readFile.mockResolvedValue([
+      "NEXTAUTH_URL=https://file.example.com",
+      "NEXT_PUBLIC_ROOT_DOMAIN=file.example.com",
+      "CMS_DB_PREFIX=file_",
+      "POSTGRES_URL=postgres://file",
+      "NEXTAUTH_SECRET=file-secret",
+      "NEON_API_KEY=should-not-leak",
+    ].join("\n"));
+    process.env.NEXT_PUBLIC_ROOT_DOMAIN = "runtime.example.com";
+
+    const { loadSetupEnvValues } = await import("@/lib/setup-env");
+
+    await expect(loadSetupEnvValues()).resolves.toEqual({
+      NEXTAUTH_URL: "https://file.example.com",
+      NEXT_PUBLIC_ROOT_DOMAIN: "runtime.example.com",
+      CMS_DB_PREFIX: "file_",
+      POSTGRES_URL: "postgres://file",
+      NEXTAUTH_SECRET: "file-secret",
+    });
+  });
+
+  it("builds wizard seed values without hydrating configured password fields", async () => {
+    const { buildSetupWizardSeed } = await import("@/lib/setup-env");
+
+    expect(
+      buildSetupWizardSeed({
+        NEXT_PUBLIC_ROOT_DOMAIN: "example.com",
+        POSTGRES_URL: "postgres://example",
+        NEXTAUTH_SECRET: "super-secret",
+        NEON_API_KEY: "should-not-leak",
+      }),
+    ).toEqual({
+      initialValues: expect.objectContaining({
+        NEXT_PUBLIC_ROOT_DOMAIN: "example.com",
+        POSTGRES_URL: "",
+        NEXTAUTH_SECRET: "",
+      }),
+      configuredPasswordKeys: expect.arrayContaining(["POSTGRES_URL", "NEXTAUTH_SECRET"]),
+    });
+  });
 });

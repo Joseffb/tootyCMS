@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getInstallState: vi.fn(),
+  loadSetupEnvValues: vi.fn(),
   saveSetupEnvValues: vi.fn(),
   siteFindMany: vi.fn(),
   userFindFirst: vi.fn(),
@@ -36,6 +37,12 @@ vi.mock("@/lib/install-state", () => ({
 }));
 
 vi.mock("@/lib/setup-env", () => ({
+  SETUP_ENV_FIELDS: [
+    { key: "POSTGRES_URL", label: "Postgres URL", required: true, type: "password" },
+    { key: "CMS_DB_PREFIX", label: "Database Table Prefix", required: true, type: "text" },
+    { key: "NEXTAUTH_SECRET", label: "NextAuth Secret", required: true, type: "password" },
+  ],
+  loadSetupEnvValues: mocks.loadSetupEnvValues,
   saveSetupEnvValues: mocks.saveSetupEnvValues,
   SetupEnvPersistenceError: mocks.SetupEnvPersistenceError,
 }));
@@ -131,6 +138,7 @@ describe("setup env route", () => {
 
     mocks.getInstallState.mockReset();
     mocks.saveSetupEnvValues.mockReset();
+    mocks.loadSetupEnvValues.mockReset();
     mocks.siteFindMany.mockReset();
     mocks.userFindFirst.mockReset();
     mocks.dbExecute.mockReset();
@@ -156,6 +164,11 @@ describe("setup env route", () => {
 
     mocks.getInstallState.mockResolvedValue({ setupRequired: true });
     mocks.saveSetupEnvValues.mockResolvedValue({ backend: "local", persisted: true });
+    mocks.loadSetupEnvValues.mockResolvedValue({
+      POSTGRES_URL: "postgres://existing",
+      CMS_DB_PREFIX: "robertbetan_",
+      NEXTAUTH_SECRET: "existing-secret",
+    });
     mocks.hashPassword.mockResolvedValue("hashed-password");
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.insertReturning.mockResolvedValue([{ id: "user-1" }]);
@@ -375,5 +388,32 @@ describe("setup env route", () => {
     expect(json.envSaved).toBe(false);
     expect(json.requiresExternalEnvSync).toBe(true);
     expect(json.error).toContain("Configure environment values outside the app");
+  });
+
+  it("preserves existing configured password values when the client leaves them blank", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/setup/env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          values: {
+            POSTGRES_URL: "",
+            CMS_DB_PREFIX: "robertbetan_",
+            NEXTAUTH_SECRET: "",
+          },
+          adminName: "Admin User",
+          adminEmail: "admin@example.com",
+          adminPhone: "",
+          adminPassword: "password123",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.saveSetupEnvValues).toHaveBeenCalledWith({
+      POSTGRES_URL: "postgres://existing",
+      CMS_DB_PREFIX: "robertbetan_",
+      NEXTAUTH_SECRET: "existing-secret",
+    });
   });
 });

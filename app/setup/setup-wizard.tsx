@@ -8,6 +8,7 @@ import { Eye } from "lucide-react";
 type Props = {
   fields: SetupEnvField[];
   initialValues: Record<string, string>;
+  configuredPasswordKeys: string[];
 };
 type FieldGroup = {
   id: string;
@@ -70,7 +71,7 @@ function getOptionalFieldGroups(optionalFields: SetupEnvField[]): FieldGroup[] {
   return groupOrder.map((id) => groups[id]).filter((group) => group.fields.length > 0);
 }
 
-export default function SetupWizard({ fields, initialValues }: Props) {
+export default function SetupWizard({ fields, initialValues, configuredPasswordKeys }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [saving, setSaving] = useState(false);
@@ -86,6 +87,10 @@ export default function SetupWizard({ fields, initialValues }: Props) {
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
   const [showPasswords, setShowPasswords] = useState(false);
   const [finishArmed, setFinishArmed] = useState(false);
+  const configuredPasswordKeySet = useMemo(
+    () => new Set(configuredPasswordKeys),
+    [configuredPasswordKeys],
+  );
 
   const dbFields = useMemo(
     () => fields.filter((field) => DB_FIELD_KEYS.has(field.key)),
@@ -99,13 +104,23 @@ export default function SetupWizard({ fields, initialValues }: Props) {
   const optionalGroups = useMemo(() => getOptionalFieldGroups(optionalFields), [optionalFields]);
 
   const missingRequiredDb = useMemo(
-    () => dbFields.filter((field) => field.required && !(values[field.key] || "").trim()),
-    [dbFields, values],
+    () =>
+      dbFields.filter((field) => {
+        const value = String(values[field.key] || "").trim();
+        const keepConfiguredSecret = field.type === "password" && configuredPasswordKeySet.has(field.key);
+        return field.required && !value && !keepConfiguredSecret;
+      }),
+    [configuredPasswordKeySet, dbFields, values],
   );
 
   const missingRequiredAll = useMemo(
-    () => fields.filter((field) => field.required && !(values[field.key] || "").trim()),
-    [fields, values],
+    () =>
+      fields.filter((field) => {
+        const value = String(values[field.key] || "").trim();
+        const keepConfiguredSecret = field.type === "password" && configuredPasswordKeySet.has(field.key);
+        return field.required && !value && !keepConfiguredSecret;
+      }),
+    [configuredPasswordKeySet, fields, values],
   );
 
   function nextStep() {
@@ -263,6 +278,9 @@ async function signInWithRetry(email: string, password: string, callbackUrl: str
 
   function renderField(field: SetupEnvField) {
     const type = field.type ?? "text";
+    const configured = configuredPasswordKeySet.has(field.key);
+    const preserveConfiguredSecret = type === "password" && configured && !(values[field.key] || "").trim();
+    const helpText = field.helpText ? `${field.helpText} (${field.key})` : field.key;
     return (
       <label key={field.key} className="flex flex-col gap-1">
         <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">
@@ -271,7 +289,7 @@ async function signInWithRetry(email: string, password: string, callbackUrl: str
         <input
           type={type}
           value={values[field.key] ?? ""}
-          placeholder={field.placeholder ?? ""}
+          placeholder={preserveConfiguredSecret ? "Already configured; leave blank to keep it" : (field.placeholder ?? "")}
           onChange={(event) =>
             setValues((prev) => ({
               ...prev,
@@ -281,7 +299,7 @@ async function signInWithRetry(email: string, password: string, callbackUrl: str
           className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900"
         />
         <span className="text-[11px] text-stone-500">
-          {field.helpText ? `${field.helpText} (${field.key})` : field.key}
+          {preserveConfiguredSecret ? `${helpText} Existing configured value stays in place unless you enter a replacement.` : helpText}
         </span>
       </label>
     );
