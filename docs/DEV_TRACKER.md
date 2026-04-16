@@ -31,18 +31,18 @@ Current tree status:
 
 - Status: `verified`
 - Area:
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/feed.xml/route.ts`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/[domain]/layout.tsx`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/app/(dashboard)/settings/reading/page.tsx`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/app/(dashboard)/site/[id]/settings/reading/page.tsx`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/cms-config.ts`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/actions.ts`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/admin-nav.ts`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/core-version.ts`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/package.json`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/docs/VERSIONING.md`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/tests`
-  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/docs/DEV_TRACKER.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/feed.xml/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/[domain]/layout.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/app/(dashboard)/settings/reading/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/app/(dashboard)/site/[id]/settings/reading/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/cms-config.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/actions.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/admin-nav.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/core-version.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/package.json`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/VERSIONING.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
 - Scope:
   - add a WordPress-style core RSS feed at `/feed.xml`
   - manage network defaults and site overrides from the existing reading settings surfaces
@@ -167,6 +167,35 @@ Current tree status:
   - created a root `AGENTS.md` that separates global execution policy from named project overlays
   - delegation guidance is now capability-aware so the file remains portable even when subagent tooling is unavailable
   - docs-only validation completed with manual consistency review and `git diff --check`
+
+### 13. Domain admin cards/list view toggle
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/app/app/(dashboard)/site/[id]/domain/[domainKey]/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/domain-posts.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/components/domain-post-list-table.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/lib/domain-post-admin-view.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/domain-post-admin-routes.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/domain-posts.test.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/tests/site-domain-posts-page.test.tsx`
+- Scope:
+  - add a generic list view alongside the existing domain-post card grid
+  - keep the current card grid as the default view
+  - use a query-param-backed admin view toggle that can work for any data domain and remember the last selected view
+- Affected surfaces:
+  - site domain admin listing
+  - operator scan/edit workflow for posts and other domain-backed entries
+  - admin route/query-param view state
+- Current notes:
+  - implemented a WordPress-style top-right cards/list toggle on the site domain admin page
+  - list view now renders a structured row/table workspace while cards remain the default
+  - current view is remembered through a cookie-backed preference, with query params still taking precedence
+  - focused Vitest coverage is green for page toggle state, list rendering, and canonical edit/view links
+  - isolated worktrees now resolve relative `THEMES_PATH` and `PLUGINS_PATH` entries against the primary repo root when the worktree-local sibling path is missing, so shared plugin/theme repos stay discoverable in runtime and integration flows
+  - the site lifecycle e2e helper now performs a final editor-surface readiness check before timing out, which removed a Firefox timeout boundary flake on the page editor persistence step
+  - full `npm run test` is green on this branch
+  - full `npm run test:integration` is green on this branch across `chromium`, `firefox`, `webkit`, and `edge`
 
 ### 11. GitHub Core CI portability for `vercel:dev` wrapper tests
 
