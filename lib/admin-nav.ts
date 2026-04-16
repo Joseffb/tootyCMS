@@ -83,6 +83,7 @@ const SINGLE_SITE_NETWORK_SETTINGS_DEFINITIONS: SettingsDefinition[] = [
 
 const NETWORK_SETTINGS_DEFINITIONS: SettingsDefinition[] = [
   { name: "Sites", suffix: "sites", segment: "sites" },
+  { name: "Reading", suffix: "reading", segment: "reading" },
   { name: "Themes", suffix: "themes", segment: "themes" },
   { name: "Plugins", suffix: "plugins", segment: "plugins" },
   { name: "Messages", suffix: "messages", segment: "messages" },

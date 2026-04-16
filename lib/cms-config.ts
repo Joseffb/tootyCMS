@@ -1,5 +1,7 @@
 import { withLocalDevPort } from "@/lib/site-url";
 import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
+import { DEFAULT_CORE_DOMAIN_KEYS } from "./default-data-domains";
+import { listSiteDataDomains } from "./site-data-domain-registry";
 
 export const RANDOM_DEFAULT_IMAGES_KEY = "random_default_images_enabled";
 export const SITE_URL_KEY = "site_url";
@@ -30,6 +32,30 @@ export const THEME_QUERY_NETWORK_ALLOWED_SITE_IDS_KEY = "theme_query_network_all
 export const COMMUNICATION_ENABLED_KEY = "communication_enabled";
 export const COMMUNICATION_RATE_LIMIT_MAX_KEY = "communication_rate_limit_max";
 export const COMMUNICATION_RATE_LIMIT_WINDOW_SECONDS_KEY = "communication_rate_limit_window_seconds";
+export const RSS_NETWORK_ENABLED_KEY = "rss_network_enabled";
+export const RSS_DEFAULT_ENABLED_KEY = "rss_default_enabled";
+export const RSS_DEFAULT_CONTENT_MODE_KEY = "rss_default_content_mode";
+export const RSS_DEFAULT_ITEMS_PER_FEED_KEY = "rss_default_items_per_feed";
+export const RSS_ENABLED_KEY = "rss_enabled";
+export const RSS_CONTENT_MODE_KEY = "rss_content_mode";
+export const RSS_ITEMS_PER_FEED_KEY = "rss_items_per_feed";
+export const RSS_INCLUDE_DOMAIN_KEYS_KEY = "rss_include_domain_keys";
+
+export type RssContentMode = "excerpt" | "full";
+
+export type EffectiveSiteRssSettings = {
+  networkEnabled: boolean;
+  enabled: boolean;
+  contentMode: RssContentMode;
+  itemsPerFeed: number;
+  includedDomainKeys: string[];
+};
+
+const DEFAULT_RSS_CONTENT_MODE: RssContentMode = "excerpt";
+export const DEFAULT_RSS_ITEMS_PER_FEED = 10;
+const MIN_RSS_ITEMS_PER_FEED = 1;
+const MAX_RSS_ITEMS_PER_FEED = 100;
+const DEFAULT_RSS_INCLUDED_DOMAIN_KEYS = ["post"] as const;
 
 function siteScopedSettingKey(siteId: string, key: string) {
   return `site_${siteId}_${key}`;
@@ -94,6 +120,56 @@ function normalizePositiveInt(input: string, fallback: number) {
   const value = Number.parseInt(String(input || "").trim(), 10);
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return value;
+}
+
+function clampInt(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+export function normalizeRssContentMode(rawValue: string | null | undefined): RssContentMode {
+  return String(rawValue || "").trim().toLowerCase() === "full" ? "full" : DEFAULT_RSS_CONTENT_MODE;
+}
+
+export function normalizeRssItemsPerFeed(rawValue: string | number | null | undefined, fallback = DEFAULT_RSS_ITEMS_PER_FEED) {
+  const parsedValue =
+    typeof rawValue === "number"
+      ? Math.trunc(rawValue)
+      : Number.parseInt(String(rawValue || "").trim(), 10);
+  const fallbackValue = clampInt(fallback, MIN_RSS_ITEMS_PER_FEED, MAX_RSS_ITEMS_PER_FEED);
+  if (!Number.isFinite(parsedValue)) return fallbackValue;
+  return clampInt(parsedValue, MIN_RSS_ITEMS_PER_FEED, MAX_RSS_ITEMS_PER_FEED);
+}
+
+function normalizeRssDomainKey(rawValue: string) {
+  return String(rawValue || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/^[-_]+|[-_]+$/g, "");
+}
+
+export function normalizeRssIncludedDomainKeys(rawValue: string | string[] | null | undefined) {
+  const values = Array.isArray(rawValue) ? rawValue : [String(rawValue || "")];
+  const normalized = values
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => normalizeRssDomainKey(value))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+async function resolveSiteRssIncludedDomainKeys(siteId: string, rawValue: string) {
+  const selectedKeys = normalizeRssIncludedDomainKeys(rawValue);
+  const allowedKeys = new Set<string>(DEFAULT_CORE_DOMAIN_KEYS);
+  const activeDomains = await listSiteDataDomains(siteId, { includeInactive: false });
+  for (const domain of activeDomains) {
+    const normalizedKey = normalizeRssDomainKey(domain.key);
+    if (normalizedKey) {
+      allowedKeys.add(normalizedKey);
+    }
+  }
+
+  const validKeys = selectedKeys.filter((key) => allowedKeys.has(key));
+  return validKeys.length > 0 ? validKeys : [...DEFAULT_RSS_INCLUDED_DOMAIN_KEYS];
 }
 
 export type SiteCommunicationGovernance = {
@@ -204,13 +280,14 @@ export async function setSiteUrlSettingForSite(siteId: string, rawValue: string)
 }
 
 export async function getReadingSettings() {
-  const [randomDefaults, siteUrl, indexingEnabled, metaTitle, metaDescription] =
+  const [randomDefaults, siteUrl, indexingEnabled, metaTitle, metaDescription, rss] =
     await Promise.all([
       getRandomDefaultImagesSetting(),
       getSiteUrlSetting(),
       getBooleanSetting(SEO_INDEXING_ENABLED_KEY, true),
       getTextSetting(SEO_META_TITLE_KEY, ""),
       getTextSetting(SEO_META_DESCRIPTION_KEY, ""),
+      getRssSettings(),
     ]);
   const [mainHeaderEnabled, showNetworkSites, queryNetworkEnabled, queryNetworkAllowedSiteIds] = await Promise.all([
     getBooleanSetting(MAIN_HEADER_ENABLED_KEY, true),
@@ -231,6 +308,7 @@ export async function getReadingSettings() {
       mainHeaderEnabled,
       showNetworkSites,
     },
+    rss,
     queryNetwork: {
       enabled: queryNetworkEnabled,
       allowedSiteIds: queryNetworkAllowedSiteIds,
@@ -251,6 +329,40 @@ export async function getWritingSettings() {
     editorMode,
     categoryBase,
     tagBase,
+  };
+}
+
+export async function getRssSettings() {
+  const [networkEnabled, defaultEnabled, defaultContentModeRaw, defaultItemsPerFeedRaw] = await Promise.all([
+    getBooleanSetting(RSS_NETWORK_ENABLED_KEY, true),
+    getBooleanSetting(RSS_DEFAULT_ENABLED_KEY, true),
+    getTextSetting(RSS_DEFAULT_CONTENT_MODE_KEY, DEFAULT_RSS_CONTENT_MODE),
+    getTextSetting(RSS_DEFAULT_ITEMS_PER_FEED_KEY, String(DEFAULT_RSS_ITEMS_PER_FEED)),
+  ]);
+
+  return {
+    networkEnabled,
+    defaultEnabled,
+    contentMode: normalizeRssContentMode(defaultContentModeRaw),
+    itemsPerFeed: normalizeRssItemsPerFeed(defaultItemsPerFeedRaw),
+  };
+}
+
+export async function getEffectiveSiteRssSettings(siteId: string): Promise<EffectiveSiteRssSettings> {
+  const networkSettings = await getRssSettings();
+  const [enabled, contentModeRaw, itemsPerFeedRaw, includedDomainKeysRaw] = await Promise.all([
+    getSiteBooleanSetting(siteId, RSS_ENABLED_KEY, networkSettings.defaultEnabled),
+    getSiteTextSetting(siteId, RSS_CONTENT_MODE_KEY, networkSettings.contentMode),
+    getSiteTextSetting(siteId, RSS_ITEMS_PER_FEED_KEY, String(networkSettings.itemsPerFeed)),
+    getSiteTextSetting(siteId, RSS_INCLUDE_DOMAIN_KEYS_KEY, DEFAULT_RSS_INCLUDED_DOMAIN_KEYS.join(",")),
+  ]);
+
+  return {
+    networkEnabled: networkSettings.networkEnabled,
+    enabled,
+    contentMode: normalizeRssContentMode(contentModeRaw),
+    itemsPerFeed: normalizeRssItemsPerFeed(itemsPerFeedRaw, networkSettings.itemsPerFeed),
+    includedDomainKeys: await resolveSiteRssIncludedDomainKeys(siteId, includedDomainKeysRaw),
   };
 }
 

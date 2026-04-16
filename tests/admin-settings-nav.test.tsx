@@ -68,6 +68,7 @@ describe("admin settings nav components", () => {
       expect(screen.getByRole("link", { name: "Sites" })).toBeTruthy();
     });
 
+    expect(screen.getByRole("link", { name: "Reading" }).getAttribute("href")).toBe("/app/settings/reading");
     expect(screen.queryByRole("link", { name: "General" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Comments" })).toBeNull();
   });

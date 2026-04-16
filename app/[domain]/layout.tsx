@@ -5,6 +5,8 @@ import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { getSiteMenu } from "@/lib/menu-system";
 import { getActiveThemeForSite, getThemeAssetsForSite } from "@/lib/theme-runtime";
 import {
+  getEffectiveSiteRssSettings,
+  getSiteUrlSettingForSite,
   getSiteTextSetting,
   SEO_META_DESCRIPTION_KEY,
   SEO_META_TITLE_KEY,
@@ -16,6 +18,7 @@ import Script from "next/script";
 import FrontendAuthBridge from "@/components/frontend-auth-bridge";
 import { getThemeCacheBustToken, withCacheBust } from "@/lib/theme-cache-bust";
 import { getAdminPathAlias } from "@/lib/admin-path";
+import { getSitePublicUrl } from "@/lib/site-url";
 
 export async function generateMetadata({
   params,
@@ -28,7 +31,13 @@ export async function generateMetadata({
 
   if (!data) return null;
   const siteId = data.id ? String(data.id) : "";
-  const [activeTheme, seoSettings] = await Promise.all([
+  const isPrimary = Boolean((data as any).isPrimary) || (data as any).subdomain === "main";
+  const derivedSiteUrl = getSitePublicUrl({
+    subdomain: data.subdomain,
+    customDomain: data.customDomain,
+    isPrimary,
+  });
+  const [activeTheme, seoSettings, rssSettings, configuredSiteUrl] = await Promise.all([
     siteId ? getActiveThemeForSite(siteId) : Promise.resolve(null),
     siteId
       ? Promise.all([
@@ -39,6 +48,16 @@ export async function generateMetadata({
           getSiteTextSetting(siteId, SOCIAL_META_IMAGE_KEY, ""),
         ])
       : Promise.resolve(["", "", "", "", ""] as const),
+    siteId
+      ? getEffectiveSiteRssSettings(siteId)
+      : Promise.resolve({
+          networkEnabled: false,
+          enabled: false,
+          contentMode: "excerpt" as const,
+          itemsPerFeed: 10,
+          includedDomainKeys: ["post"],
+        }),
+    siteId ? getSiteUrlSettingForSite(siteId, derivedSiteUrl) : Promise.resolve({ value: derivedSiteUrl }),
   ]);
   const themeConfig = (activeTheme?.config || {}) as Record<string, unknown>;
   const configuredTitle = String(themeConfig.site_title || "").trim();
@@ -64,10 +83,19 @@ export async function generateMetadata({
   const ogDescription = socialMetaDescription || seoDescription;
   const ogImage = socialMetaImage || image || logo || "/icon.png";
   const favicon = configuredFavicon || logo || "/icon.png";
+  const siteUrl = configuredSiteUrl.value.trim() || derivedSiteUrl;
+  const rssEnabled = rssSettings.networkEnabled && rssSettings.enabled;
 
   return {
     title,
     description: seoDescription,
+    alternates: rssEnabled
+      ? {
+          types: {
+            "application/rss+xml": "/feed.xml",
+          },
+        }
+      : undefined,
     openGraph: {
       title: ogTitle,
       description: ogDescription,
@@ -85,7 +113,7 @@ export async function generateMetadata({
       shortcut: [favicon],
       apple: [favicon],
     },
-    metadataBase: new URL(`https://${decoded}`),
+    metadataBase: new URL(siteUrl),
     // Optional: Set canonical URL to custom domain if it exists
     // ...(params.domain.endsWith(`.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`) &&
     //   data.customDomain && {

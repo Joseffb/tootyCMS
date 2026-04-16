@@ -27,6 +27,65 @@ Current tree status:
 
 ## Active Items
 
+### 22. Core RSS feed system in reading settings
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/feed.xml/route.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/[domain]/layout.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/app/(dashboard)/settings/reading/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/app/app/(dashboard)/site/[id]/settings/reading/page.tsx`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/cms-config.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/actions.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/admin-nav.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/lib/core-version.ts`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/package.json`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/docs/VERSIONING.md`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/tests`
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading/docs/DEV_TRACKER.md`
+- Scope:
+  - add a WordPress-style core RSS feed at `/feed.xml`
+  - manage network defaults and site overrides from the existing reading settings surfaces
+  - support site-level enablement, excerpt/full payload mode, item-count limit, and included data-domain selection
+  - advertise the feed through public autodiscovery metadata while keeping the route cache-first
+- Affected surfaces:
+  - public site feed delivery
+  - public site metadata/autodiscovery
+  - network reading settings
+  - site reading settings
+  - public cache invalidation for feed updates
+- Required validation:
+  1. `npm run test`
+  2. `npm run test:integration`
+- Current notes:
+  - implemented from isolated git worktree `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-rss-reading` on branch `codex/rss-reading-settings`
+  - validated on the final `0.4.14` tree with `npm run test` and `npm run test:integration`
+  - product decisions locked for v1: canonical `/feed.xml`, reading-settings ownership, combined multi-domain site feed, configurable item count, and no extra feed-index/manifest route beyond autodiscovery plus feed self-linking
+
+### 15. Robert Betan deploy repo self-contained plugin/theme bundle
+
+- Status: `in_progress`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/robert_betan_vercel_deploy`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - make the Robert Betan deploy worktree carry the full community and custom plugin/theme bundle directly
+  - remove one-off hardcoding so deploy assembly picks up every valid plugin/theme from the source repos automatically
+  - keep Vercel preview deploys independent from GitHub-backed plugin installer fetches
+- Affected surfaces:
+  - Robert Betan deploy packaging
+  - plugin/theme availability on Vercel preview
+  - future Robert Betan deploy reproducibility
+- Required validation:
+  1. update the deploy sync script to vendor all valid community/custom plugin and theme directories
+  2. run the sync script successfully
+  3. confirm deploy-local `plugins/` and `themes/` include the expected community/custom assets
+  4. redeploy preview and verify the admin sees the bundled plugin/theme set
+- Current notes:
+  - user requested that the deploy repo itself contain the plugins instead of relying on GitHub install flows
+  - current deploy preview already bundles `tooty-story-teller`, `robert-betan`, and `robert-betan-sub`
+  - community plugin repo inventory includes analytics/auth/comments/carousels/GDPR/dev-tools/export-import/sendmail plus `hello-teety`
+
 ### 14. Robert Betan dedicated Vercel deploy worktree scaffold
 
 - Status: `verified`

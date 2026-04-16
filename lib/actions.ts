@@ -16,15 +16,29 @@ import {
 import { getBlurDataURL } from "@/lib/utils";
 import { pickRandomTootyImage } from "@/lib/tooty-images";
 import {
+  DEFAULT_RSS_ITEMS_PER_FEED,
   getReadingSettings,
+  getEffectiveSiteRssSettings,
   getScheduleSettings,
   getSiteBooleanSetting,
   getSiteTextSetting,
   getSiteWritingSettings,
+  getRssSettings,
   getWritingSettings,
   MAIN_HEADER_ENABLED_KEY,
   MAIN_HEADER_SHOW_NETWORK_SITES_KEY,
   isRandomDefaultImagesEnabled,
+  normalizeRssContentMode,
+  normalizeRssIncludedDomainKeys,
+  normalizeRssItemsPerFeed,
+  RSS_CONTENT_MODE_KEY,
+  RSS_DEFAULT_CONTENT_MODE_KEY,
+  RSS_DEFAULT_ENABLED_KEY,
+  RSS_DEFAULT_ITEMS_PER_FEED_KEY,
+  RSS_ENABLED_KEY,
+  RSS_INCLUDE_DOMAIN_KEYS_KEY,
+  RSS_ITEMS_PER_FEED_KEY,
+  RSS_NETWORK_ENABLED_KEY,
   SEO_INDEXING_ENABLED_KEY,
   SEO_META_DESCRIPTION_KEY,
   SEO_META_TITLE_KEY,
@@ -2364,6 +2378,7 @@ function revalidatePublicContentCache() {
   revalidatePath("/[domain]/posts", "page");
   revalidatePath("/[domain]/c/[slug]", "page");
   revalidatePath("/[domain]/t/[slug]", "page");
+  revalidatePath("/feed.xml");
   revalidatePath("/sitemap.xml");
   revalidatePath("/robots.txt");
 }
@@ -3019,6 +3034,17 @@ export const updateReadingSettings = async (formData: FormData) => {
   const indexingEnabled = formData.get("seo_indexing_enabled") === "on";
   const mainHeaderEnabled = formData.get("main_header_enabled") === "on";
   const mainHeaderShowNetworkSites = formData.get("main_header_show_network_sites") === "on";
+  const rssNetworkEnabled = formData.get("rss_network_enabled") === "on";
+  const rssDefaultEnabled = formData.get("rss_default_enabled") === "on";
+  const rssDefaultContentMode = normalizeRssContentMode(
+    (formData.get("rss_default_content_mode") as string | null) ?? "excerpt",
+  );
+  const rssDefaultItemsPerFeed = String(
+    normalizeRssItemsPerFeed(
+      (formData.get("rss_default_items_per_feed") as string | null) ?? "",
+      DEFAULT_RSS_ITEMS_PER_FEED,
+    ),
+  );
   const siteUrlRaw = (formData.get("site_url") as string | null) ?? "";
   const seoMetaTitle = ((formData.get("seo_meta_title") as string | null) ?? "").trim();
   const seoMetaDescription = ((formData.get("seo_meta_description") as string | null) ?? "").trim();
@@ -3031,9 +3057,14 @@ export const updateReadingSettings = async (formData: FormData) => {
     setTextSetting(SEO_META_DESCRIPTION_KEY, seoMetaDescription),
     setBooleanSetting(MAIN_HEADER_ENABLED_KEY, mainHeaderEnabled),
     setBooleanSetting(MAIN_HEADER_SHOW_NETWORK_SITES_KEY, mainHeaderShowNetworkSites),
+    setBooleanSetting(RSS_NETWORK_ENABLED_KEY, rssNetworkEnabled),
+    setBooleanSetting(RSS_DEFAULT_ENABLED_KEY, rssDefaultEnabled),
+    setTextSetting(RSS_DEFAULT_CONTENT_MODE_KEY, rssDefaultContentMode),
+    setTextSetting(RSS_DEFAULT_ITEMS_PER_FEED_KEY, rssDefaultItemsPerFeed),
   ]);
 
   revalidateSettingsPath("/settings/reading");
+  revalidatePublicContentCache();
   revalidatePath("/sitemap.xml");
   revalidatePath("/robots.txt");
 };
@@ -3122,13 +3153,15 @@ export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
   if ("error" in owned) return { error: owned.error };
   const { site } = owned;
 
-  const [randomDefaults, mainHeaderEnabled, showNetworkSites, writingSettings, domains] =
+  const [randomDefaults, mainHeaderEnabled, showNetworkSites, writingSettings, domains, rssSettings, rssDefaults] =
     await Promise.all([
       getSiteBooleanSetting(site.id, "random_default_images_enabled", true),
       getSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, true),
       getSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, false),
       getSiteWritingSettings(site.id),
       getAllDataDomains(site.id),
+      getEffectiveSiteRssSettings(site.id),
+      getRssSettings(),
     ]);
 
   return {
@@ -3138,6 +3171,13 @@ export const getSiteReadingSettingsAdmin = async (siteIdRaw: string) => {
     showNetworkSites,
     writingSettings,
     dataDomains: domains.map((domain) => ({ key: domain.key, label: domain.label })),
+    rss: {
+      ...rssSettings,
+      defaultEnabled: rssDefaults.defaultEnabled,
+    },
+    rssDomainOptions: domains
+      .filter((domain) => domain.isActive !== false)
+      .map((domain) => ({ key: domain.key, label: domain.label })),
   };
 };
 
@@ -3163,6 +3203,11 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "") || "post";
+  const rssFieldsSubmitted =
+    formData.has("rss_enabled") ||
+    formData.has("rss_content_mode") ||
+    formData.has("rss_items_per_feed") ||
+    formData.has("rss_include_domain_keys");
   const reservedAdminAlias = getAdminPathAlias();
 
   if (noDomainPrefix === "app") {
@@ -3172,7 +3217,7 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
     return { error: `The \`${reservedAdminAlias}\` path is reserved for the admin system.` };
   }
 
-  await Promise.all([
+  const updates: Array<Promise<unknown>> = [
     setSiteBooleanSetting(site.id, "random_default_images_enabled", randomDefaultsEnabled),
     setSiteBooleanSetting(site.id, MAIN_HEADER_ENABLED_KEY, mainHeaderEnabled),
     setSiteBooleanSetting(site.id, MAIN_HEADER_SHOW_NETWORK_SITES_KEY, mainHeaderShowNetworkSites),
@@ -3181,9 +3226,45 @@ export const updateSiteReadingSettings = async (formData: FormData) => {
     setSiteTextSetting(site.id, WRITING_LIST_PATTERN_KEY, listPattern),
     setSiteTextSetting(site.id, WRITING_NO_DOMAIN_PREFIX_KEY, noDomainPrefix),
     setSiteTextSetting(site.id, WRITING_NO_DOMAIN_DATA_DOMAIN_KEY, noDomainDataDomain),
-  ]);
+  ];
 
-  revalidatePath(`/site/${site.id}/settings/reading`);
+  if (rssFieldsSubmitted) {
+    const activeDomains = await listSiteDataDomains(site.id, { includeInactive: false });
+    const allowedDomainKeys = new Set<string>(DEFAULT_CORE_DOMAIN_KEYS);
+    for (const domain of activeDomains) {
+      const key = String(domain.key || "").trim().toLowerCase();
+      if (key) allowedDomainKeys.add(key);
+    }
+
+    const selectedDomainKeys = normalizeRssIncludedDomainKeys(
+      formData.getAll("rss_include_domain_keys").map((value) => String(value || "")),
+    ).filter((key) => allowedDomainKeys.has(key));
+    const normalizedDomainKeys = selectedDomainKeys.length > 0 ? selectedDomainKeys : ["post"];
+
+    updates.push(
+      setSiteBooleanSetting(site.id, RSS_ENABLED_KEY, formData.get("rss_enabled") === "on"),
+      setSiteTextSetting(
+        site.id,
+        RSS_CONTENT_MODE_KEY,
+        normalizeRssContentMode((formData.get("rss_content_mode") as string | null) ?? "excerpt"),
+      ),
+      setSiteTextSetting(
+        site.id,
+        RSS_ITEMS_PER_FEED_KEY,
+        String(
+          normalizeRssItemsPerFeed(
+            (formData.get("rss_items_per_feed") as string | null) ?? "",
+            DEFAULT_RSS_ITEMS_PER_FEED,
+          ),
+        ),
+      ),
+      setSiteTextSetting(site.id, RSS_INCLUDE_DOMAIN_KEYS_KEY, normalizedDomainKeys.join(",")),
+    );
+  }
+
+  await Promise.all(updates);
+
+  revalidateSettingsPath(`/site/${site.id}/settings/reading`);
   revalidatePublicContentCache();
   return { ok: true };
 };

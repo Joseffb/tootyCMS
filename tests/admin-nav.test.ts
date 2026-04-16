@@ -42,6 +42,7 @@ describe("admin nav builders", () => {
 
     expect(tabs.map((tab) => tab.name)).toContain("Network Dashboard");
     expect(tabs.map((tab) => tab.name)).toContain("Sites");
+    expect(tabs.map((tab) => tab.name)).toContain("Reading");
     expect(tabs.map((tab) => tab.name)).toContain("Themes");
     expect(tabs.map((tab) => tab.name)).not.toContain("General");
     expect(tabs.map((tab) => tab.name)).not.toContain("Back to All Sites");
