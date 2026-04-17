@@ -97,6 +97,7 @@ Current tree status:
     - root `tsconfig.json` now uses wildcard `.next-test-*` includes so local build/test runs do not leave port-specific residue
   - validation completed:
     - targeted Vitest: AI spine/providers/route/boundary/extension API/editor tool/workspace plus plugin runtime and editor route follow-up coverage
+    - GitHub Actions follow-up: `tests/extension-paths.test.ts` no longer assumes a checked-in `.env`, so CI runners now match the runtime config fallback behavior
     - `npm run test`: passed
     - `npm run test:integration`: passed
     - `npm run lint`: passed with existing repo warnings only

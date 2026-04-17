@@ -10,7 +10,14 @@ import {
 const originalThemesPath = process.env.THEMES_PATH;
 const originalPluginsPath = process.env.PLUGINS_PATH;
 const originalConfigBaseDir = process.env.TOOTY_CONFIG_BASE_DIR;
-const detectedConfigBaseDir = path.dirname(fs.realpathSync(path.join(process.cwd(), ".env")));
+const detectedConfigBaseDir = (() => {
+  for (const candidateName of [".env", ".env.local", ".env.test"]) {
+    const candidatePath = path.join(process.cwd(), candidateName);
+    if (!fs.existsSync(candidatePath)) continue;
+    return path.dirname(fs.realpathSync(candidatePath));
+  }
+  return process.cwd();
+})();
 
 afterEach(() => {
   if (originalThemesPath === undefined) {
