@@ -86,17 +86,17 @@ describe("extension path parsing", () => {
   });
 
   it("resolves relative plugin and theme roots against the configured Tooty config base dir", () => {
-    process.env.TOOTY_CONFIG_BASE_DIR = "/Users/joseffbetancourt/PhpstormProjects/tooty-cms";
+    process.env.TOOTY_CONFIG_BASE_DIR = detectedConfigBaseDir;
     process.env.THEMES_PATH = "themes,../tootyCMS-themes";
     process.env.PLUGINS_PATH = "plugins,../tootyCMS-plugins";
 
     expect(getThemesDirs()).toEqual([
-      "/Users/joseffbetancourt/PhpstormProjects/tooty-cms/themes",
-      "/Users/joseffbetancourt/PhpstormProjects/tootyCMS-themes",
+      path.resolve(detectedConfigBaseDir, "themes"),
+      path.resolve(detectedConfigBaseDir, "../tootyCMS-themes"),
     ]);
     expect(getPluginsDirs()).toEqual([
-      "/Users/joseffbetancourt/PhpstormProjects/tooty-cms/plugins",
-      "/Users/joseffbetancourt/PhpstormProjects/tootyCMS-plugins",
+      path.resolve(detectedConfigBaseDir, "plugins"),
+      path.resolve(detectedConfigBaseDir, "../tootyCMS-plugins"),
     ]);
   });
 });
