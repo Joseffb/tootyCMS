@@ -1,0 +1,85 @@
+{
+  "kind": "plugin",
+  "id": "tooty-ai",
+  "name": "Tooty AI",
+  "distribution": "core",
+  "description": "Governed AI suggestions for Tooty editors and plugin workspaces.",
+  "version": "0.5.0",
+  "minCoreVersion": "0.5.x",
+  "scope": "site",
+  "menuPlacement": "root",
+  "menu": {
+    "label": "AI",
+    "path": "/app/plugins/tooty-ai",
+    "order": 45
+  },
+  "capabilities": {
+    "hooks": true,
+    "adminExtensions": true,
+    "contentTypes": false,
+    "serverHandlers": false,
+    "authExtensions": false,
+    "scheduleJobs": false,
+    "communicationProviders": false,
+    "commentProviders": false,
+    "webCallbacks": false,
+    "aiProviders": false
+  },
+  "editor": {
+    "tabs": [
+      {
+        "id": "assist",
+        "label": "AI Assist",
+        "order": 450,
+        "requiresCapability": "site.ai.use",
+        "sections": [
+          {
+            "id": "generate",
+            "title": "Generate",
+            "description": "Create a fresh passage using the current entry as context.",
+            "fragment": {
+              "kind": "text-tool",
+              "toolId": "generate",
+              "title": "Generate",
+              "action": "generate",
+              "source": "content",
+              "applyActions": ["insert_below"],
+              "instructionPlaceholder": "Describe what you want to generate.",
+              "submitLabel": "Generate Suggestion"
+            }
+          },
+          {
+            "id": "rewrite",
+            "title": "Rewrite Selection",
+            "description": "Rewrite the currently selected text before applying it back into the draft.",
+            "fragment": {
+              "kind": "text-tool",
+              "toolId": "rewrite",
+              "title": "Rewrite Selection",
+              "action": "rewrite",
+              "source": "selection",
+              "applyActions": ["replace_selection", "insert_below"],
+              "instructionPlaceholder": "Explain how the selected text should change.",
+              "submitLabel": "Rewrite Selection"
+            }
+          },
+          {
+            "id": "summarize",
+            "title": "Summarize",
+            "description": "Produce a concise summary of the current entry.",
+            "fragment": {
+              "kind": "text-tool",
+              "toolId": "summarize",
+              "title": "Summarize",
+              "action": "summarize",
+              "source": "content",
+              "applyActions": ["insert_below"],
+              "instructionPlaceholder": "Optionally steer the summary tone or audience.",
+              "submitLabel": "Summarize Entry"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -52,6 +52,19 @@ describe("extension contracts", () => {
     expect(plugin?.capabilities?.commentProviders).toBe(true);
   });
 
+  it("normalizes aiProviders capability flag", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "ai-provider-plugin",
+        name: "AI Provider",
+        capabilities: { aiProviders: true },
+      },
+      "ai-provider-plugin",
+    );
+    expect(plugin).not.toBeNull();
+    expect(plugin?.capabilities?.aiProviders).toBe(true);
+  });
+
   it("preserves plugin developer metadata", () => {
     const plugin = validatePluginContract(
       {
@@ -451,6 +464,68 @@ describe("extension contracts", () => {
                 ],
               },
             ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes text-tool editor fragments for governed AI suggestion tools", () => {
+    const plugin = validatePluginContract(
+      {
+        id: "tooty-ai",
+        name: "Tooty AI",
+        editor: {
+          tabs: [
+            {
+              id: "assist",
+              label: "AI Assist",
+              sections: [
+                {
+                  id: "rewrite",
+                  title: "Rewrite Selection",
+                  fragment: {
+                    kind: "text-tool",
+                    toolId: "rewrite",
+                    title: "Rewrite Selection",
+                    action: "rewrite",
+                    source: "selection",
+                    applyActions: ["replace_selection", "insert_below", "insert_below"],
+                    instructionPlaceholder: "Tell the AI what to change.",
+                    submitLabel: "Rewrite Selection",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "tooty-ai",
+    );
+
+    expect(plugin?.editor?.tabs).toEqual([
+      {
+        id: "assist",
+        label: "AI Assist",
+        order: undefined,
+        supportsDomains: undefined,
+        requiresCapability: undefined,
+        sections: [
+          {
+            id: "rewrite",
+            title: "Rewrite Selection",
+            description: "",
+            fields: undefined,
+            fragment: {
+              kind: "text-tool",
+              toolId: "rewrite",
+              title: "Rewrite Selection",
+              action: "rewrite",
+              source: "selection",
+              applyActions: ["replace_selection", "insert_below"],
+              instructionPlaceholder: "Tell the AI what to change.",
+              submitLabel: "Rewrite Selection",
+            },
           },
         ],
       },

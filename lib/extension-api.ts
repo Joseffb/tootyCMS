@@ -7,6 +7,11 @@ import { getSettingByKey, getSettingsByKeys, setSettingByKey } from "@/lib/setti
 import { setSiteTextSetting } from "@/lib/cms-config";
 import type { PluginContract } from "@/lib/extension-contracts";
 import type {
+  AiProviderRegistration,
+  AiRunRequest,
+  AiRunResult,
+} from "@/lib/ai-contracts";
+import type {
   PluginCommentProviderRegistration,
   ContentStateRegistration,
   ContentTransitionRegistration,
@@ -91,6 +96,7 @@ export type PluginCapabilities = {
   communicationProviders: boolean;
   commentProviders: boolean;
   webCallbacks: boolean;
+  aiProviders: boolean;
 };
 
 type PluginCoreRegistry = {
@@ -100,6 +106,7 @@ type PluginCoreRegistry = {
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
   registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
   registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
+  registerAiProvider: (registration: AiProviderRegistration) => void;
   registerContentState: (registration: ContentStateRegistration) => void;
   registerContentTransition: (registration: ContentTransitionRegistration) => void;
 };
@@ -342,6 +349,9 @@ type CoreServiceApi = {
       retryPending: typeof retryPendingWebhookDeliveries;
     };
   };
+  ai: {
+    run: (input: AiRunRequest) => Promise<AiRunResult>;
+  };
 };
 
 type CoreContentMetaReadApi = {
@@ -370,6 +380,7 @@ export type PluginExtensionApi = BaseExtensionApi & {
   registerCommunicationProvider: (registration: PluginCommunicationProviderRegistration) => void;
   registerCommentProvider: (registration: PluginCommentProviderRegistration) => void;
   registerWebcallbackHandler: (registration: PluginWebcallbackHandlerRegistration) => void;
+  registerAiProvider: (registration: AiProviderRegistration) => void;
   registerContentState: (registration: ContentStateRegistration) => void;
   registerContentTransition: (registration: ContentTransitionRegistration) => void;
   createSchedule: (input: {
@@ -453,6 +464,7 @@ const DEFAULT_PLUGIN_CAPABILITIES: PluginCapabilities = {
   communicationProviders: false,
   commentProviders: false,
   webCallbacks: false,
+  aiProviders: false,
 };
 
 function pluginSettingKey(pluginId: string | undefined, key: string) {
@@ -775,6 +787,16 @@ export function createPluginExtensionApi(
         );
       }
       options.coreRegistry.registerWebcallbackHandler(registration);
+    };
+
+  const registerAiProvider: PluginExtensionApi["registerAiProvider"] = (registration) => {
+      requireCapability("aiProviders", "registerAiProvider()");
+      if (!options?.coreRegistry) {
+        throw new Error(
+          `[plugin-guard] Plugin "${pluginName}" registerAiProvider() is unavailable outside Core runtime.`,
+        );
+      }
+      options.coreRegistry.registerAiProvider(registration);
     };
 
   const registerContentState: PluginExtensionApi["registerContentState"] = (registration) => {
@@ -1612,6 +1634,26 @@ export function createPluginExtensionApi(
         retryPending: retryPendingWebhookDeliveries,
       },
     },
+    ai: {
+      run: async (input: AiRunRequest) => {
+        const session = await getSession();
+        const userId = String(session?.user?.id || "").trim();
+        if (!userId) {
+          throw new Error("Not authenticated");
+        }
+        const normalizedScope = input?.scope?.kind === "site" ? String(input.scope.siteId || "").trim() : "";
+        const [{ createKernelForRequest }, { runAiRequest }] = await Promise.all([
+          import("@/lib/plugin-runtime"),
+          import("@/lib/ai-spine"),
+        ]);
+        const kernel = await createKernelForRequest(normalizedScope || undefined);
+        return runAiRequest({
+          request: input,
+          actorUserId: userId,
+          providers: kernel.getAllAiProviders(),
+        });
+      },
+    },
   };
 
   return {
@@ -1625,6 +1667,7 @@ export function createPluginExtensionApi(
     registerCommunicationProvider,
     registerCommentProvider,
     registerWebcallbackHandler,
+    registerAiProvider,
     registerContentState,
     registerContentTransition,
     createSchedule,

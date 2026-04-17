@@ -49,6 +49,24 @@ Core autoloaders must check the current article/item state before fetching or re
 - `enqueueScript(input)`
 - `enqueueStyle(input)`
 - `getEnqueuedAssets()`
+- `registerCoreAiProvider(registration)`
+- `registerPluginAiProvider(pluginId, registration)`
+- `getAllAiProviders()`
+
+## AI Provider Registry
+
+The kernel now carries the AI provider registry for the governed AI spine.
+
+Rules:
+- provider ids are globally unique across core and plugins
+- duplicate ids fail kernel bootstrap
+- providers register supported generic actions only (`generate`, `rewrite`, `summarize`, `classify`)
+- providers are pure adapters and do not participate in policy, RBAC, quota, or side effects
+
+Governance note:
+- AI plugins follow the standard manifest-driven plugin system
+- plugins may participate through normal declared menus, editor surfaces, and approved capability flags such as `aiProviders`
+- plugins do not define execution outcomes; core computes and enforces them
 
 ## Enqueue Helpers
 

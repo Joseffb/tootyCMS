@@ -18,6 +18,7 @@ import { pathToFileURL } from "url";
 import { trace } from "@/lib/debug";
 import { getSettingByKey, setSettingByKey } from "@/lib/settings-store";
 import { syncPluginContentTypes } from "@/lib/plugin-content-types";
+import { registerBuiltInAiProviders } from "@/lib/ai-providers";
 
 type DashboardPluginMenuPlacement = "settings" | "root";
 type DashboardPluginMenuItem = MenuItem & {
@@ -85,6 +86,7 @@ function toRuntimeCapabilities(plugin: PluginWithState): PluginCapabilities {
     communicationProviders: Boolean(caps.communicationProviders ?? false),
     commentProviders: Boolean(caps.commentProviders ?? false),
     webCallbacks: Boolean(caps.webCallbacks ?? false),
+    aiProviders: Boolean(caps.aiProviders ?? false),
   };
 }
 
@@ -208,6 +210,9 @@ async function maybeRegisterPluginHooks(
           registerWebcallbackHandler(registration) {
             kernel.registerPluginWebcallbackHandler(pluginId, registration);
           },
+          registerAiProvider(registration) {
+            kernel.registerPluginAiProvider(pluginId, registration);
+          },
           registerContentState(registration) {
             kernel.registerContentState(registration);
           },
@@ -223,11 +228,15 @@ async function maybeRegisterPluginHooks(
       trace("plugins", "plugin runtime entry not found", { pluginId, entry: absEntry });
       return;
     }
-  trace("plugins", "plugin runtime registration failed", {
+    trace("plugins", "plugin runtime registration failed", {
       pluginId,
       entry: absEntry,
       error: error instanceof Error ? error.message : String(error),
     });
+    const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+    if (message.includes("ai provider")) {
+      throw error;
+    }
   }
 }
 
@@ -292,6 +301,7 @@ export async function createKernelForRequest(siteId?: string) {
   kernel.registerMenuLocation("header");
   kernel.registerMenuLocation("footer");
   kernel.registerMenuLocation("dashboard");
+  registerBuiltInAiProviders(kernel);
 
   await kernel.doAction("kernel:init");
   await kernel.doAction("plugins:register");

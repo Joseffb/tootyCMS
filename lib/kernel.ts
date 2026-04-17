@@ -1,4 +1,5 @@
 import { trace } from "@/lib/debug";
+import { AI_ACTIONS, type AiProviderDescriptor, type AiProviderRegistration } from "@/lib/ai-contracts";
 
 export type KernelActionName =
   | "kernel:init"
@@ -396,6 +397,7 @@ export class Kernel {
   private pluginCommunicationProviders = new Map<string, PluginCommunicationProviderRegistration[]>();
   private pluginWebcallbackHandlers = new Map<string, PluginWebcallbackHandlerRegistration[]>();
   private pluginCommentProviders = new Map<string, PluginCommentProviderRegistration[]>();
+  private aiProviders = new Map<string, AiProviderDescriptor>();
   private contentStates = new Map<string, ContentStateRegistration>();
   private contentTransitions = new Map<string, ContentTransitionRegistration>();
   private enqueuedAssets = new Map<string, KernelEnqueuedAsset>();
@@ -627,6 +629,63 @@ export class Kernel {
       for (const reg of regs) rows.push({ pluginId, ...reg });
     }
     return rows;
+  }
+
+  private registerAiProvider(ownerType: "core" | "plugin", ownerId: string, registration: AiProviderRegistration) {
+    const id = String(registration?.id || "").trim().toLowerCase();
+    const actions = Array.isArray(registration?.actions)
+      ? Array.from(
+          new Set(
+            registration.actions
+              .map((entry) => String(entry || "").trim().toLowerCase())
+              .filter((entry) => (AI_ACTIONS as readonly string[]).includes(entry)),
+          ),
+        )
+      : [];
+    if (!id) {
+      throw new Error(`[kernel] AI provider registration requires a non-empty id.`);
+    }
+    if (typeof registration?.run !== "function") {
+      throw new Error(`[kernel] AI provider "${id}" requires a run() handler.`);
+    }
+    if (actions.length === 0) {
+      throw new Error(`[kernel] AI provider "${id}" must declare at least one supported action.`);
+    }
+    if (this.aiProviders.has(id)) {
+      throw new Error(`[kernel] Duplicate AI provider id "${id}" detected.`);
+    }
+    const descriptor: AiProviderDescriptor = {
+      ...registration,
+      id,
+      actions: actions as AiProviderRegistration["actions"],
+      ownerType,
+      ownerId,
+    };
+    this.aiProviders.set(id, descriptor);
+    trace("kernel", "ai provider registered", {
+      ownerType,
+      ownerId,
+      id,
+      actions,
+    });
+  }
+
+  registerCoreAiProvider(registration: AiProviderRegistration) {
+    this.registerAiProvider("core", "core", registration);
+  }
+
+  registerPluginAiProvider(pluginId: string, registration: AiProviderRegistration) {
+    this.registerAiProvider("plugin", pluginId, registration);
+  }
+
+  getPluginAiProviders(pluginId: string) {
+    return Array.from(this.aiProviders.values()).filter(
+      (provider) => provider.ownerType === "plugin" && provider.ownerId === pluginId,
+    );
+  }
+
+  getAllAiProviders() {
+    return Array.from(this.aiProviders.values());
   }
 
   registerContentState(registration: ContentStateRegistration) {

@@ -27,12 +27,15 @@
       "@/*": [
         "./*"
       ]
-    }
+    },
+    "baseUrl": "."
   },
   "include": [
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
+    ".next-test-*/types/**/*.ts",
+    ".next-test-*/dev/types/**/*.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
@@ -41,6 +44,7 @@
     "templates/**",
     ".next-*/**",
     ".next-test-*/**",
-    ".next-playwright-harness-*/**"
+    ".next-playwright-harness-*/**",
+    ".next-vercel-dev*/**"
   ]
 }

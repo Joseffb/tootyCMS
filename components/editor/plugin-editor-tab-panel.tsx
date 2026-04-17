@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { EditorMetaEntry } from "@/lib/editor-meta";
-import type { PluginEditorTab, PluginEditorTabField } from "@/lib/extension-contracts";
+import type { PluginEditorTab, PluginEditorTabField, PluginEditorTabFragment } from "@/lib/extension-contracts";
 import {
   readPluginEditorFieldValue,
   writePluginEditorFieldValue,
   type EditorPluginTabMediaValue,
 } from "@/lib/editor-plugin-tabs";
 import type { MediaSelection, OpenMediaPickerOptions } from "@/components/media/media-manager-surface";
+import type { AiRunResult, AiTextToolApplyAction } from "@/lib/ai-contracts";
 
 type MediaLibraryItem = {
   id: number;
@@ -27,11 +28,18 @@ type Props = {
   tab: EditorPluginTabDescriptor;
   canEdit: boolean;
   siteId: string;
+  postId: string;
+  dataDomainKey: string;
   metaEntries: EditorMetaEntry[];
   mediaItems: MediaLibraryItem[];
   onMetaEntriesChange: (next: EditorMetaEntry[], immediate?: boolean) => void;
   openMediaPicker: (options: OpenMediaPickerOptions) => void;
+  getEditorSelectionText: () => string;
+  getEditorContentText: () => string;
+  onApplyAiText: (action: AiTextToolApplyAction, text: string) => void;
 };
+
+type AiTextToolFragment = Extract<PluginEditorTabFragment, { kind: "text-tool" }>;
 
 function buildEmptyRepeaterRow(fields: PluginEditorTabField[]) {
   return Object.fromEntries(
@@ -483,14 +491,204 @@ function RepeaterField({
   );
 }
 
+function AiTextToolPanel({
+  fragment,
+  pluginId,
+  siteId,
+  postId,
+  dataDomainKey,
+  canEdit,
+  getEditorSelectionText,
+  getEditorContentText,
+  onApplyAiText,
+}: {
+  fragment: AiTextToolFragment;
+  pluginId: string;
+  siteId: string;
+  postId: string;
+  dataDomainKey: string;
+  canEdit: boolean;
+  getEditorSelectionText: () => string;
+  getEditorContentText: () => string;
+  onApplyAiText: (action: AiTextToolApplyAction, text: string) => void;
+}) {
+  const [instructionText, setInstructionText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [result, setResult] = useState<AiRunResult | null>(null);
+
+  const sourceText = fragment.source === "selection" ? getEditorSelectionText() : getEditorContentText();
+  const contextText = fragment.source === "selection" ? getEditorContentText() : "";
+  const requestPreview = JSON.stringify(
+    {
+      scope: siteId ? { kind: "site", siteId } : null,
+      action: fragment.action,
+      input: {
+        sourceText,
+        instructionText: instructionText || undefined,
+        contextText: contextText || undefined,
+      },
+      context: {
+        surface: "editor_assist",
+        pluginId,
+        postId,
+        dataDomainKey,
+      },
+    },
+    null,
+    2,
+  );
+
+  const canSubmit = Boolean(canEdit && siteId && sourceText.trim() && !submitting);
+
+  async function runTool() {
+    const nextSourceText = fragment.source === "selection" ? getEditorSelectionText() : getEditorContentText();
+    const nextContextText = fragment.source === "selection" ? getEditorContentText() : "";
+    if (!nextSourceText.trim()) {
+      setRequestError(
+        fragment.source === "selection"
+          ? "Select some editor text before running this tool."
+          : "This tool needs editor content before it can run.",
+      );
+      setResult(null);
+      return;
+    }
+
+    setSubmitting(true);
+    setRequestError(null);
+    try {
+      const response = await fetch("/api/ai/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          scope: { kind: "site", siteId },
+          action: fragment.action,
+          input: {
+            sourceText: nextSourceText,
+            instructionText: instructionText || undefined,
+            contextText: nextContextText || undefined,
+          },
+          context: {
+            surface: "editor_assist",
+            pluginId,
+            postId,
+            dataDomainKey,
+          },
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as AiRunResult | { error?: string } | null;
+      if (!response.ok) {
+        setResult(null);
+        setRequestError(String(payload && "error" in payload ? payload.error || "AI request failed." : "AI request failed."));
+        return;
+      }
+      setResult((payload as AiRunResult) || null);
+    } catch (error) {
+      setResult(null);
+      setRequestError(error instanceof Error ? error.message : "AI request failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const outputText = result && result.ok && result.output?.kind === "text" ? result.output.text : "";
+
+  return (
+    <div className="space-y-3 rounded-md border border-stone-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-stone-900">{fragment.title}</div>
+          <p className="mt-1 text-xs text-stone-500">
+            Source: {fragment.source === "selection" ? "current selection" : "full entry"} · Action: {fragment.action}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={runTool}
+          className="rounded border border-black bg-black px-3 py-1.5 text-xs font-semibold text-white hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {submitting ? "Running..." : fragment.submitLabel || "Run Tool"}
+        </button>
+      </div>
+
+      {!siteId ? (
+        <div className="rounded border border-dashed border-stone-300 bg-stone-50 px-3 py-3 text-xs text-stone-500">
+          Select a site before running AI editor tools.
+        </div>
+      ) : null}
+
+      <label className="block space-y-1">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Instruction</span>
+        <textarea
+          rows={3}
+          value={instructionText}
+          disabled={!canEdit}
+          onChange={(event) => setInstructionText(event.target.value)}
+          placeholder={fragment.instructionPlaceholder || "Describe what you want the tool to do."}
+          className="w-full rounded-md border border-stone-300 bg-white px-2 py-2 text-xs text-stone-900"
+        />
+      </label>
+
+      <div className="space-y-1">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone-600">Request Preview</div>
+        <pre className="overflow-x-auto rounded-md bg-stone-950 px-3 py-2 text-[11px] text-stone-100">
+          <code>{requestPreview}</code>
+        </pre>
+      </div>
+
+      {requestError ? (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{requestError}</div>
+      ) : null}
+
+      {!result ? null : result.ok === false ? (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{result.error}</div>
+      ) : result.decision === "reject" ? (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          The core guard rejected this output. Trace ID: {result.traceId}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="rounded border border-stone-200 bg-stone-50 px-3 py-3 text-xs whitespace-pre-wrap text-stone-800">
+            {outputText}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {fragment.applyActions.map((action) => (
+              <button
+                key={`${fragment.toolId}-${action}`}
+                type="button"
+                disabled={!canEdit || !outputText}
+                onClick={() => onApplyAiText(action, outputText)}
+                className="rounded border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-800 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {action === "replace_selection" ? "Replace Selection" : "Insert Below"}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-stone-500">
+            Decision: {result.decision} · Provider: {result.providerId} · Trace ID: {result.traceId}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PluginEditorTabPanel({
   tab,
   canEdit,
   siteId,
+  postId,
+  dataDomainKey,
   metaEntries,
   mediaItems,
   onMetaEntriesChange,
   openMediaPicker,
+  getEditorSelectionText,
+  getEditorContentText,
+  onApplyAiText,
 }: Props) {
   return (
     <fieldset disabled={!canEdit} className="mt-4 min-w-0 max-w-full space-y-3 overflow-x-hidden">
@@ -504,6 +702,19 @@ export default function PluginEditorTabPanel({
             <div
               className="rounded-md border border-stone-200 bg-white px-3 py-2 text-xs text-stone-700"
               dangerouslySetInnerHTML={{ __html: section.fragment.html }}
+            />
+          ) : null}
+          {section.fragment?.kind === "text-tool" ? (
+            <AiTextToolPanel
+              fragment={section.fragment}
+              pluginId={tab.pluginId}
+              siteId={siteId}
+              postId={postId}
+              dataDomainKey={dataDomainKey}
+              canEdit={canEdit}
+              getEditorSelectionText={getEditorSelectionText}
+              getEditorContentText={getEditorContentText}
+              onApplyAiText={onApplyAiText}
             />
           ) : null}
           {(section.fields || []).map((field) => (

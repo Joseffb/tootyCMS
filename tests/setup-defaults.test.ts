@@ -4,13 +4,14 @@ import { getSetupDefaultPluginIds, getSetupDefaultThemeId } from "@/lib/setup-de
 
 describe("setup defaults helpers", () => {
   it("keeps core default plugins when no extras are provided", () => {
-    expect(getSetupDefaultPluginIds("")).toEqual(["hello-teety", "tooty-comments"]);
+    expect(getSetupDefaultPluginIds("")).toEqual(["hello-teety", "tooty-comments", "tooty-ai"]);
   });
 
   it("adds custom plugin ids once and normalizes them", () => {
     expect(getSetupDefaultPluginIds(" tooty-carousels,TOOTY-CAROUSELS , export-import ")).toEqual([
       "hello-teety",
       "tooty-comments",
+      "tooty-ai",
       "tooty-carousels",
       "export-import",
     ]);
@@ -21,4 +22,3 @@ describe("setup defaults helpers", () => {
     expect(getSetupDefaultThemeId("")).toBeNull();
   });
 });
-

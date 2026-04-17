@@ -1,10 +1,9 @@
 import { getSession } from "@/lib/auth";
-import { getPluginById, getPluginConfig, savePluginConfig } from "@/lib/plugin-runtime";
+import { createKernelForRequest, getPluginById, getPluginConfig, savePluginConfig } from "@/lib/plugin-runtime";
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import Link from "next/link";
 import { userCan } from "@/lib/authorization";
-import { createKernelForRequest } from "@/lib/plugin-runtime";
 import { sendCommunication } from "@/lib/communications";
 import MigrationKitConsole from "@/components/migration-kit-console";
 import CollectionOrderManager from "@/components/plugins/collection-order-manager";
@@ -35,6 +34,7 @@ import { getPluginWorkspaceRevalidationPaths } from "@/lib/plugin-admin-cache";
 import { buildDetailPath } from "@/lib/permalink";
 import { getSiteWritingSettings } from "@/lib/cms-config";
 import type { ExtensionSettingsField, PluginCollectionWorkspaceField } from "@/lib/extension-contracts";
+import TootyAiWorkspace from "@/plugins/tooty-ai/workspace";
 
 type Props = {
   params: Promise<{ pluginId: string }>;
@@ -253,7 +253,14 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
   const plugin = await getPluginById(pluginId);
   if (!plugin) notFound();
   const pluginData = plugin;
-  const tab = String(resolvedSearchParams.tab || (pluginData.contentModel?.kind === "collection" ? "carousels" : "settings"))
+  const tab = String(
+    resolvedSearchParams.tab ||
+      (pluginData.id === "tooty-ai"
+        ? "assist"
+        : pluginData.contentModel?.kind === "collection"
+          ? "carousels"
+          : "settings"),
+  )
     .trim()
     .toLowerCase();
   const config = (await getPluginConfig(pluginData.id)) as Record<string, unknown>;
@@ -275,6 +282,7 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
 
   const isDevTools = pluginData.id === "dev-tools";
   const isMigrationKit = pluginData.id === "export-import";
+  const isTootyAi = pluginData.id === "tooty-ai";
   const canUseSendMessageTool = await userCan("network.plugins.manage", session.user.id);
   const kernel = await createKernelForRequest(effectiveSiteId || undefined);
   const providers = kernel.getAllPluginCommunicationProviders().map((provider) => ({
@@ -305,6 +313,62 @@ export default async function PluginSetupPage({ params, searchParams }: Props) {
   const migrationProviders = Array.isArray(migrationProviderPayload?.providers)
     ? migrationProviderPayload.providers
     : [];
+
+  if (isTootyAi) {
+    const aiProviders = await Promise.all(
+      kernel.getAllAiProviders().map(async (provider) => {
+        let health = { ok: true } as { ok: boolean; error?: string };
+        if (provider.healthCheck) {
+          try {
+            health = await provider.healthCheck();
+          } catch (error) {
+            health = {
+              ok: false,
+              error: error instanceof Error ? error.message : "Provider health check failed.",
+            };
+          }
+        }
+        return {
+          id: provider.id,
+          ownerType: provider.ownerType,
+          ownerId: provider.ownerId,
+          actions: provider.actions,
+          health,
+        };
+      }),
+    );
+    const canRunAssist = effectiveSiteId
+      ? await userCan("site.ai.use", session.user.id, { siteId: effectiveSiteId })
+      : false;
+
+    return (
+      <div className="flex max-w-6xl flex-col gap-6 p-8">
+        <div>
+          <h1 className="font-cal text-3xl font-bold">{pluginData.name}</h1>
+          <p className="mt-2 text-sm text-stone-600">
+            Governed AI assist runs through the core spine so providers stay swappable, requests stay traceable, and output remains suggestion-only.
+          </p>
+        </div>
+
+        <PluginSiteSelect
+          currentValue={effectiveSiteId}
+          actionPath={`/app/plugins/${pluginData.id}`}
+          hiddenParams={{ tab: tab === "providers" ? "providers" : "assist" }}
+          options={ownedSites.map((site) => ({
+            id: site.id,
+            label: site.name || site.subdomain || site.id,
+          }))}
+        />
+
+        <TootyAiWorkspace
+          initialTab={tab === "providers" ? "providers" : "assist"}
+          siteId={effectiveSiteId || ""}
+          canRunAssist={canRunAssist}
+          providers={aiProviders}
+        />
+      </div>
+    );
+  }
 
   if (collectionModel) {
     const model = collectionModel;

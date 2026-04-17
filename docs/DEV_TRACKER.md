@@ -62,6 +62,46 @@ Current tree status:
   - validated on the final `0.4.14` tree with `npm run test` and `npm run test:integration`
   - product decisions locked for v1: canonical `/feed.xml`, reading-settings ownership, combined multi-domain site feed, configurable item count, and no extra feed-index/manifest route beyond autodiscovery plus feed self-linking
 
+### 23. AI spine 0.5.0 core contract and first-party plugin
+
+- Status: `verified`
+- Area:
+  - `/Users/joseffbetancourt/PhpstormProjects/.codex-worktrees/tooty-cms-ai-spine-0-5-0`
+  - `/Users/joseffbetancourt/PhpstormProjects/tooty-cms/docs/DEV_TRACKER.md`
+- Scope:
+  - introduce a governed core AI spine with explicit scope, RBAC, quotas, provider dispatch, guard decisions, and trace boundaries
+  - register built-in OpenAI and Anthropic adapters behind the shared provider contract
+  - remove the legacy direct `/api/generate` route in favor of `/api/ai/run`
+  - ship a first-party `tooty-ai` plugin workspace plus editor assist on the new text-tool fragment contract
+  - publish the new spine/versioning contracts and bump core to `0.5.0`
+- Affected surfaces:
+  - extension/kernel provider registration
+  - RBAC capabilities
+  - AI HTTP execution surface
+  - editor plugin tab contract
+  - first-party plugin workspace and editor assist UI
+  - core docs and versioning
+- Required validation:
+  1. targeted Vitest coverage for AI spine, provider adapters, route enforcement, plugin/editor integration, and no-bypass import boundaries
+  2. `npm run test`
+  3. `npm run test:integration`
+  4. `npm run lint`
+  5. `npm run build`
+- Current notes:
+  - implemented in an isolated git worktree on branch `codex/tooty-ai-spine-0-5-0`
+  - core contract docs shipped alongside runtime changes so the AI surface lands as a published spine, not an ad hoc feature
+  - legacy `/api/generate` is removed in the same release rather than being kept as a compatibility wrapper
+  - integration harness was hardened after cross-spec DB contamination surfaced in the long Playwright run:
+    - relative plugin/theme path resolution now honors the shared config base path in worktree runs
+    - the no-arg `npm run test:integration` path now resets and bootstraps the test DB per Playwright spec file while reusing the single production build
+    - root `tsconfig.json` now uses wildcard `.next-test-*` includes so local build/test runs do not leave port-specific residue
+  - validation completed:
+    - targeted Vitest: AI spine/providers/route/boundary/extension API/editor tool/workspace plus plugin runtime and editor route follow-up coverage
+    - `npm run test`: passed
+    - `npm run test:integration`: passed
+    - `npm run lint`: passed with existing repo warnings only
+    - `npm run build`: passed
+
 ### 15. Robert Betan deploy repo self-contained plugin/theme bundle
 
 - Status: `in_progress`

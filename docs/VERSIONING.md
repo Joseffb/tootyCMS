@@ -4,8 +4,8 @@
 
 Tooty Core is in early-contract phase and uses `0.x` SemVer.
 
-- Current core version: `0.4.14`
-- Current compatibility line: `0.4.x`
+- Current core version: `0.5.0`
+- Current compatibility line: `0.5.x`
 
 ## Core Bump Rules
 
@@ -13,6 +13,17 @@ Tooty Core is in early-contract phase and uses `0.x` SemVer.
 - Bump `MINOR` for breaking contract changes.
 - Bump `PATCH` for non-breaking fixes, docs-only, or internal improvements.
 - `1.0.0` starts only after contract freeze across routing, data-domain APIs, extension loader, and setup/runtime contracts.
+
+## 0.5.0 AI Spine Release
+
+`0.5.0` introduces the governed AI spine and removes the legacy direct `/api/generate` route.
+
+This is a breaking pre-v1 contract change because:
+
+- AI execution now requires explicit scope (`site` or `network`)
+- provider dispatch is governed by the core AI spine
+- plugins consume AI through the normalized spine contract instead of direct vendor calls
+- the first-party `tooty-ai` plugin depends on the new `0.5.x` compatibility line
 
 ## Extension Compatibility
 

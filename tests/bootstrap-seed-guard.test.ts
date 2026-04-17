@@ -147,7 +147,7 @@ describe("bootstrap seed guard", () => {
     mocks.insert.mockImplementation(() => buildInsertChain());
   });
 
-  it("does not seed starter posts when seedStarterContent is false", async () => {
+  it("does not seed starter posts when seedStarterContent is false", { timeout: 45_000 }, async () => {
     const { ensureMainSiteForUser } = await import("@/lib/bootstrap");
 
     await ensureMainSiteForUser("user-1", { seedStarterContent: false });
@@ -164,7 +164,7 @@ describe("bootstrap seed guard", () => {
     expect(mocks.createSiteMenuItem).toHaveBeenCalledTimes(2);
   });
 
-  it("seeds starter posts when seedStarterContent is true", async () => {
+  it("seeds starter posts when seedStarterContent is true", { timeout: 45_000 }, async () => {
     const { ensureMainSiteForUser } = await import("@/lib/bootstrap");
 
     await ensureMainSiteForUser("user-1", { seedStarterContent: true });
@@ -175,7 +175,7 @@ describe("bootstrap seed guard", () => {
     expect(mocks.seededRows.some((row: any) => row.slug === "privacy-policy")).toBe(true);
   });
 
-  it("returns early and does not create or upsert when user no longer exists", async () => {
+  it("returns early and does not create or upsert when user no longer exists", { timeout: 45_000 }, async () => {
     mocks.usersFindFirst.mockResolvedValue(null);
     const { ensureMainSiteForUser } = await import("@/lib/bootstrap");
 

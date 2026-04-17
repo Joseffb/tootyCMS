@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
-  listPluginsWithState: vi.fn(),
   createKernelForRequest: vi.fn(),
   userCan: vi.fn(),
+  listPluginsWithState: vi.fn(),
+  listPluginsWithSiteState: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -12,8 +13,12 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/plugin-runtime", () => ({
-  listPluginsWithState: mocks.listPluginsWithState,
   createKernelForRequest: mocks.createKernelForRequest,
+}));
+
+vi.mock("@/lib/plugins", () => ({
+  listPluginsWithState: mocks.listPluginsWithState,
+  listPluginsWithSiteState: mocks.listPluginsWithSiteState,
 }));
 
 vi.mock("@/lib/authorization", () => ({
@@ -25,14 +30,15 @@ import { GET } from "@/app/api/plugins/editor/route";
 describe("/api/plugins/editor", () => {
   afterEach(() => {
     mocks.getSession.mockReset();
-    mocks.listPluginsWithState.mockReset();
     mocks.createKernelForRequest.mockReset();
     mocks.userCan.mockReset();
+    mocks.listPluginsWithState.mockReset();
+    mocks.listPluginsWithSiteState.mockReset();
   });
 
   it("returns ordered plugin tabs for the current domain and honors capability gates", async () => {
     mocks.getSession.mockResolvedValue({ user: { id: "user-1" } });
-    mocks.listPluginsWithState.mockResolvedValue([
+    mocks.listPluginsWithSiteState.mockResolvedValue([
       {
         id: "tooty-story-teller",
         name: "Tooty Story Teller",

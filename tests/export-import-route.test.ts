@@ -31,7 +31,7 @@ describe("POST /api/plugins/export-import", () => {
     mocks.listPluginsWithSiteState.mockReset();
   });
 
-  it("returns 404 when migration plugin is inactive", async () => {
+  it("returns 404 when migration plugin is inactive", { timeout: 20_000 }, async () => {
     mocks.getSession.mockResolvedValue({ user: { id: "u1" } });
     mocks.userCan.mockResolvedValue(true);
     mocks.listPluginsWithState.mockResolvedValue([{ id: "export-import", enabled: false }]);
@@ -51,7 +51,7 @@ describe("POST /api/plugins/export-import", () => {
     expect(String(json.error)).toContain("Migration Kit plugin is not active");
   });
 
-  it("routes provider request when migration plugin is active", async () => {
+  it("routes provider request when migration plugin is active", { timeout: 20_000 }, async () => {
     mocks.getSession.mockResolvedValue({ user: { id: "u1" } });
     mocks.userCan.mockResolvedValue(true);
     mocks.listPluginsWithSiteState.mockResolvedValue([

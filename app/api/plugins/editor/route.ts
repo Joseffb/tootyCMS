@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { createKernelForRequest, listPluginsWithState } from "@/lib/plugin-runtime";
+import { createKernelForRequest } from "@/lib/plugin-runtime";
+import { listPluginsWithSiteState, listPluginsWithState } from "@/lib/plugins";
 import { userCan } from "@/lib/authorization";
 import { filterTabsForDomain, sortEditorPluginTabs } from "@/lib/editor-plugin-tabs";
 import type { PluginEditorTab } from "@/lib/extension-contracts";
@@ -41,9 +42,9 @@ export async function GET(request: Request) {
   const postId = url.searchParams.get("postId")?.trim() || "";
   const dataDomainKey = url.searchParams.get("dataDomainKey")?.trim().toLowerCase() || "";
 
-  const plugins = await listPluginsWithState();
+  const plugins = siteId ? await listPluginsWithSiteState(siteId) : await listPluginsWithState();
   const editorPlugins = plugins
-    .filter((plugin: any) => plugin.enabled)
+    .filter((plugin: any) => plugin.enabled && ("siteEnabled" in plugin ? plugin.siteEnabled : true))
     .map((plugin: any) => ({
       id: plugin.id,
       name: plugin.name,
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
     }))
     .filter((plugin: any) => plugin.snippets.length > 0);
   const manifestTabs = plugins
-    .filter((plugin: any) => plugin.enabled)
+    .filter((plugin: any) => plugin.enabled && ("siteEnabled" in plugin ? plugin.siteEnabled : true))
     .flatMap((plugin: any) =>
       filterTabsForDomain(Array.isArray(plugin?.editor?.tabs) ? plugin.editor.tabs : [], dataDomainKey).map((tab) => ({
         ...tab,

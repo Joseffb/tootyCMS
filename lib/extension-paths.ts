@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
@@ -7,6 +8,8 @@ let cachedRelativePathBases:
       bases: string[];
     }
   | null = null;
+
+const EXTENSION_ENV_BASE_DIR_KEY = "TOOTY_CONFIG_BASE_DIR";
 
 function resolveGitCommonDir(cwd: string) {
   const gitPath = path.join(cwd, ".git");
@@ -55,12 +58,33 @@ export function resolveExtensionPathFromBases(
   return candidates.find((candidate) => pathExists(candidate)) || candidates[0] || "";
 }
 
+function resolveExtensionBaseDir() {
+  const configured = String(process.env[EXTENSION_ENV_BASE_DIR_KEY] || "").trim();
+  if (configured) {
+    return path.isAbsolute(configured) ? configured : path.resolve(process.cwd(), configured);
+  }
+
+  for (const candidateName of [".env", ".env.local", ".env.test"]) {
+    const candidatePath = path.join(process.cwd(), candidateName);
+    try {
+      if (!fs.existsSync(candidatePath)) continue;
+      return path.dirname(fs.realpathSync(candidatePath));
+    } catch {
+      continue;
+    }
+  }
+
+  return process.cwd();
+}
+
 function normalizeOnePath(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
-  return path.isAbsolute(trimmed)
-    ? trimmed
-    : resolveExtensionPathFromBases(trimmed, getRelativePathBases());
+  if (path.isAbsolute(trimmed)) return trimmed;
+  const bases = [resolveExtensionBaseDir(), ...getRelativePathBases()].filter(
+    (base, index, allBases) => allBases.indexOf(base) === index,
+  );
+  return resolveExtensionPathFromBases(trimmed, bases);
 }
 
 function parseConfiguredPaths(rawValue: string | undefined, fallbackDirNames: string[]) {

@@ -36,8 +36,8 @@ export type PluginWithSiteState = PluginWithState & {
   effectiveConfig: Record<string, unknown>;
 };
 
-const DEFAULT_GLOBALLY_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
-const DEFAULT_SITE_ENABLED_PLUGIN_IDS = new Set(["tooty-comments"]);
+const DEFAULT_GLOBALLY_ENABLED_PLUGIN_IDS = new Set(["tooty-comments", "tooty-ai"]);
+const DEFAULT_SITE_ENABLED_PLUGIN_IDS = new Set(["tooty-comments", "tooty-ai"]);
 const PLUGIN_DISCOVERY_TTL_MS = process.env.NODE_ENV === "development" ? 2_000 : 30_000;
 const loggedDuplicatePluginSkips = new Set<string>();
 let pluginDiscoveryCache: { at: number; plugins: PluginManifest[] } | null = null;

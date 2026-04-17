@@ -65,7 +65,7 @@ export default function RootLayout({
       <body className={cn(cal.variable, inter.variable)}>
         <BotIdClient
           protect={[
-            { path: "/api/generate", method: "POST" },
+            { path: "/api/ai/run", method: "POST" },
           ]}
         />
         <AnalyticsConditional />

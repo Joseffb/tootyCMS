@@ -90,6 +90,13 @@ Middleware assigns or propagates `x-trace-id`:
   - filter registration/begin/end
   - menu registration/additions
 - Media API (`/api/media`)
+- AI spine:
+  - `run begin`
+  - `normalized request`
+  - `provider begin`
+  - `provider end`
+  - `guard decision`
+  - `run end` / `failure`
 - Upload flow:
   - client uploader (`uploadSmart`)
   - Blob upload route (`/api/uploadImage`)

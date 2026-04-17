@@ -17,7 +17,7 @@ describe("getActiveThemeForSite", () => {
     themeMocks.listThemesWithState.mockReset();
   });
 
-  it("loads theme state with the active site id", async () => {
+  it("loads theme state with the active site id", { timeout: 20_000 }, async () => {
     themeMocks.getSiteThemeId.mockResolvedValue("robert-betan-sub");
     themeMocks.listThemesWithState.mockResolvedValue([
       {

@@ -1,4 +1,5 @@
-import path from "node:path";
+import fs from "node:fs";
+import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getPluginsDirs,
@@ -8,6 +9,8 @@ import {
 
 const originalThemesPath = process.env.THEMES_PATH;
 const originalPluginsPath = process.env.PLUGINS_PATH;
+const originalConfigBaseDir = process.env.TOOTY_CONFIG_BASE_DIR;
+const detectedConfigBaseDir = path.dirname(fs.realpathSync(path.join(process.cwd(), ".env")));
 
 afterEach(() => {
   if (originalThemesPath === undefined) {
@@ -19,6 +22,11 @@ afterEach(() => {
     delete process.env.PLUGINS_PATH;
   } else {
     process.env.PLUGINS_PATH = originalPluginsPath;
+  }
+  if (originalConfigBaseDir === undefined) {
+    delete process.env.TOOTY_CONFIG_BASE_DIR;
+  } else {
+    process.env.TOOTY_CONFIG_BASE_DIR = originalConfigBaseDir;
   }
 });
 
@@ -50,7 +58,7 @@ describe("extension path parsing", () => {
 
     expect(getThemesDirs()).toHaveLength(3);
     expect(getThemesDirs()[0]).toMatch(/tootyCMS-custom-themes$/);
-    expect(getThemesDirs()[1]).toBe(path.join(process.cwd(), "themes"));
+    expect(getThemesDirs()[1]).toBe(path.join(detectedConfigBaseDir, "themes"));
     expect(getThemesDirs()[2]).toMatch(/tootyCMS-themes$/);
   });
 
@@ -58,14 +66,30 @@ describe("extension path parsing", () => {
     delete process.env.THEMES_PATH;
     delete process.env.PLUGINS_PATH;
 
-    expect(getThemesDirs()).toHaveLength(3);
-    expect(getThemesDirs()[0]).toBe(path.join(process.cwd(), "themes"));
-    expect(getThemesDirs()[1]).toMatch(/tootyCMS-themes$/);
-    expect(getThemesDirs()[2]).toMatch(/tootyCMS-custom-themes$/);
+    expect(getThemesDirs()).toEqual([
+      path.join(detectedConfigBaseDir, "themes"),
+      path.join(detectedConfigBaseDir, "../tootyCMS-themes"),
+      path.join(detectedConfigBaseDir, "../tootyCMS-custom-themes"),
+    ]);
+    expect(getPluginsDirs()).toEqual([
+      path.join(detectedConfigBaseDir, "plugins"),
+      path.join(detectedConfigBaseDir, "../tootyCMS-plugins"),
+      path.join(detectedConfigBaseDir, "../tootyCMS-custom-plugins"),
+    ]);
+  });
 
-    expect(getPluginsDirs()).toHaveLength(3);
-    expect(getPluginsDirs()[0]).toBe(path.join(process.cwd(), "plugins"));
-    expect(getPluginsDirs()[1]).toMatch(/tootyCMS-plugins$/);
-    expect(getPluginsDirs()[2]).toMatch(/tootyCMS-custom-plugins$/);
+  it("resolves relative plugin and theme roots against the configured Tooty config base dir", () => {
+    process.env.TOOTY_CONFIG_BASE_DIR = "/Users/joseffbetancourt/PhpstormProjects/tooty-cms";
+    process.env.THEMES_PATH = "themes,../tootyCMS-themes";
+    process.env.PLUGINS_PATH = "plugins,../tootyCMS-plugins";
+
+    expect(getThemesDirs()).toEqual([
+      "/Users/joseffbetancourt/PhpstormProjects/tooty-cms/themes",
+      "/Users/joseffbetancourt/PhpstormProjects/tootyCMS-themes",
+    ]);
+    expect(getPluginsDirs()).toEqual([
+      "/Users/joseffbetancourt/PhpstormProjects/tooty-cms/plugins",
+      "/Users/joseffbetancourt/PhpstormProjects/tootyCMS-plugins",
+    ]);
   });
 });

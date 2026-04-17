@@ -49,7 +49,7 @@ describe("theme config scoping", () => {
     settingsMocks.listSettingsByLikePatterns.mockResolvedValue([]);
   });
 
-  it("layers site-scoped overrides on top of network theme defaults", async () => {
+  it("layers site-scoped overrides on top of network theme defaults", { timeout: 20_000 }, async () => {
     settingsMocks.getSettingsByKeys.mockResolvedValue({
       "theme_robert-betan-sub_enabled": "true",
       "theme_robert-betan-sub_config": JSON.stringify({

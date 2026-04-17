@@ -2,6 +2,7 @@ import type { ThemeTokens } from "@/lib/theme-system";
 import { normalizeExtensionTags } from "@/lib/extension-tags";
 import { SITE_CAPABILITIES, type SiteCapability } from "@/lib/rbac";
 import { normalizePluginSuggestedRoles } from "@/lib/plugin-permissions";
+import type { AiAction, AiTextToolApplyAction, AiTextToolSource } from "@/lib/ai-contracts";
 
 export type ExtensionKind = "plugin" | "theme";
 
@@ -38,10 +39,21 @@ export type PluginEditorTabField = Omit<ExtensionSettingsField, "type"> & {
   fields?: PluginEditorTabField[];
 };
 
-export type PluginEditorTabFragment = {
-  kind: "html";
-  html: string;
-};
+export type PluginEditorTabFragment =
+  | {
+      kind: "html";
+      html: string;
+    }
+  | {
+      kind: "text-tool";
+      toolId: string;
+      title: string;
+      action: AiAction;
+      source: AiTextToolSource;
+      applyActions: AiTextToolApplyAction[];
+      instructionPlaceholder?: string;
+      submitLabel?: string;
+    };
 
 export type PluginEditorTabSection = {
   id: string;
@@ -123,6 +135,7 @@ export type PluginContract = {
     communicationProviders?: boolean;
     commentProviders?: boolean;
     webCallbacks?: boolean;
+    aiProviders?: boolean;
   };
   menu?: PluginMenuConfig;
   settingsMenu?: PluginMenuConfig;
@@ -260,10 +273,46 @@ function cleanPluginEditorTabSection(section: unknown): PluginEditorTabSection |
     : [];
   const fragmentCandidate = candidate.fragment ? asRecord(candidate.fragment) : null;
   const fragmentHtml = String(fragmentCandidate?.html ?? "").trim();
-  const fragment =
-    fragmentCandidate && String(fragmentCandidate.kind ?? "").trim().toLowerCase() === "html" && fragmentHtml
-      ? ({ kind: "html", html: fragmentHtml } satisfies PluginEditorTabFragment)
-      : undefined;
+  const fragmentKind = String(fragmentCandidate?.kind ?? "").trim().toLowerCase();
+  const fragment = (() => {
+    if (!fragmentCandidate) return undefined;
+    if (fragmentKind === "html" && fragmentHtml) {
+      return { kind: "html", html: fragmentHtml } satisfies PluginEditorTabFragment;
+    }
+    if (fragmentKind !== "text-tool") return undefined;
+    const toolId = String(fragmentCandidate.toolId ?? "").trim();
+    const toolTitle = String(fragmentCandidate.title ?? "").trim();
+    const actionRaw = String(fragmentCandidate.action ?? "").trim().toLowerCase();
+    const sourceRaw = String(fragmentCandidate.source ?? "").trim().toLowerCase();
+    const applyActions = Array.isArray(fragmentCandidate.applyActions)
+      ? Array.from(
+          new Set(
+            fragmentCandidate.applyActions
+              .map((entry) => String(entry ?? "").trim().toLowerCase())
+              .filter((entry) => entry === "replace_selection" || entry === "insert_below"),
+          ),
+        ) as AiTextToolApplyAction[]
+      : [];
+    if (
+      !toolId ||
+      !toolTitle ||
+      !["generate", "rewrite", "summarize", "classify"].includes(actionRaw) ||
+      !["selection", "content"].includes(sourceRaw) ||
+      applyActions.length === 0
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "text-tool",
+      toolId,
+      title: toolTitle,
+      action: actionRaw as AiAction,
+      source: sourceRaw as AiTextToolSource,
+      applyActions,
+      instructionPlaceholder: String(fragmentCandidate.instructionPlaceholder ?? "").trim() || undefined,
+      submitLabel: String(fragmentCandidate.submitLabel ?? "").trim() || undefined,
+    } satisfies PluginEditorTabFragment;
+  })();
   if (fields.length === 0 && !fragment) return null;
   return {
     id,
@@ -491,6 +540,9 @@ export function validatePluginContract(input: unknown, fallbackId: string): Plug
         : false,
       webCallbacks: candidate.capabilities
         ? Boolean(asRecord(candidate.capabilities).webCallbacks ?? false)
+        : false,
+      aiProviders: candidate.capabilities
+        ? Boolean(asRecord(candidate.capabilities).aiProviders ?? false)
         : false,
     },
     menu: menu

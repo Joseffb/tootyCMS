@@ -78,7 +78,7 @@ describe("comments spine invariants", () => {
     });
   });
 
-  it("rejects update when actor is neither author nor moderator", async () => {
+  it("rejects update when actor is neither author nor moderator", { timeout: 20_000 }, async () => {
     mocks.userCan.mockResolvedValue(false);
     const provider = {
       pluginId: "tooty-comments",

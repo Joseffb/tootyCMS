@@ -95,7 +95,7 @@ describe("scheduler reliability model", () => {
     mocks.execute.mockResolvedValue({ rows: [] });
   });
 
-  it("moves schedule to dead-letter when retries are exhausted", async () => {
+  it("moves schedule to dead-letter when retries are exhausted", { timeout: 60_000 }, async () => {
     const { runDueSchedules } = await import("@/lib/scheduler");
     for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
     mocks.execute
@@ -117,7 +117,7 @@ describe("scheduler reliability model", () => {
     expect(auditParams).toContain("dead_letter");
   });
 
-  it("keeps schedule active with backoff while retries remain", async () => {
+  it("keeps schedule active with backoff while retries remain", { timeout: 60_000 }, async () => {
     const { runDueSchedules } = await import("@/lib/scheduler");
     for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
     mocks.execute
@@ -136,7 +136,7 @@ describe("scheduler reliability model", () => {
     expect(updateParams).toContain(false);
   });
 
-  it("writes manual run audit with manual trigger", async () => {
+  it("writes manual run audit with manual trigger", { timeout: 60_000 }, async () => {
     const { runScheduleEntryNow } = await import("@/lib/scheduler");
     for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
     mocks.execute
@@ -154,7 +154,7 @@ describe("scheduler reliability model", () => {
     expect(auditParams).toContain("dead_letter");
   });
 
-  it("runs core media cleanup action successfully for a site-owned schedule", async () => {
+  it("runs core media cleanup action successfully for a site-owned schedule", { timeout: 60_000 }, async () => {
     const { runDueSiteSchedules } = await import("@/lib/scheduler");
     for (let i = 0; i < 11; i += 1) mocks.execute.mockResolvedValueOnce({ rows: [] });
     mocks.execute

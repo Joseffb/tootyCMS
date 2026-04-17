@@ -2,6 +2,32 @@
 
 This document summarizes the feature updates added in this cycle.
 
+## AI Spine Runtime (2026-04-17)
+
+The governed AI spine is now part of core runtime in `0.5.0`.
+
+Runtime contract:
+- all AI execution runs through `POST /api/ai/run`
+- direct `/api/generate` is removed
+- requests require explicit scope (`site` or `network`)
+- provider selection resolves as `request.providerId -> AI_DEFAULT_PROVIDER -> fail`
+- output is suggestion-only and never writes or publishes directly
+
+New env/runtime keys:
+- `OPENAI_API_KEY`, `OPENAI_MODEL`
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
+- `AI_DEFAULT_PROVIDER`
+- `AI_QUOTA_MODE`
+- `AI_INPUT_MAX_CHARS`
+- `AI_OUTPUT_MAX_CHARS`
+- `AI_KV_DAILY_LIMIT_SITE`
+- `AI_KV_DAILY_LIMIT_NETWORK`
+
+Quota contract:
+- `AI_QUOTA_MODE=none` still emits trace events
+- `AI_QUOTA_MODE=kv_daily` enforces per-user, per-scope daily limits through KV-backed counters
+- quota allow/deny remains core-owned and traceable
+
 ## Runtime Baseline
 
 - Node.js `22` LTS is the supported runtime baseline for local/dev/CI/deploy.

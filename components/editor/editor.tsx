@@ -2013,6 +2013,32 @@ export default function Editor({
     editor.commands.focus();
   };
 
+  const getEditorSelectionText = () => {
+    const editor = editorRef.current;
+    if (!editor) return "";
+    const { from, to } = editor.state.selection;
+    return editor.state.doc.textBetween(from, to, "\n", " ").trim();
+  };
+
+  const getEditorContentText = () => {
+    const editor = editorRef.current;
+    if (!editor) return "";
+    return editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n\n", " ").trim();
+  };
+
+  const applyAiText = (action: "replace_selection" | "insert_below", text: string) => {
+    const nextText = String(text || "").trim();
+    if (!nextText) return;
+    exec((editor) => {
+      if (action === "replace_selection") {
+        editor.chain().focus().insertContent(nextText).run();
+        return;
+      }
+      const { to } = editor.state.selection;
+      editor.chain().focus().setTextSelection(to).insertContent(`\n\n${nextText}`).run();
+    });
+  };
+
   const isActive = (name: string, attrs?: Record<string, unknown>) => {
     const editor = editorRef.current;
     if (!editor) return false;
@@ -3677,10 +3703,15 @@ export default function Editor({
             tab={activeSidebarTab.pluginTab}
             canEdit={canEdit}
             siteId={post.siteId || ""}
+            postId={post.id || ""}
+            dataDomainKey={String(post.dataDomainKey || params?.domainKey || "").trim().toLowerCase()}
             metaEntries={metaEntries}
             mediaItems={mediaItems}
             onMetaEntriesChange={applyMetaEntriesUpdate}
             openMediaPicker={openMediaPicker}
+            getEditorSelectionText={getEditorSelectionText}
+            getEditorContentText={getEditorContentText}
+            onApplyAiText={applyAiText}
           />
         ) : null}
       </aside>

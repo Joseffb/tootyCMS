@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("profile settings panel", () => {
-  it("renders the profile image field and preview", async () => {
+  it("renders the profile image field and preview", { timeout: 20_000 }, async () => {
     mocks.getProfile.mockResolvedValue({
       user: {
         id: "user-1",

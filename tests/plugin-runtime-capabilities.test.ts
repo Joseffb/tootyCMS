@@ -161,4 +161,15 @@ describe("plugin runtime capability enforcement", () => {
       },
     ]);
   });
+
+  it("registers the built-in AI providers on every request kernel", async () => {
+    listPluginsWithStateMock.mockResolvedValue([]);
+
+    const kernel = await createKernelForRequest();
+
+    expect(kernel.getAllAiProviders().map((provider) => provider.id).sort()).toEqual([
+      "anthropic",
+      "openai",
+    ]);
+  });
 });

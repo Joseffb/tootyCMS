@@ -24,6 +24,12 @@ Pre-v1 governance note:
 - Disabling `export-import` must remove the whole migration surface in one action.
 - This exception does not apply to normal feature plugins.
 
+AI plugin note:
+- AI plugins are not a separate extension system
+- they use the same standardized manifest, capability, menu, editor, and API contracts as every other plugin
+- they may not define AI execution behavior, quota enforcement, or allow/deny outcomes
+- core remains the sole authority for `ai.run`, provider dispatch, quotas, guards, and trace
+
 ## Drop-in structure
 
 Each plugin is a folder in `plugins/` by default.
@@ -54,7 +60,8 @@ Optional:
     "serverHandlers": false,
     "scheduleJobs": false,
     "communicationProviders": false,
-    "webCallbacks": false
+    "webCallbacks": false,
+    "aiProviders": false
   },
   "menuPlacement": "settings",
   "menu": { "label": "Dev Tools", "path": "/app/plugins/dev-tools" },
@@ -114,6 +121,7 @@ If `index.mjs` exports `register(kernel, api)`, it is invoked during kernel boot
 - `registerScheduleHandler({ id, run })` (requires `capabilities.scheduleJobs=true`)
 - `registerCommunicationProvider({ id, channels, deliver })` (requires `capabilities.communicationProviders=true`)
 - `registerWebcallbackHandler({ id, handle })` (requires `capabilities.webCallbacks=true`)
+- `registerAiProvider({ id, actions, run, healthCheck? })` (requires `capabilities.aiProviders=true`)
 
 Service-style core namespace (recommended):
 - `api.core.settings.get(key, fallback?)`
@@ -141,6 +149,12 @@ Service-style core namespace (recommended):
 - `api.core.webcallbacks.dispatch|listRecent|purge(...)`
 - `api.core.webhooks.subscriptions.list|upsert|delete(...)`
 - `api.core.webhooks.deliveries.retryPending(...)`
+- `api.core.ai.run(...)`
+
+AI governance rules:
+- AI plugins declare influence; core computes outcome
+- plugins must not inject query-based AI governance or hidden runtime branching
+- provider registration is allowed; provider-side policy is not
 
 Comment provider note:
 - `registerCommentProvider(...)` is the authoritative extension path for comments providers.

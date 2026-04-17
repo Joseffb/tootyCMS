@@ -201,6 +201,7 @@ if [[ -n "${POSTGRES_URL:-}" && "${POSTGRES_TEST_URL}" == "${POSTGRES_URL}" ]]; 
 fi
 export POSTGRES_URL="${POSTGRES_TEST_URL}"
 
+reset_test_db() {
 node <<'NODE'
 const { Client } = require("pg");
 
@@ -279,9 +280,74 @@ main().catch((error) => {
   process.exit(1);
 });
 NODE
+}
 
-# Recreate latest schema from current contracts after full drop reset.
-bash "./scripts/bootstrap-test-db.sh"
+wait_for_bootstrapped_core_tables() {
+node <<'NODE'
+const { Client } = require("pg");
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function main() {
+  const url = process.env.POSTGRES_URL;
+  if (!url) throw new Error("POSTGRES_URL is required after integration bootstrap.");
+  const rawPrefix = (process.env.CMS_DB_PREFIX || "tooty_").trim();
+  const prefix = rawPrefix.endsWith("_") ? rawPrefix : `${rawPrefix}_`;
+  const requiredTables = [
+    `${prefix}network_users`,
+    `${prefix}network_sites`,
+    `${prefix}network_system_settings`,
+  ];
+  const deadline = Date.now() + 60_000;
+  let lastMissing = requiredTables;
+
+  while (Date.now() < deadline) {
+    const client = new Client({ connectionString: url });
+    try {
+      await client.connect();
+      const missing = [];
+      for (const tableName of requiredTables) {
+        const result = await client.query("select to_regclass($1) as table_name", [`public.${tableName}`]);
+        if (!result.rows?.[0]?.table_name) {
+          missing.push(tableName);
+        }
+      }
+      if (missing.length === 0) {
+        return;
+      }
+      lastMissing = missing;
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+    await sleep(500);
+  }
+
+  throw new Error(
+    `Timed out waiting for integration core tables: ${lastMissing.join(", ")}`,
+  );
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+}
+
+reset_and_bootstrap_test_db() {
+  reset_test_db
+  # Recreate latest schema from current contracts after full drop reset.
+  bash "./scripts/bootstrap-test-db.sh"
+  wait_for_bootstrapped_core_tables
+}
+
+list_playwright_specs() {
+  find "./tests/e2e" -type f -name "*.spec.ts" | LC_ALL=C sort
+}
+
+reset_and_bootstrap_test_db
 copy_if_distinct "tsconfig.json" "${ROOT_TSCONFIG_BACKUP}"
 cleanup() {
   stop_test_server
@@ -356,21 +422,49 @@ else
     PLAYWRIGHT_PROJECTS+=("${PLAYWRIGHT_PROJECT}")
   done < <(resolve_playwright_projects "$@")
   PLAYWRIGHT_STATUS=0
-  for PLAYWRIGHT_PROJECT in "${PLAYWRIGHT_PROJECTS[@]}"; do
-    [[ -n "${PLAYWRIGHT_PROJECT}" ]] || continue
-    echo "Running Playwright project on fresh server: ${PLAYWRIGHT_PROJECT}"
-    start_test_server
-    if has_explicit_workers_arg "$@"; then
-      run_playwright --project="${PLAYWRIGHT_PROJECT}" "$@"
-    else
-      run_playwright --project="${PLAYWRIGHT_PROJECT}" --workers="${PLAYWRIGHT_DEFAULT_WORKERS}" "$@"
-    fi
-    PLAYWRIGHT_STATUS=$?
-    stop_test_server
-    if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
-      break
-    fi
-  done
+  if [[ "$#" -eq 0 ]]; then
+    PLAYWRIGHT_SPECS=()
+    while IFS= read -r PLAYWRIGHT_SPEC; do
+      [[ -n "${PLAYWRIGHT_SPEC}" ]] || continue
+      PLAYWRIGHT_SPECS+=("${PLAYWRIGHT_SPEC}")
+    done < <(list_playwright_specs)
+
+    for PLAYWRIGHT_PROJECT in "${PLAYWRIGHT_PROJECTS[@]}"; do
+      [[ -n "${PLAYWRIGHT_PROJECT}" ]] || continue
+      for PLAYWRIGHT_SPEC in "${PLAYWRIGHT_SPECS[@]}"; do
+        [[ -n "${PLAYWRIGHT_SPEC}" ]] || continue
+        echo "Running Playwright project/spec on fresh DB + server: ${PLAYWRIGHT_PROJECT} ${PLAYWRIGHT_SPEC}"
+        reset_and_bootstrap_test_db
+        start_test_server
+        if has_explicit_workers_arg "$@"; then
+          run_playwright --project="${PLAYWRIGHT_PROJECT}" "${PLAYWRIGHT_SPEC}"
+        else
+          run_playwright --project="${PLAYWRIGHT_PROJECT}" --workers="${PLAYWRIGHT_DEFAULT_WORKERS}" "${PLAYWRIGHT_SPEC}"
+        fi
+        PLAYWRIGHT_STATUS=$?
+        stop_test_server
+        if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
+          break 2
+        fi
+      done
+    done
+  else
+    for PLAYWRIGHT_PROJECT in "${PLAYWRIGHT_PROJECTS[@]}"; do
+      [[ -n "${PLAYWRIGHT_PROJECT}" ]] || continue
+      echo "Running Playwright project on fresh server: ${PLAYWRIGHT_PROJECT}"
+      start_test_server
+      if has_explicit_workers_arg "$@"; then
+        run_playwright --project="${PLAYWRIGHT_PROJECT}" "$@"
+      else
+        run_playwright --project="${PLAYWRIGHT_PROJECT}" --workers="${PLAYWRIGHT_DEFAULT_WORKERS}" "$@"
+      fi
+      PLAYWRIGHT_STATUS=$?
+      stop_test_server
+      if [[ "${PLAYWRIGHT_STATUS}" -ne 0 ]]; then
+        break
+      fi
+    done
+  fi
 fi
 set -e
 

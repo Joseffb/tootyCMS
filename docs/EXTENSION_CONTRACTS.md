@@ -163,6 +163,7 @@ Rules:
 - editor-only plugins may omit standalone menu/settings entries
 - core owns tab strip layout, ordering, overflow behavior, focus management, save feedback, and persistence wiring
 - plugins may define structured fields and bounded fragments only; they must not mount arbitrary editor-shell applications
+- bounded fragments may include `text-tool` suggestion surfaces that preview text and apply it into local editor state only; save and publish remain core editor flows
 
 Plugin-managed editor tab data on normal articles/items must use plugin-scoped hidden meta only.
 
@@ -172,6 +173,21 @@ Rules:
 - plugins must not mutate arbitrary visible article meta through editor-tab contracts
 - RBAC and tenant checks remain core-owned and mandatory
 - hidden plugin meta must remain hidden from the normal visible meta editor unless a separate core contract explicitly exposes it
+
+Bounded editor fragment contract:
+
+- `html` remains the static read-only fragment kind
+- `text-tool` is the governed async text suggestion fragment kind
+- `text-tool` fragments may declare:
+  - `toolId`
+  - `title`
+  - `action: "generate" | "rewrite" | "summarize" | "classify"`
+  - `source: "selection" | "content"`
+  - `applyActions: Array<"replace_selection" | "insert_below">`
+  - `instructionPlaceholder?`
+  - `submitLabel?`
+- `text-tool` fragments must use the AI spine; they must not call vendors directly
+- `text-tool` fragments may preview/apply text locally in the editor only; they must not persist or publish content on their own
 
 ## Permalink Contract (MUST)
 
@@ -377,7 +393,7 @@ Plugins may:
 - Register content-type and server behavior only through Core contract surfaces
 - Read/write scoped settings through the Plugin Extension API
 - Register content types and server handlers through Plugin Extension API methods exposed by Core
-- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`, `communicationProviders`, `commentProviders`, `webCallbacks`)
+- Use declared capability flags for guarded surfaces (`hooks`, `adminExtensions`, `contentTypes`, `serverHandlers`, `authExtensions`, `scheduleJobs`, `communicationProviders`, `commentProviders`, `webCallbacks`, `aiProviders`)
 - Extend admin profile UI through filter hooks (for example `admin:profile:sections`)
 - Declare plugin scope explicitly:
   - `scope: "network"` = network-governed plugin. Network enablement is global and treated as network-required for sites.
@@ -575,6 +591,40 @@ Analytics scripts contract (`domain:scripts`):
   - `inline?: string`
   - `strategy?: "afterInteractive" | "lazyOnload" | "beforeInteractive"`
   - `attrs?: Record<string, string>`
+
+### AI Contract (MUST)
+
+Core owns AI semantics and dispatch:
+
+- canonical `ai.run(request)` entrypoint
+- explicit scope normalization
+- RBAC and quota enforcement
+- provider resolution and dispatch
+- output validation and guard decisions
+- trace emission and returned `traceId`
+
+AI providers are execution adapters only:
+
+- register through the AI provider registry
+- receive normalized execution input only
+- return normalized execution output only
+- must not make policy decisions
+- must not own RBAC, tenancy, or side effects
+
+Allowed AI actions:
+
+- `generate`
+- `rewrite`
+- `summarize`
+- `classify`
+
+Hard AI invariants:
+
+- all AI execution must go through the AI spine
+- direct vendor SDK/runtime usage outside provider adapters is forbidden
+- all requests must declare explicit scope
+- AI execution returns suggestions only and must not perform writes, publishing, scheduling, or external triggers
+- providers must remain replaceable without requiring plugin UX or workflow changes
 
 ### Communication Contract (MUST)
 

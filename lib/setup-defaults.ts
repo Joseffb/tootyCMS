@@ -1,4 +1,4 @@
-const DEFAULT_SETUP_PLUGIN_IDS = ["hello-teety", "tooty-comments"] as const;
+const DEFAULT_SETUP_PLUGIN_IDS = ["hello-teety", "tooty-comments", "tooty-ai"] as const;
 
 function normalizeId(raw: string) {
   return raw.trim().toLowerCase();
@@ -18,4 +18,3 @@ export function getSetupDefaultThemeId(raw: string | null | undefined) {
   const normalized = normalizeId(String(raw || ""));
   return normalized || null;
 }
-

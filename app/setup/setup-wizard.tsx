@@ -36,7 +36,7 @@ function getOptionalFieldGroups(optionalFields: SetupEnvField[]): FieldGroup[] {
     "apple",
     "vercel",
     "aws",
-    "openai",
+    "ai",
   ] as const;
 
   const groups: Record<(typeof groupOrder)[number], FieldGroup> = {
@@ -47,7 +47,7 @@ function getOptionalFieldGroups(optionalFields: SetupEnvField[]): FieldGroup[] {
     apple: { id: "apple", label: "Apple", fields: [] },
     vercel: { id: "vercel", label: "Vercel", fields: [] },
     aws: { id: "aws", label: "AWS / S3", fields: [] },
-    openai: { id: "openai", label: "OpenAI", fields: [] },
+    ai: { id: "ai", label: "AI", fields: [] },
   };
 
   for (const field of optionalFields) {
@@ -64,7 +64,18 @@ function getOptionalFieldGroups(optionalFields: SetupEnvField[]): FieldGroup[] {
       key === "NEXT_PUBLIC_VERCEL_DEPLOYMENT_SUFFIX"
     ) groups.vercel.fields.push(field);
     else if (key.startsWith("AWS_")) groups.aws.fields.push(field);
-    else if (key === "OPENAI_API_KEY") groups.openai.fields.push(field);
+    else if (
+      key === "OPENAI_API_KEY" ||
+      key === "OPENAI_MODEL" ||
+      key === "ANTHROPIC_API_KEY" ||
+      key === "ANTHROPIC_MODEL" ||
+      key === "AI_DEFAULT_PROVIDER" ||
+      key === "AI_QUOTA_MODE" ||
+      key === "AI_INPUT_MAX_CHARS" ||
+      key === "AI_OUTPUT_MAX_CHARS" ||
+      key === "AI_KV_DAILY_LIMIT_SITE" ||
+      key === "AI_KV_DAILY_LIMIT_NETWORK"
+    ) groups.ai.fields.push(field);
     else groups.general.fields.push(field);
   }
 

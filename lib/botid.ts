@@ -5,7 +5,7 @@ const BOTID_PLUGIN_ID = "botid-shield";
 const BOTID_ENABLED_KEY = `plugin_${BOTID_PLUGIN_ID}_enabled`;
 const BOTID_CONFIG_KEY = `plugin_${BOTID_PLUGIN_ID}_config`;
 
-export type BotIdRouteKey = "api_generate" | "api_upload_image";
+export type BotIdRouteKey = "api_ai_run" | "api_upload_image";
 type BotIdMode = "off" | "monitor" | "enforce";
 
 type BotIdGuardConfig = {
@@ -76,7 +76,7 @@ async function getBotIdConfig(): Promise<BotIdGuardConfig> {
 }
 
 function routeEnabled(config: BotIdGuardConfig, route: BotIdRouteKey) {
-  if (route === "api_generate") return config.protectGenerate;
+  if (route === "api_ai_run") return config.protectGenerate;
   if (route === "api_upload_image") return config.protectUploadImage;
   return false;
 }

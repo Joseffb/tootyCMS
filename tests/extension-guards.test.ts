@@ -61,6 +61,42 @@ describe("extension guardrails", () => {
     ).toThrow(/plugin-guard/i);
   });
 
+  it("throws when plugin registers an AI provider without capability", () => {
+    const api = createPluginExtensionApi("guarded-plugin", {
+      capabilities: { aiProviders: false },
+      coreRegistry: {
+        registerAiProvider: vi.fn(),
+      } as any,
+    });
+
+    expect(() =>
+      api.registerAiProvider({
+        id: "custom-ai",
+        actions: ["generate"],
+        run: vi.fn() as any,
+      }),
+    ).toThrow(/plugin-guard/i);
+  });
+
+  it("forwards AI providers through the Core registry when capability is enabled", () => {
+    const registerAiProvider = vi.fn();
+    const api = createPluginExtensionApi("declared-plugin", {
+      capabilities: { aiProviders: true },
+      coreRegistry: {
+        registerAiProvider,
+      } as any,
+    });
+
+    const registration = {
+      id: "plugin-ai",
+      actions: ["generate", "rewrite"] as const,
+      run: vi.fn() as any,
+    };
+    api.registerAiProvider(registration);
+
+    expect(registerAiProvider).toHaveBeenCalledWith(registration);
+  });
+
   it("blocks theme side-effect settings writes", async () => {
     const api = createThemeExtensionApi();
 

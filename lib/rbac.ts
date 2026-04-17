@@ -23,6 +23,7 @@ export const SITE_CAPABILITIES = [
   "network.site.manage",
   "network.site.delete",
   "network.themes.manage",
+  "network.ai.use",
   "site.plugins.manage",
   "site.themes.manage",
   "site.datadomain.manage",
@@ -50,6 +51,7 @@ export const SITE_CAPABILITIES = [
   "site.media.delete.own",
   "site.media.delete.any",
   "site.analytics.read",
+  "site.ai.use",
   MANAGE_PLUGIN_CONTENT_META_CAPABILITY,
 ] as const;
 
@@ -86,6 +88,7 @@ function normalizeCapabilityMap(input: unknown, fallback: CapabilityMap): Capabi
     "network.settings.write": ["settings.write"],
     "network.site.manage": ["site.manage"],
     "network.site.delete": ["site.delete"],
+    "network.ai.use": ["ai.use"],
     "site.settings.read": ["settings.read"],
     "site.settings.write": ["settings.write"],
     "site.plugins.manage": ["plugins.manage"],
@@ -113,6 +116,7 @@ function normalizeCapabilityMap(input: unknown, fallback: CapabilityMap): Capabi
     "site.media.delete.own": ["media.delete.own", "media.manage"],
     "site.media.delete.any": ["media.delete.any", "media.manage"],
     "site.analytics.read": ["analytics.read"],
+    "site.ai.use": ["ai.use"],
   };
   const normalized = Object.fromEntries(
     SITE_CAPABILITIES.map((capability) => {
@@ -151,6 +155,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "network.site.manage": false,
       "network.site.delete": false,
       "network.themes.manage": false,
+      "network.ai.use": false,
       "site.plugins.manage": true,
       "site.themes.manage": true,
       "site.datadomain.manage": true,
@@ -178,6 +183,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": true,
       "site.analytics.read": true,
+      "site.ai.use": true,
       [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: true,
     };
   }
@@ -191,6 +197,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "network.site.manage": false,
       "network.site.delete": false,
       "network.themes.manage": false,
+      "network.ai.use": false,
       "site.plugins.manage": false,
       "site.themes.manage": false,
       "site.datadomain.manage": false,
@@ -218,6 +225,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": true,
       "site.analytics.read": true,
+      "site.ai.use": true,
       [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
     };
   }
@@ -231,6 +239,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "network.site.manage": false,
       "network.site.delete": false,
       "network.themes.manage": false,
+      "network.ai.use": false,
       "site.plugins.manage": false,
       "site.themes.manage": false,
       "site.datadomain.manage": false,
@@ -258,6 +267,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
       "site.media.delete.own": true,
       "site.media.delete.any": false,
       "site.analytics.read": false,
+      "site.ai.use": true,
       [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
     };
   }
@@ -270,6 +280,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
     "network.site.manage": false,
     "network.site.delete": false,
     "network.themes.manage": false,
+    "network.ai.use": false,
     "site.plugins.manage": false,
     "site.themes.manage": false,
     "site.datadomain.manage": false,
@@ -297,6 +308,7 @@ function defaultCapabilityMapFor(role: string): CapabilityMap {
     "site.media.delete.own": false,
     "site.media.delete.any": false,
     "site.analytics.read": false,
+    "site.ai.use": false,
     [MANAGE_PLUGIN_CONTENT_META_CAPABILITY]: false,
   };
 }

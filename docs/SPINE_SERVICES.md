@@ -20,6 +20,7 @@ Some capability classes must remain platform-governed even when providers are re
 Examples:
 
 - analytics
+- ai
 - comments
 - communications
 - webcallbacks
@@ -100,6 +101,30 @@ Invariant:
 
 - no comment write may bypass provider resolution
 - disabling the active provider disables comment writes
+
+### 4. AI Spine
+
+Core owns:
+
+- canonical AI request/response semantics
+- explicit scope normalization (`site` or `network`)
+- RBAC and quota enforcement before provider execution
+- provider resolution and dispatch
+- output validation and guard decisions (`allow`, `modify`, `reject`)
+- trace boundaries and returned `traceId`
+
+AI providers:
+
+- register through the governed provider registry
+- receive normalized execution input only
+- return normalized execution output only
+- are pure adapters and must not perform policy, RBAC, tenant, or side-effect work
+
+Invariant:
+
+- all AI execution must flow through the AI spine
+- providers must be replaceable without changing plugin behavior
+- AI execution returns suggestions only and must not perform writes, publishing, scheduling, or external side effects
 
 ## Spine Integrity Enforcement (Required)
 

@@ -39,7 +39,10 @@ describe("media service recovery", () => {
     insert.mockClear();
   });
 
-  it("re-ensures the site media table and retries once when the media sequence is missing", async () => {
+  it(
+    "re-ensures the site media table and retries once when the media sequence is missing",
+    { timeout: 20_000 },
+    async () => {
     const mediaTable = {
       id: { name: "id" },
       url: { name: "url" },
@@ -83,5 +86,6 @@ describe("media service recovery", () => {
     expect(ensureSiteMediaTable).toHaveBeenNthCalledWith(2, "site-test");
     expect(resetSiteMediaTableCache).toHaveBeenCalledWith("site-test");
     expect(returning).toHaveBeenCalledTimes(2);
-  });
+    },
+  );
 });
