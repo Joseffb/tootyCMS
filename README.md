@@ -209,13 +209,13 @@ Recommended pattern:
 - `Caddy` listens on port `80` and routes by hostname
 
 Example:
-- `robertbetan.test` and `app.robertbetan.test` -> `127.0.0.1:3000`
+- `example.com` and `app.example.com` -> `127.0.0.1:3000`
 - `fernain.test` and `app.fernain.test` -> `127.0.0.1:3001`
 
 Example `Caddyfile`:
 
 ```caddy
-robertbetan.test, app.robertbetan.test {
+example.com, app.example.com {
   reverse_proxy 127.0.0.1:3000
 }
 
@@ -227,18 +227,18 @@ fernain.test, app.fernain.test {
 Example `dnsmasq` rules (if wildcard subdomains are desired):
 
 ```conf
-address=/robertbetan.test/127.0.0.1
+address=/example.com/127.0.0.1
 address=/fernain.test/127.0.0.1
 ```
 
 This lets you use all of these at the same time:
 - `http://localhost:3000`
-- `http://robertbetan.test`
+- `http://example.com`
 - `http://fernain.test`
 
 Tooty env pairing for a branded local install:
-- `NEXTAUTH_URL=http://robertbetan.test`
-- `NEXT_PUBLIC_ROOT_DOMAIN=robertbetan.test`
+- `NEXTAUTH_URL=http://example.com`
+- `NEXT_PUBLIC_ROOT_DOMAIN=example.com`
 - `ADMIN_PATH=cp`
 
 If you are not using a proxy, keep the explicit dev port in those URLs.
